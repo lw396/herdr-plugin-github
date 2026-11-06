@@ -1,19 +1,16 @@
-// Where the person is working: the focused pane's folder, and the machine it is on.
-// Same rule as Herdr's shipped `changes` and `files` mods.
+// Where the person is working: the focused folder (GLOSSARY 焦点文件夹) and its machine.
+// The rule is core/location.ts; this feeds it Herdr's live data and remembers the last answer,
+// so focus on a pane without a folder (a detail pane, Files) keeps the current repository.
 import { spaces, panes, focused } from "herdr";
+import { focusedFolder, type Location } from "../core/location.ts";
 
-export interface Location {
-  cwd: string | null;
-  on: string | null;
-  space: string | null;
-}
+export type { Location };
+
+let previous: Location | null = null;
 
 export function location(): Location {
-  const space = spaces().find((s) => s.active), f = focused();
-  const pane = f?.pane ? panes().find((p) => p.pane === f.pane) : null;
-  // A focused layout terminal block has no pane: its address says the machine ("vps/t7").
-  const on = f?.pane === null ? (f.terminal?.includes("/") ? f.terminal.split("/")[0] ?? null : null) : space?.machine ?? null;
-  return { cwd: pane?.cwd || f?.cwd || space?.folder || null, on, space: space?.id ?? null };
+  previous = focusedFolder({ spaces: spaces(), panes: panes(), focused: focused() }, previous);
+  return previous;
 }
 
 /** A stable key for "the same place", to drop stale async results. */

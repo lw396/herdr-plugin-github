@@ -12,9 +12,10 @@ src/github/         the source (TypeScript); Herdr wants main.js and mod.json at
   main.ts           entry: a View that hands off to a role (props().role)
   mod.json          the manifest, copied as it is
   core/             pure logic, imports nothing else (gh-args: gh's arguments and output;
-                    remote: which repository a git remote is; account: what the sidebar says about gh)
+                    remote: which repository a git remote is; account: what the sidebar says about gh;
+                    location: the focused folder, kept while focus is on a pane without one)
   io/               Herdr and programs: gh.ts (the only way to GitHub; account(): the folder's machine's gh),
-                    git.ts (git on the folder's machine), context.ts (the focused folder)
+                    git.ts (git on the folder's machine), context.ts (feeds core/location Herdr's live data)
   views/            one file per role (panel.ts) and ui.ts (shared UI helpers)
   assets/           copied as they are (github.svg -> mods/github/assets/github.svg)
 mods/github/        build output, committed: the mod as Herdr loads it
