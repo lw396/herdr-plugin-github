@@ -1,13 +1,20 @@
 // Issue readers are native Herdr tabs, not split panes or a second tab bar inside the mod.
 import { exec, focused, panes, run, shared, setShared, spaces } from "herdr";
 import { issueKey } from "../core/issue-detail.js";
-const key = (id) => `github.reader.${id}`;
-const reader = (id) => shared(key(id));
+const READERS = "github.readers";
+const readers = () => shared(READERS) ?? {};
+const reader = (id) => readers()[id];
+/** Keep metadata only for live native tabs (plus the tab just confirmed by app IPC). */
+function remember(id, value) {
+    const live = new Set(spaces().flatMap(s => s.tabs.map(t => t.id)));
+    const kept = Object.fromEntries(Object.entries(readers()).filter(([key, r]) => key === id || live.has(r.tab)));
+    setShared(READERS, { ...kept, [id]: value });
+}
 /** Called after init installed the view's listener. Shared state contains no issue selection. */
 export function readyDetail(id) {
     const r = reader(id);
     if (r && r.ready !== r.request)
-        setShared(key(id), { ...r, ready: r.request });
+        remember(id, { ...r, ready: r.request });
 }
 /** Only this session remembers which issue each native tab displays. */
 export class DetailTabs {
@@ -19,29 +26,32 @@ export class DetailTabs {
         if (!space || !spaces().some(s => s.id === space))
             throw new Error("Select a Herdr space before opening an issue.");
         const identity = `${space}:${issueKey(issue)}`;
-        let id = this.opened.get(identity), r = id ? reader(id) : null;
-        if (!r || !panes().some(p => p.pane === r.pane && p.tab === r.tab && p.mod === "github")) {
+        const existingId = this.opened.get(identity), existing = existingId ? reader(existingId) : undefined;
+        let target;
+        if (existingId && existing && panes().some(p => p.tab === existing.tab && p.mod === "github")) {
+            target = { id: existingId, reader: existing };
+        }
+        else {
+            if (existingId)
+                this.pending.delete(existingId);
             let opening = this.creating.get(identity);
             if (!opening) {
                 opening = this.create(space, issue);
                 this.creating.set(identity, opening);
             }
             try {
-                const created = await opening;
-                id = created.id;
-                r = created.reader;
+                target = await opening;
             }
-            catch (e) {
+            finally {
                 this.creating.delete(identity);
-                throw e;
             }
-            this.opened.set(identity, id);
+            this.opened.set(identity, target.id);
         }
-        this.pending.set(id, issue);
+        this.pending.set(target.id, issue);
         // A fresh handshake prevents persisted readiness from accepting an issue before init.
-        setShared(key(id), { ...r, request: `${Date.now()}-${Math.random()}`, ready: null });
+        remember(target.id, { ...target.reader, request: `${Date.now()}-${Math.random()}`, ready: null });
         if (focused()?.space === space)
-            run("tab.select", { id: r.tab });
+            run("tab.select", { id: target.reader.tab });
     }
     async create(space, issue) {
         const id = `issue-${Date.now()}-${Math.random().toString(36).slice(2)}`;
@@ -57,9 +67,9 @@ export class DetailTabs {
         catch {
             throw new Error("Herdr returned an unreadable tab reply.");
         }
-        if (!reply.tab || !reply.pane || reply.error)
+        if (!reply.tab || reply.error)
             throw new Error(reply.error ?? "Herdr did not return a new tab.");
-        return { id, reader: { tab: reply.tab, pane: reply.pane, request: "", ready: null } };
+        return { id, reader: { tab: reply.tab, request: "", ready: null } };
     }
     /** Live shared metadata re-renders the sidebar: no polling and no persisted issue mailbox. */
     deliver() {
@@ -68,12 +78,13 @@ export class DetailTabs {
             return;
         for (const [id, issue] of this.pending) {
             const r = reader(id);
-            if (r?.tab !== tab || r.ready !== r.request)
+            if (!r) {
+                this.pending.delete(id);
+                continue;
+            }
+            if (r.tab !== tab || r.ready !== r.request)
                 continue;
             this.pending.delete(id);
-            for (const [identity, opened] of this.opened)
-                if (opened === id)
-                    this.creating.delete(identity);
             run(`github.issue:${JSON.stringify({ reader: id, ...issue })}`);
         }
     }

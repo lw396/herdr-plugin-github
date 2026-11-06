@@ -51,6 +51,17 @@ test("the assigned issue includes its assignees even with no discussion", async 
   });
 });
 
+test("a closed issue retains its milestone, assignee and labels", async () => {
+  machine(null, {
+    "~$ gh api repos/microsoft/vscode/issues/346509": { stdout: fixture("issue-vscode-346509.json") },
+    "~$ gh api repos/microsoft/vscode/issues/346509/comments?per_page=100 --paginate": { stdout: "[]" },
+  });
+  expect(await readIssue("microsoft/vscode", 346509, null)).toMatchObject({
+    title: "Resending the same message to another model doesn't work", state: "closed",
+    author: "ulugbekna", milestone: "1.146.0", assignees: ["justschen"], labels: ["unreleased"], comments: [],
+  });
+});
+
 test("a discussion read failure rejects rather than showing an incomplete issue", async () => {
   machine("center", {
     "~$ gh api repos/cli/cli/issues/9789": { stdout: fixture("issue-cli-9789.json") },

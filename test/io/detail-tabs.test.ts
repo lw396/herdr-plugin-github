@@ -15,7 +15,8 @@ const atDetail = () => screen({ spaces: [space], panes: [source, detail], focuse
 
 test("open a native Herdr tab, then select that tab on a repeated click without splitting panes", async () => {
   atSource();
-  // Herdr's documented new mod tab reply includes space, tab and pane.
+  // Herdr 0.1.13 src/window.rs new_mod_tab returns { space, tab, pane }.
+  // Only tab is needed; terminal tab replies have a different shape.
   machine(null, { [create]: { stdout: '{"space":"center/s1","tab":"center/tb2","pane":"center/p2"}' } });
   const tabs = new DetailTabs();
   await tabs.open({ repo: "cli/cli", number: 9789 });
@@ -65,6 +66,21 @@ test("rapid repeated clicks while creating a native tab do not create duplicates
   finish({ stdout: '{"tab":"center/tb2","pane":"center/p2"}' });
   await Promise.all([first, second]);
   expect(execCalls().filter(c => c.command === "herdr-app")).toHaveLength(1);
+});
+
+test("closing an unvisited issue tab allows the same issue to be opened again", async () => {
+  atSource();
+  machine(null, { [create]: { stdout: '{"tab":"center/tb2","pane":"center/p2"}' } });
+  const tabs = new DetailTabs();
+  await tabs.open({ repo: "cli/cli", number: 9789 });
+  // The first tab closes before its queued issue has been delivered.
+  atSource();
+  spyOn(Math, "random").mockReturnValue(0.25);
+  const next = create.replace(reader, "issue-1700000000000-9");
+  machine(null, { [next]: { stdout: '{"tab":"center/tb3","pane":"center/p3"}' } });
+  await tabs.open({ repo: "cli/cli", number: 9789 });
+  expect(execCalls().filter(c => c.command === "herdr-app")).toHaveLength(2);
+  expect(commands()).toContainEqual({ name: "tab.select", args: { id: "center/tb3" } });
 });
 
 test("a fresh sidebar session does not replay previously opened issue contents", async () => {

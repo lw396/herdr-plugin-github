@@ -56,6 +56,17 @@ function destination(text: string, start: number): { url: string; end: number } 
   return end && url ? { url, end: i + end[0].length } : null;
 }
 
+/** Image descriptions can themselves contain nested or escaped brackets. */
+function labelEnd(text: string, from: number): number {
+  let depth = 1;
+  for (let i = from; i < text.length; i++) {
+    if (text[i] === "\\") { i++; continue; }
+    if (text[i] === "[") depth++;
+    if (text[i] === "]" && --depth === 0) return i;
+  }
+  return -1;
+}
+
 const link = (url: string): string => `[🖼 图片](<${url.replace(/</g, "%3C").replace(/>/g, "%3E")}>)`;
 
 /** Images are links until the person chooses to open them in the browser. */
@@ -65,24 +76,30 @@ export function imageLinks(markdown: string): string {
       const src = /\bsrc\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'=<>`]+))/i.exec(tag);
       return src ? link((src[1] ?? src[2] ?? src[3]!).replace(/&amp;/gi, "&")) : tag;
     });
-    let result = "", copied = 0;
-    for (const match of text.matchAll(/!\[[^\]]*\]\(/g)) {
-      if (match.index < copied) continue;
-      const target = destination(text, match.index + match[0].length);
-      if (!target) continue;
-      result += text.slice(copied, match.index) + link(target.url);
-      copied = target.end;
-    }
-    result += text.slice(copied);
     const normalize = (label: string) => label.trim().replace(/\s+/g, " ").toLowerCase();
     const references = new Map<string, string>();
     for (const m of text.matchAll(/^ {0,3}\[([^\]]+)\]:\s*(?:<([^>\n]+)>|(\S+))/gm)) {
       const label = normalize(m[1]!);
       if (!references.has(label)) references.set(label, m[2] ?? m[3]!);
     }
-    return result.replace(/!\[([^\]]*)\](?:\[([^\]]*)\])?/g, (all, alt: string, label: string | undefined) => {
-      const url = references.get(normalize(label || alt));
-      return url ? link(url) : all;
-    });
+    let result = "", copied = 0;
+    for (const match of text.matchAll(/!\[/g)) {
+      if (match.index < copied) continue;
+      const end = labelEnd(text, match.index + 2);
+      if (end < 0) continue;
+      let target = text[end + 1] === "(" ? destination(text, end + 2) : null;
+      if (!target) {
+        const explicit = text[end + 1] === "[", next = explicit ? text.indexOf("]", end + 2) : end;
+        if (next < 0) continue;
+        const alt = text.slice(match.index + 2, end);
+        const label = explicit ? text.slice(end + 2, next) || alt : alt;
+        const url = references.get(normalize(label));
+        if (url) target = { url, end: next + 1 };
+      }
+      if (!target) continue;
+      result += text.slice(copied, match.index) + link(target.url);
+      copied = target.end;
+    }
+    return result + text.slice(copied);
   });
 }

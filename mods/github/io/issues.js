@@ -1,4 +1,4 @@
-// Issues from GitHub, through gh on the folder/pane's machine (ADR 0003).
+// Issues from GitHub, through gh on the folder/reader's machine (ADR 0003).
 import { groupQuery, groupVariables, parseIssueGroup } from "../core/issues.js";
 import { api, graphql } from "./gh.js";
 import { parseIssueDetail } from "../core/issue-detail.js";
@@ -9,7 +9,7 @@ import { parseIssueDetail } from "../core/issue-detail.js";
 export async function issuePage(kind, remote, login, on, after) {
     return parseIssueGroup(await graphql(groupQuery(kind), groupVariables(kind, remote, login, after), { on }));
 }
-/** One issue and all comment pages. The caller supplies the pane's machine, never a cwd. */
+/** One issue and all comment pages. The caller supplies the reader tab's machine, never a cwd. */
 export async function readIssue(repo, number, on) {
     const path = `repos/${repo}/issues/${number}`;
     const [issue, comments] = await Promise.all([

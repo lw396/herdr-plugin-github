@@ -1,4 +1,4 @@
-// The REST issue and its discussion as the detail pane reads them.
+// The REST issue and its discussion as the detail reader displays them.
 export interface IssueRef { repo: string; number: number }
 export const issueKey = (ref: IssueRef): string => `${ref.repo.toLowerCase()}#${ref.number}`;
 

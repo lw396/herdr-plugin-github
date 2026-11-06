@@ -1,4 +1,4 @@
-// Issues from GitHub, through gh on the folder/pane's machine (ADR 0003).
+// Issues from GitHub, through gh on the folder/reader's machine (ADR 0003).
 import { groupQuery, groupVariables, parseIssueGroup, type GroupKind, type IssueGroup } from "../core/issues.ts";
 import type { RemoteRepo } from "../core/remote.ts";
 import { api, graphql } from "./gh.ts";
@@ -12,7 +12,7 @@ export async function issuePage(kind: GroupKind, remote: RemoteRepo, login: stri
   return parseIssueGroup(await graphql(groupQuery(kind), groupVariables(kind, remote, login, after), { on }));
 }
 
-/** One issue and all comment pages. The caller supplies the pane's machine, never a cwd. */
+/** One issue and all comment pages. The caller supplies the reader tab's machine, never a cwd. */
 export async function readIssue(repo: string, number: number, on: string | null): Promise<IssueDetail> {
   const path = `repos/${repo}/issues/${number}`;
   const [issue, comments] = await Promise.all([

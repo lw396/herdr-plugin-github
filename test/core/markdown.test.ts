@@ -28,6 +28,11 @@ test("GitHub pasted HTML images become links, not network image requests", () =>
     .toBe("[🖼 图片](<https://github.com/user-attachments/assets/abc>)");
 });
 
+test("nested brackets in image descriptions cannot bypass image preprocessing", () => {
+  expect(imageLinks("![a [nested] description](https://example.com/s.png)"))
+    .toBe("[🖼 图片](<https://example.com/s.png>)");
+});
+
 test("reference images keep their destinations without changing ordinary links", () => {
   expect(imageLinks("![shot][screen] ![screen][] ![screen] [docs][screen]\n\n[screen]: https://example.com/s.png \"Screenshot\""))
     .toBe("[🖼 图片](<https://example.com/s.png>) [🖼 图片](<https://example.com/s.png>) [🖼 图片](<https://example.com/s.png>) [docs][screen]\n\n[screen]: https://example.com/s.png \"Screenshot\"");
