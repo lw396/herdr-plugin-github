@@ -15,7 +15,7 @@ src/github/         the source (TypeScript); Herdr wants main.js and mod.json at
                     remote: which repository a git remote is; account: what the sidebar says about gh;
                     location: the focused folder, kept while focus is on a pane without one)
   io/               Herdr and programs: gh.ts (the only way to GitHub; account(): the folder's machine's gh),
-                    git.ts (git on the folder's machine), context.ts (feeds core/location Herdr's live data)
+                    git.ts (git on the folder's machine), context.ts (feeds core/location Herdr's live data, remembers its last answer)
   views/            one file per role (panel.ts) and ui.ts (shared UI helpers)
   assets/           copied as they are (github.svg -> mods/github/assets/github.svg)
 mods/github/        build output, committed: the mod as Herdr loads it
@@ -28,7 +28,7 @@ docs/adr/           scope and design decisions, one per file
 docs/herdr/         Herdr's own guide (AGENTS.md) and docs, for reference
 docs/reference/     (git-ignored) shipped Herdr mods and herdr-layout-examples mods, read-only examples
 test/               bun test, core/ and io/ like src/; `herdr` is test/fake-herdr.ts (its exec
-                    answers like machines); layers.test.ts checks what each folder imports
+                    answers like machines, spaces/panes/focused like a screen); layers.test.ts checks what each folder imports
 ```
 
 ## Why a build step

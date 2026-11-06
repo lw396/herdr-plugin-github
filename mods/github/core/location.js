@@ -1,17 +1,19 @@
 // The focused folder (GLOSSARY 焦点文件夹) and its machine, from Herdr's live data.
 /**
  * Where the focused terminal is. When focus is on something without a folder of its own
- * (a mod pane such as a detail pane, the Files panel), `previous` stays; with none yet,
- * the shown space's folder.
+ * (a mod pane such as a detail pane, the Files panel), the previous folder stays while the
+ * same space is shown; otherwise the shown space's folder.
  */
 export function focusedFolder(herdr, previous) {
-    const space = herdr.spaces.find((s) => s.active), f = herdr.focused;
+    const space = herdr.spaces.find((s) => s.active), f = herdr.focused, id = space?.id ?? null;
     // A focused layout terminal block has no pane: its address says the machine ("center/t19").
-    if (f && !f.pane && f.terminal) {
-        return { cwd: f.cwd, on: f.terminal.includes("/") ? f.terminal.split("/")[0] ?? null : null };
+    if (f && !f.pane && f.terminal && f.cwd) {
+        return { cwd: f.cwd, on: f.terminal.includes("/") ? f.terminal.split("/")[0] ?? null : null, space: id };
     }
     const pane = f?.pane ? herdr.panes.find((p) => p.pane === f.pane) : null;
     if (pane?.terminal)
-        return { cwd: pane.cwd || f?.cwd || space?.folder || null, on: space?.machine ?? null };
-    return previous ?? { cwd: space?.folder || null, on: space?.machine ?? null };
+        return { cwd: pane.cwd || f?.cwd || space?.folder || null, on: space?.machine ?? null, space: id };
+    if (previous && previous.space === id)
+        return previous;
+    return { cwd: space?.folder || null, on: space?.machine ?? null, space: id };
 }

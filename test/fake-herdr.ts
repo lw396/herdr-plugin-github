@@ -1,6 +1,7 @@
 // A stand-in for Herdr's `herdr` module under Bun (loaded by test/preload.ts).
-// Only the system boundary is faked: `exec`, as machines that answer commands.
-import type { ExecResult } from "herdr";
+// Only the system boundary is faked: `exec`, as machines that answer commands, and Herdr's
+// live data (`spaces`, `panes`, `focused`), as a screen set up per test.
+import type { ExecResult, PaneInfo, SpaceInfo, focused as Focused } from "herdr";
 
 /** What a command prints (code defaults to 0), or an Error: exec rejects (program missing, machine unreachable). */
 export type Reply = Partial<ExecResult> | Error;
@@ -19,8 +20,27 @@ export function machine(on: string | null, replies: Machine): void {
   machines.set(on, replies);
 }
 
+/** What Herdr shows: spaces, panes and focus, shaped like Herdr's (only the fields io/ reads need be set). */
+export interface Screen {
+  spaces?: Partial<SpaceInfo>[];
+  panes?: Partial<PaneInfo>[];
+  focused?: Partial<NonNullable<ReturnType<typeof Focused>>> | null;
+}
+
+let shown: Screen = {};
+
+/** Sets what Herdr shows; later calls replace it, as focus moves. */
+export function screen(s: Screen): void {
+  shown = s;
+}
+
+export const spaces = (): Partial<SpaceInfo>[] => shown.spaces ?? [];
+export const panes = (): Partial<PaneInfo>[] => shown.panes ?? [];
+export const focused = () => (shown.focused === undefined ? null : shown.focused);
+
 export function reset(): void {
   machines.clear();
+  shown = {};
 }
 
 export async function exec(command: string, args: string[] = [], options: { cwd?: string; on?: string | null } = {}): Promise<ExecResult> {

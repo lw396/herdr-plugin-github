@@ -20,7 +20,7 @@ export class Panel {
     refresh(cx) {
         if (this.loading)
             return;
-        const where = location(), context = locationKey();
+        const where = location(), context = JSON.stringify(where);
         this.context = context;
         this.loading = true;
         this.error = null;

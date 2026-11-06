@@ -81,11 +81,12 @@ recomputed by the code. The seams:
 
 - `core/`: command arguments, parsing, turning GitHub data into what the UI shows. Put new
   logic here first. Tests in `test/core/`.
-- `io/` (`gh.ts`, `git.ts`), tests in `test/io/`: under Bun, `herdr` is `test/fake-herdr.ts` (`test/preload.ts`).
-  Only its `exec` is faked, as machines answering commands: `machine(on, { "<cwd>$ <cmd>": reply })`,
+- `io/` (`gh.ts`, `git.ts`, `context.ts`), tests in `test/io/`: under Bun, `herdr` is `test/fake-herdr.ts`
+  (`test/preload.ts`). `exec` is faked as machines answering commands: `machine(on, { "<cwd>$ <cmd>": reply })`,
   with replies copied from running the real command (stdout, stderr, exit code). An unknown
-  command rejects like a missing program does in Herdr. The fake has only `exec`: when `io/` starts
-  using another `herdr` function, add it to `test/fake-herdr.ts` first.
+  command rejects like a missing program does in Herdr. `spaces`, `panes` and `focused` are faked
+  as a screen: `screen({ spaces, panes, focused })`, shaped like `herdr-app status` shows. The fake
+  has only these: when `io/` starts using another `herdr` function, add it to `test/fake-herdr.ts` first.
 - `views/` and `main.ts`: kept thin; checked by `herdr-app check` and by trying them in the app.
 
 When a bug shows up in the app, first reproduce it as a failing test in `core/` or `io/`
