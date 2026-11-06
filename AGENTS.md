@@ -9,7 +9,8 @@ A Herdr mod, written in TypeScript in `src/github/`, built to `mods/github/`. Re
 - `docs/herdr/AGENTS.md`: Herdr's guide (mods, layouts, commands, keys).
 - `docs/reference/` (git-ignored, local only): working mods to copy patterns from (`changes` for git + focused folder,
   `files` for lazy trees, `t4-threads` for `gh` calls, `tmux-prefix` for keys/overlays).
-  Read-only; not type-checked.
+  Read-only; not type-checked. Missing in a fresh clone: copy from `defaults/mods/` of
+  github.com/herdrdev/herdr-app and from github.com/herdrdev/herdr-layout-examples.
 
 ## Source and output
 
@@ -29,9 +30,22 @@ A Herdr mod, written in TypeScript in `src/github/`, built to `mods/github/`. Re
 - Erasable TypeScript only (`erasableSyntaxOnly`): no `enum`, `namespace` or constructor parameter
   properties, so the output is the source minus its types.
 
+## Runtime limits (Herdr 0.1.13)
+
+- `exec`: 30 s, 8 MiB output, no stdin, no shell. Long work (`gh run watch`) belongs in a terminal
+  (`run("terminal.open", { argv })`), not in `exec`; poll instead.
+- `exec` with `on` runs through `hc exec --on <machine>`: no shell and no `.bashrc`, the PATH is the
+  remote herdr-core's. A missing program rejects with `cannot start <cmd>` (`cannot run <cmd>` here).
+- `fetch` gives no response headers (no ETag, rate limit or `Link` pages), refuses Authorization
+  across cross-origin redirects (Actions logs and artifacts) and decodes bodies as text. Use `gh`.
+- `image()`/`svg()` take paths under the app home only: download remote images first.
+- Timers keep running while a copy is hidden: poll gently. Herdr's live data (`spaces()`,
+  `focused()`, ...) re-renders the mod by itself: never poll it.
+
 ## Rules
 
 - Everything that reaches GitHub goes through `io/gh.ts`. Logic that can be pure goes in `core/`.
+- `gh api --jq` prints plain text (strings unquoted): read it with `apiText()`, not `api()`.
 - Never keep a `cx`; use the one each callback gets. No `setTimeout`: `cx.timer`, `cx.spawn`.
 - Remote machines need only git. `git` runs where the folder is (`{ cwd, on }` from `io/context.ts`);
   `gh` runs where `gh.account()` says (this computer first), so give it `owner/repo` from
@@ -41,6 +55,19 @@ A Herdr mod, written in TypeScript in `src/github/`, built to `mods/github/`. Re
 - Never open a Herdr window (`herdr-app` with no subcommand) with a changed `HOME` or
   `HERDR_APP_HOME`: it reaches the real core and can overwrite every machine's spaces.
 - Done means `bun run verify` passes (build, typecheck, tests, `herdr-app check`), then tried in the app.
+  `herdr-app check` loads mods only: a broken layout shows in `layouts/github.error` in the app home.
+
+## Developing
+
+- The app runs on the person's Mac, not on this dev server (no display): agents can't see the UI.
+  `bun run dev` rebuilds `mods/github/`; mutagen mirrors `mods/github/`, `mods/tabs-github/` and
+  `layouts/github.json` into the Mac's `~/.config/herdr-app/`; Herdr hot-reloads. Ask the person
+  for `herdr-app status` (load errors: a broken save keeps the old build running) or a screenshot.
+- `bun run check` needs `herdr-app` on PATH. Without an install here, download the release
+  tarball (`releases.herdr.dev/app/latest.json`) into a temp folder and use only its subcommands.
+- Herdr upgrade: `bun run types` from an app home of the new version, then recopy its `tabs` mod
+  and `main` layout into `mods/tabs-github/` and `layouts/github.json` and reapply our changes.
+- Theme picks and panel sizes are saved per layout: switching to `github` doesn't bring `main`'s.
 
 ## Test-driven
 
@@ -53,7 +80,8 @@ recomputed by the code. The seams:
 - `io/` (`gh.ts`, `git.ts`), tests in `test/io/`: under Bun, `herdr` is `test/fake-herdr.ts` (`test/preload.ts`).
   Only its `exec` is faked, as machines answering commands: `machine(on, { "<cwd>$ <cmd>": reply })`,
   with replies copied from running the real command (stdout, stderr, exit code). An unknown
-  command rejects like a missing program does in Herdr.
+  command rejects like a missing program does in Herdr. The fake has only `exec`: when `io/` starts
+  using another `herdr` function, add it to `test/fake-herdr.ts` first.
 - `views/` and `main.ts`: kept thin; checked by `herdr-app check` and by trying them in the app.
 
 When a bug shows up in the app, first reproduce it as a failing test in `core/` or `io/`
