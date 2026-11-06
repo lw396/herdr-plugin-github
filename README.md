@@ -15,12 +15,14 @@ src/github/         the source (TypeScript); Herdr wants main.js and mod.json at
                     remote: which repository a git remote is; account: what the sidebar says about gh;
                     location: the focused folder, kept while focus is on a pane without one;
                     cache: kept values, fresh for a while, least recently used dropped;
-                    issues: issue groups' GraphQL query and pages, rows and notices; time: "2h"-style times)
+                    issues: issue groups' GraphQL query and pages, rows and notices; issue-detail: metadata and discussion;
+                    markdown: image links without network requests; time: "2h"-style times)
   io/               Herdr and programs: gh.ts (the only way to GitHub; account(): the folder's machine's gh),
                     git.ts (git on the folder's machine), context.ts (feeds core/location Herdr's live data, remembers its last answer),
-                    issues.ts (a page of an issue group through gh), known.ts (cached: gh account per machine,
+                    issues.ts (issue groups and complete issue discussions through gh), detail-tabs.ts (native Herdr issue tabs),
+                    known.ts (cached: gh account per machine,
                     remote per machine + folder, issue groups per kind + machine + host/owner/repo + login)
-  views/            one file per role (panel.ts) and ui.ts (shared UI helpers)
+  views/            one file per role (panel.ts sidebar, issue.ts detail reader) and ui.ts (shared UI helpers)
   assets/           copied as they are (github.svg -> mods/github/assets/github.svg)
 mods/github/        build output, committed: the mod as Herdr loads it
 mods/tabs-github/   Herdr's tab bar with a GitHub panel button (a marked copy of the shipped `tabs`)
@@ -35,6 +37,17 @@ test/               bun test, core/ and io/ like src/; `herdr` is test/fake-herd
                     answers like machines, spaces/panes/focused like a screen); fixtures/ real gh replies;
                     layers.test.ts checks what each folder imports
 ```
+
+## Reading issues
+
+Click a sidebar issue to open its details in Herdr's **top-level tab bar**, beside terminal tabs.
+Click it again to select its existing issue tab in the same space. No terminal is split and there
+is no second tab bar inside the reader. The reader shows metadata, Markdown body and all comments,
+including reaction counts; images become “🖼 图片” browser links. Copy the issue link or open it in
+the browser from the reader toolbar. Its gh runs on the issue tab's machine, independent of focus.
+
+Open issue contents are session-only: restarting Herdr (or hot-reloading the mod) does not reload
+them. Herdr may keep the native tab frame; it shows an empty reader until an issue is opened again.
 
 ## Why a build step
 

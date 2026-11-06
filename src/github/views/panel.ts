@@ -10,7 +10,8 @@ import { describeAccount } from "../core/account.ts";
 import { issuesNotice, noRepository, type Failure, type GroupKind, type Issue, type IssueGroup } from "../core/issues.ts";
 import { relativeTime } from "../core/time.ts";
 import { explain } from "../core/gh-args.ts";
-import { colors, stop, type Role } from "./ui.ts";
+import { colors, stop, button, type Role } from "./ui.ts";
+import { DetailTabs } from "../io/detail-tabs.ts";
 
 /** The Issues tab's groups, in order: title, and what an empty one says. */
 const GROUPS: { kind: GroupKind; title: string; empty: string }[] = [
@@ -52,6 +53,8 @@ export class Panel implements Role {
   };
   /** The row under the pointer ("<kind>#<number>"): it shows its actions. */
   hovered: string | null = null;
+  details = new DetailTabs();
+  openFailure: string | null = null;
 
   init(cx: AsyncContext): void {
     this.refresh(cx);
@@ -161,13 +164,12 @@ export class Panel implements Role {
   }
 
   render(cx: Context): Element {
+    // Readiness is live shared metadata, not a timer or persisted issue selection.
+    this.details.deliver();
     // Follow the focused folder: live data re-renders us, so compare here.
     if (locationKey() !== this.context) this.refresh(cx);
     const t = colors(), where = location(), overlay: string | undefined = props()?.overlay;
     const spinner = () => svg("mods/workspace-chrome/spinner.svg").size(12).flex_none().text_color(t.dim).spin(900);
-    const button = (id: string, label: string, tip: string, onClick: (e: unknown, cx: Context) => void) =>
-      div().id(id).px(6).py(2).rounded(6).text_size(12).text_color(t.dim).cursor_pointer().hover((s) => s.bg(t.hover).text_color(t.foreground))
-        .tooltip(tip).accessibility_label(tip).on_mouse_down("left", stop).on_click(onClick).child(label);
     const repo = this.remote ? `${this.remote.owner}/${this.remote.repo}` : "";
     // A missing repository (404) or Issues turned off is the same for every group: said once, in
     // the list's place. Any other failure stays in its own group, beside the others' rows.
@@ -185,7 +187,15 @@ export class Panel implements Role {
 
     const row = (kind: GroupKind, issue: Issue) => {
       const key = `${kind}#${issue.number}`, hovered = this.hovered === key;
-      return h_flex().id(`issue-${kind}-${issue.number}`).h(28).px(8).pl(22).gap(8).items_center().rounded(6).hover((s) => s.bg(t.hover))
+      return h_flex().id(`issue-${kind}-${issue.number}`).h(28).px(8).pl(22).gap(8).items_center().rounded(6).cursor_pointer().hover((s) => s.bg(t.hover))
+        .on_mouse_down("left", stop).on_click((_e, cx) => {
+          this.openFailure = null;
+          cx.spawn(async cx => {
+            try { await this.details.open({ repo, number: issue.number }); }
+            catch (e) { this.openFailure = e instanceof Error ? e.message : String(e); }
+            cx.notify();
+          });
+        })
         .on_hover((h, cx) => {
           if (h) this.hovered = key;
           else if (this.hovered === key) this.hovered = null;
@@ -256,6 +266,7 @@ export class Panel implements Role {
       .when(!noRemote, (el) => el.child(h_flex().h(34).flex_none().px(10).gap(4).items_center().border_b(1).border_color(t.border)
         .child(div().px(8).py(3).rounded(6).bg(t.hover).text_size(12).font_medium().child("Issues"))))
       .when(!noRemote, (el) => el.child(v_flex().id("gh-list").flex_1().min_h(0).overflow_y_scroll().p(6).gap(4)
+        .when(Boolean(this.openFailure), el => el.child(div().p(8).text_size(12).text_color(t.blocked).child(this.openFailure ?? "")))
         .when(Boolean(notice), (el) => el.child(div().p(8).text_size(12).text_color(t.blocked).child(notice ?? "")))
         .when(!notice && Boolean(this.ready()), (el) => el.children(GROUPS.map(group)))
         .when(!notice && !this.ready() && this.loading, (el) => el.child(div().p(8).text_color(t.dim).child("…")))))
