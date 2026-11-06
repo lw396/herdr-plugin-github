@@ -46,5 +46,8 @@ The app runs on the person's Mac; this dev server has no display. Mutagen mirror
 Ask for `herdr-app status` or a screenshot: a failed save can leave the previous build running.
 A layout error appears in `layouts/github.error` in the app home.
 
+CI (`.github/workflows/verify.yml`) runs `verify` and the committed-output check with a pinned Herdr
+matching `types/VERSION`; update its version and SHA-256 on a Herdr upgrade.
+
 Checks need `herdr-app` on PATH. If unavailable, obtain the release tarball listed by
 `releases.herdr.dev/app/latest.json` in a temporary directory and use only its subcommands.

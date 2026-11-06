@@ -35,3 +35,6 @@ Report checks actually performed and any remaining app validation. Herdr loading
 layouts work or that the UI looks correct; those require the person's Mac.
 
 For documentation-only changes, check the diff, referenced paths and consistency with the implementation.
+
+For reviews, write the change with `scripts/review-patch.sh <base>` and give reviewers that file.
+A reviewer that cannot read it has not reviewed the change: report that review as blocked.

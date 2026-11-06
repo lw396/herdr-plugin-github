@@ -1,0 +1,31 @@
+name: verify
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    env:
+      # Keep in step with types/VERSION.
+      HERDR_APP_VERSION: 0.1.13
+      HERDR_APP_SHA256: 77b0be72a46ca14bb367365a04164641f914b3a69712bac391d39c56a959bef4
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.3
+      - name: Install Herdr (subcommands only)
+        run: |
+          test "$(cat types/VERSION)" = "herdr-app $HERDR_APP_VERSION"
+          sudo apt-get update && sudo apt-get install -y libxkbcommon-x11-0 libxcb-xkb1
+          curl -fsSL "https://releases.herdr.dev/app/$HERDR_APP_VERSION/herdr-app-linux-x86_64.tar.gz" -o herdr-app.tgz
+          echo "$HERDR_APP_SHA256  herdr-app.tgz" | sha256sum -c -
+          tar xzf herdr-app.tgz -C "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/herdr-app" >> "$GITHUB_PATH"
+      - run: bun install --frozen-lockfile
+      - run: bun run verify
+      - name: Committed mods/github matches the source
+        run: git diff --exit-code --stat -- mods/github

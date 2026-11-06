@@ -10,6 +10,9 @@ Reproduce app bugs as failing core/IO tests before fixing them.
 - `test/io/`: external operations through a fake Herdr runtime. Under Bun, `test/preload.ts` substitutes
   `test/fake-herdr.ts` for `herdr`.
 - Keep `views/` and `main.ts` thin; validate them with Herdr loading checks and actual app interaction.
+- `test/smoke/main.ts` (`bun run smoke`, part of `verify`): bundled like the mod and loaded by `herdr-app check`,
+  so parser and reader code runs in Herdr's QuickJS on real fixtures. Assertions throw from `init()`.
+  Add a case here when a library or code path must work in QuickJS, not only in Bun. It does not replace the Mac check.
 
 ## Fake runtime
 
