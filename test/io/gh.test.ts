@@ -52,34 +52,33 @@ describe("status", () => {
   });
 });
 
-describe("account: which machine's gh to use", () => {
+describe("account: the gh on the folder's machine", () => {
   const SIGNED_IN = (user: string) => ({ "~$ gh api user --jq .login": { stdout: `${user}\n` } });
 
-  test("a remote space uses this computer's gh", async () => {
+  test("a local folder uses this computer's gh", async () => {
     machine(null, SIGNED_IN("lw396"));
-    machine("center", SIGNED_IN("server-account"));
-    expect(await gh.account("center")).toEqual({ on: null, status: { ok: true, user: "lw396" } });
+    expect(await gh.account(null)).toEqual({ on: null, status: { ok: true, user: "lw396" } });
   });
 
-  test("no gh here: the space's machine's gh", async () => {
-    machine(null, {});
+  test("a remote folder uses that machine's gh, even when this computer's works", async () => {
+    machine(null, SIGNED_IN("lw396"));
     machine("center", SIGNED_IN("server-account"));
     expect(await gh.account("center")).toEqual({ on: "center", status: { ok: true, user: "server-account" } });
   });
 
-  test("signed out here: the space's machine's gh", async () => {
-    machine(null, { "~$ gh api user --jq .login": NOT_SIGNED_IN });
-    machine("center", SIGNED_IN("server-account"));
-    expect(await gh.account("center")).toMatchObject({ on: "center", status: { ok: true } });
-  });
-
-  test("neither works: this computer's reason, where signing in helps every space", async () => {
-    machine(null, { "~$ gh api user --jq .login": NOT_SIGNED_IN });
+  test("no gh on the folder's machine: missing there, no falling back to this computer", async () => {
+    machine(null, SIGNED_IN("lw396"));
     machine("center", {});
-    expect(await gh.account("center")).toMatchObject({ on: null, status: { ok: false, reason: "auth" } });
+    expect(await gh.account("center")).toMatchObject({ on: "center", status: { ok: false, reason: "missing" } });
   });
 
-  test("a local space never asks another machine", async () => {
+  test("signed out on the folder's machine: auth there", async () => {
+    machine(null, SIGNED_IN("lw396"));
+    machine("center", { "~$ gh api user --jq .login": NOT_SIGNED_IN });
+    expect(await gh.account("center")).toMatchObject({ on: "center", status: { ok: false, reason: "auth" } });
+  });
+
+  test("a local folder never asks another machine", async () => {
     machine(null, { "~$ gh api user --jq .login": NOT_SIGNED_IN });
     expect(await gh.account(null)).toMatchObject({ on: null, status: { ok: false, reason: "auth" } });
   });

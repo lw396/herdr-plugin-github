@@ -1,4 +1,4 @@
-// The only file that reaches GitHub: `gh`, on this computer or the machine account() picks (`on`).
+// The only file that reaches GitHub: `gh`, on the folder's machine (`on`, see account()).
 import { exec } from "herdr";
 import { apiArgs, graphqlArgs, parseJson, errorMessage } from "../core/gh-args.js";
 export class GhError extends Error {
@@ -38,15 +38,12 @@ export async function graphql(query, variables = {}, where = {}) {
     return out?.data;
 }
 /**
- * This computer's gh, so remote machines need only git. When it can't be used,
- * the gh on the space's machine; when neither can, this computer's reason.
+ * The gh on the folder's machine (ADR 0003): this computer's for a local folder, that
+ * machine's for a remote one. Never falls back to the other, so the account is the one
+ * signed in where the folder is; when it can't be used, the reason is that machine's.
  */
-export async function account(spaceOn) {
-    const here = await status();
-    if (here.ok || !spaceOn)
-        return { on: null, status: here };
-    const there = await status({ on: spaceOn });
-    return there.ok ? { on: spaceOn, status: there } : { on: null, status: here };
+export async function account(on) {
+    return { on, status: await status({ on }) };
 }
 /** Whether gh is installed and signed in there. */
 export async function status(where = {}) {

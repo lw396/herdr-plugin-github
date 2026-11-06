@@ -6,6 +6,7 @@ import { location, locationKey } from "../io/context.ts";
 import * as gh from "../io/gh.ts";
 import { githubRemote } from "../io/git.ts";
 import type { RemoteRepo } from "../core/remote.ts";
+import { describeAccount } from "../core/account.ts";
 import { colors, stop, type Role } from "./ui.ts";
 
 export class Panel implements Role {
@@ -28,7 +29,7 @@ export class Panel implements Role {
     this.error = null;
     cx.spawn(async (cx) => {
       try {
-        // git where the folder is; GitHub through the gh account() picks (this computer's first).
+        // git and gh both where the folder is (ADR 0003).
         const [account, remote] = await Promise.all([gh.account(where.on), githubRemote(where)]);
         if (locationKey() !== context) return;
         this.account = account;
@@ -50,23 +51,16 @@ export class Panel implements Role {
     });
   }
 
-  authText(): string {
-    const auth = this.account?.status;
-    if (!auth) return "checking…";
-    if (auth.ok) return `signed in as ${auth.user}` + (this.account?.on ? ` (gh on ${this.account.on})` : "");
-    if (auth.reason === "missing") return "not installed";
-    if (auth.reason === "auth") return "not signed in (gh auth login)";
-    return auth.message;
-  }
-
   render(cx: Context): Element {
     // Follow the focused folder: live data re-renders us, so compare here.
     if (locationKey() !== this.context && !this.loading) this.refresh(cx);
     const t = colors(), where = location(), overlay: string | undefined = props()?.overlay;
-    const line = (label: string, value: string, color: Color = t.foreground) =>
-      h_flex().gap(8)
+    const line = (label: string, value: string, color: Color = t.foreground, wrap = false) =>
+      h_flex().gap(8).items_start()
         .child(div().w(64).flex_none().text_color(t.dim).child(label))
-        .child(div().flex_1().min_w(0).truncate().text_color(color).child(value));
+        .child(div().flex_1().min_w(0).when(!wrap, (el) => el.truncate()).text_color(color).child(value));
+    // A problem with gh says what to do on which machine: wrap it rather than cut it off.
+    const account = this.account ? describeAccount(this.account) : { ok: true, text: "checking…" };
     const button = (id: string, label: string, onClick: (e: unknown, cx: Context) => void) =>
       div().id(id).px(6).py(2).rounded(6).text_size(12).text_color(t.dim).cursor_pointer().hover((s) => s.bg(t.hover).text_color(t.foreground))
         .on_mouse_down("left", stop).on_click(onClick).child(label);
@@ -82,7 +76,7 @@ export class Panel implements Role {
       .child(v_flex().p(14).gap(6)
         .child(line("folder", where.cwd ?? "none"))
         .child(line("machine", where.on ?? "this computer"))
-        .child(line("gh", this.authText(), this.account && !this.account.status.ok ? t.blocked : t.foreground))
+        .child(line("gh", account.text, account.ok ? t.foreground : t.blocked, !account.ok))
         .child(line("remote", this.remote ? `${this.remote.owner}/${this.remote.repo} (${this.remote.remote})` : this.loading ? "…" : "no GitHub remote"))
         .child(line("repo", this.repo ?? (this.loading ? "…" : "—")))
         .when(Boolean(this.error), (el) => el.child(div().pt(6).text_size(12).text_color(t.blocked).child(this.error ?? ""))));

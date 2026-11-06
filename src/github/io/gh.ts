@@ -1,15 +1,14 @@
-// The only file that reaches GitHub: `gh`, on this computer or the machine account() picks (`on`).
+// The only file that reaches GitHub: `gh`, on the folder's machine (`on`, see account()).
 import { exec } from "herdr";
 import { apiArgs, graphqlArgs, parseJson, errorMessage, type ApiOptions, type GraphqlVariables } from "../core/gh-args.ts";
+import type { Account, Status } from "../core/account.ts";
+
+export type { Account, Status };
 
 export interface Where {
   cwd?: string | null;
   on?: string | null;
 }
-
-export type Status =
-  | { ok: true; user: string }
-  | { ok: false; reason: "missing" | "auth" | "error"; message: string };
 
 export class GhError extends Error {
   readonly code: number;
@@ -51,21 +50,13 @@ export async function graphql<T = unknown>(query: string, variables: GraphqlVari
   return out?.data as T;
 }
 
-/** Which gh to talk to GitHub with: `on` is where it runs (null: this computer). */
-export interface Account {
-  on: string | null;
-  status: Status;
-}
-
 /**
- * This computer's gh, so remote machines need only git. When it can't be used,
- * the gh on the space's machine; when neither can, this computer's reason.
+ * The gh on the folder's machine (ADR 0003): this computer's for a local folder, that
+ * machine's for a remote one. Never falls back to the other, so the account is the one
+ * signed in where the folder is; when it can't be used, the reason is that machine's.
  */
-export async function account(spaceOn: string | null): Promise<Account> {
-  const here = await status();
-  if (here.ok || !spaceOn) return { on: null, status: here };
-  const there = await status({ on: spaceOn });
-  return there.ok ? { on: spaceOn, status: there } : { on: null, status: here };
+export async function account(on: string | null): Promise<Account> {
+  return { on, status: await status({ on }) };
 }
 
 /** Whether gh is installed and signed in there. */

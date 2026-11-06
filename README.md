@@ -1,8 +1,9 @@
 # herdr-plugin-github
 
 GitHub for the [Herdr](https://herdr.dev) desktop app: a mod that talks to GitHub
-through the `gh` CLI on this computer (or, when it has none, on the repository's machine).
-Remote machines need only git: it reads which repository a folder is.
+through the `gh` CLI on the machine the folder is on: this computer's for a local folder,
+that machine's for a remote one, never the other (ADR 0003). So a remote machine needs git
+and gh, signed in there (`gh auth login`); the sidebar says which machine when it isn't.
 
 ## Layout
 
@@ -11,8 +12,8 @@ src/github/         the source (TypeScript); Herdr wants main.js and mod.json at
   main.ts           entry: a View that hands off to a role (props().role)
   mod.json          the manifest, copied as it is
   core/             pure logic, imports nothing else (gh-args: gh's arguments and output;
-                    remote: which repository a git remote is)
-  io/               Herdr and programs: gh.ts (the only way to GitHub; account() picks the gh),
+                    remote: which repository a git remote is; account: what the sidebar says about gh)
+  io/               Herdr and programs: gh.ts (the only way to GitHub; account(): the folder's machine's gh),
                     git.ts (git on the folder's machine), context.ts (the focused folder)
   views/            one file per role (panel.ts) and ui.ts (shared UI helpers)
   assets/           copied as they are (github.svg -> mods/github/assets/github.svg)
