@@ -17,7 +17,8 @@ src/github/         the source (TypeScript); Herdr wants main.js and mod.json at
                     cache: kept values, fresh for a while, least recently used dropped)
   io/               Herdr and programs: gh.ts (the only way to GitHub; account(): the folder's machine's gh),
                     git.ts (git on the folder's machine), context.ts (feeds core/location Herdr's live data, remembers its last answer),
-                    known.ts (gh account per machine, remote per folder, repository per owner/repo, cached)
+                    known.ts (cached: gh account per machine, remote per machine + folder,
+                    repository per machine + host/owner/repo)
   views/            one file per role (panel.ts) and ui.ts (shared UI helpers)
   assets/           copied as they are (github.svg -> mods/github/assets/github.svg)
 mods/github/        build output, committed: the mod as Herdr loads it

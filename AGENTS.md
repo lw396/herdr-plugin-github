@@ -81,9 +81,10 @@ recomputed by the code. The seams:
 
 - `core/`: command arguments, parsing, turning GitHub data into what the UI shows. Put new
   logic here first. Tests in `test/core/`.
-- `io/` (`gh.ts`, `git.ts`, `context.ts`), tests in `test/io/`: under Bun, `herdr` is `test/fake-herdr.ts`
+- `io/` (`gh.ts`, `git.ts`, `context.ts`, `known.ts`), tests in `test/io/`: under Bun, `herdr` is `test/fake-herdr.ts`
   (`test/preload.ts`). `exec` is faked as machines answering commands: `machine(on, { "<cwd>$ <cmd>": reply })`,
-  with replies copied from running the real command (stdout, stderr, exit code). An unknown
+  with replies copied from running the real command (stdout, stderr, exit code); a Promise as the
+  reply is a slow machine, answering when the test resolves it (for ordering). An unknown
   command rejects like a missing program does in Herdr. `spaces`, `panes` and `focused` are faked
   as a screen: `screen({ spaces, panes, focused })`, shaped like `herdr-app status` shows. The fake
   has only these: when `io/` starts using another `herdr` function, add it to `test/fake-herdr.ts` first.

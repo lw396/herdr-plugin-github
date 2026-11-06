@@ -3,8 +3,11 @@
 // live data (`spaces`, `panes`, `focused`), as a screen set up per test.
 import type { ExecResult, PaneInfo, SpaceInfo, focused as Focused } from "herdr";
 
-/** What a command prints (code defaults to 0), or an Error: exec rejects (program missing, machine unreachable). */
-export type Reply = Partial<ExecResult> | Error;
+/**
+ * What a command prints (code defaults to 0), or an Error: exec rejects (program missing, machine
+ * unreachable). A Promise of either answers when it settles: a slow machine, for ordering tests.
+ */
+export type Reply = Partial<ExecResult> | Error | Promise<Partial<ExecResult> | Error>;
 
 /**
  * A machine: replies keyed by "<cwd>$ <command> <args...>", cwd "~" when none is given,
@@ -47,7 +50,7 @@ export async function exec(command: string, args: string[] = [], options: { cwd?
   const on = options.on ?? null;
   const replies = machines.get(on);
   if (!replies) throw new Error(`cannot reach machine ${on}`);
-  const reply = replies[`${options.cwd ?? "~"}$ ${[command, ...args].join(" ")}`];
+  const reply = await replies[`${options.cwd ?? "~"}$ ${[command, ...args].join(" ")}`];
   // Herdr's own wording when the program isn't there (src/mods.rs run_blocking; hc exec on another machine).
   if (reply === undefined) throw new Error(`cannot ${on ? "start" : "run"} ${command}: No such file or directory (os error 2)`);
   if (reply instanceof Error) throw reply;

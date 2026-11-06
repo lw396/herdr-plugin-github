@@ -62,10 +62,25 @@ describe("remote", () => {
     expect(known.peekRemote({ cwd: "/w/app", on: null })).toBeUndefined();
   });
 
-  test("no GitHub remote is kept too (null, not unknown)", async () => {
+  test("no GitHub remote is not kept: adding one shows on the next look", async () => {
     machine(null, { "/w/notes$ git remote -v": { stdout: "" } });
     expect(await known.remote({ cwd: "/w/notes", on: null })).toBeNull();
-    expect(known.peekRemote({ cwd: "/w/notes", on: null })).toBeNull();
+    expect(known.peekRemote({ cwd: "/w/notes", on: null })).toBeUndefined();
+    machine(null, { "/w/notes$ git remote -v": { stdout: REMOTE_V } });
+    expect(await known.remote({ cwd: "/w/notes", on: null })).toMatchObject({ owner: "lw396" });
+  });
+
+  test("↻ while an older look is still out: the older answer, arriving last, is not kept", async () => {
+    let answerOld!: (r: { stdout: string }) => void;
+    machine("center", { [REMOTES]: new Promise((resolve) => (answerOld = resolve)) });
+    const old = known.remote({ cwd: "/w/app", on: "center" });
+    // The person points origin at their own repository and presses ↻; the slow first
+    // `git remote -v` still answers with the old URL afterwards.
+    machine("center", { [REMOTES]: { stdout: REMOTE_V } });
+    expect(await known.remote({ cwd: "/w/app", on: "center" }, true)).toMatchObject({ owner: "lw396" });
+    answerOld({ stdout: "origin\tgit@github.com:herdrdev/herdr-app.git (fetch)\norigin\tgit@github.com:herdrdev/herdr-app.git (push)\n" });
+    await old;
+    expect(known.peekRemote({ cwd: "/w/app", on: "center" })).toMatchObject({ owner: "lw396" });
   });
 
   test("git failing to run rejects and keeps nothing", async () => {
