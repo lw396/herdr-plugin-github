@@ -19,8 +19,9 @@ export class GhError extends Error {
     this.stderr = stderr;
   }
 
+  /** Not there, or not visible to this account: REST's 404, GraphQL's NOT_FOUND for a repository. */
   get notFound(): boolean {
-    return /HTTP 404/.test(this.stderr + this.message);
+    return /HTTP 404|Could not resolve to a Repository/.test(this.stderr + this.message);
   }
 }
 

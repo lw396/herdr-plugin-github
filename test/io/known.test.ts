@@ -1,7 +1,9 @@
-// known.ts: the gh account per machine, the GitHub remote per folder, the repository per
-// owner/repo, each fetched once and then kept. Replies are the real ones used in gh.test.ts.
+// known.ts: the gh account per machine, the GitHub remote per folder, the "Assigned to me"
+// group per machine, repository and login, each fetched once and then kept. Replies are the
+// real ones used in gh.test.ts and issues.test.ts.
 import { afterEach, describe, expect, test } from "bun:test";
 import { machine, reset } from "../fake-herdr.ts";
+import { ASSIGNED_QUERY } from "../../src/github/core/issues.ts";
 import * as known from "../../src/github/io/known.ts";
 
 afterEach(() => {
@@ -12,7 +14,8 @@ afterEach(() => {
 const LOGIN = "~$ gh api user --jq .login";
 const REMOTES = "/w/app$ git remote -v";
 const REMOTE_V = "origin\tgit@github.com:lw396/herdr-plugin-github.git (fetch)\norigin\tgit@github.com:lw396/herdr-plugin-github.git (push)\n";
-const FULL_NAME = "~$ gh api repos/lw396/herdr-plugin-github --jq .full_name";
+const ASSIGNED = `~$ gh api graphql -f query=${ASSIGNED_QUERY} -f owner=lw396 -f name=herdr-plugin-github -f assignee=lw396`;
+const ASSIGNED_REPLY = '{"data":{"repository":{"hasIssuesEnabled":true,"issues":{"totalCount":1,"pageInfo":{"hasNextPage":false,"endCursor":"Y3Vyc29yOnYyOpK0MjAyNi0xMS0wNlQxMzowMToxM1rPAAAAAXPrZ54="},"nodes":[{"number":11,"title":"Issues 标签页：\\"指派给我的\\"一组","updatedAt":"2026-11-06T13:01:13Z","url":"https://github.com/lw396/herdr-plugin-github/issues/11","assignees":{"nodes":[{"login":"lw396"}]}}]}}}}';
 
 describe("account", () => {
   test("asked once per machine, then kept", async () => {
@@ -90,20 +93,26 @@ describe("remote", () => {
   });
 });
 
-describe("repository", () => {
+describe("assigned", () => {
   const REMOTE = { remote: "origin", host: "github.com", owner: "lw396", repo: "herdr-plugin-github" };
 
-  test("per owner/repo and the machine whose gh asked, then kept", async () => {
-    machine(null, { [FULL_NAME]: { stdout: "lw396/herdr-plugin-github\n" } });
-    expect(await known.repository(REMOTE, null)).toBe("lw396/herdr-plugin-github");
+  test("per machine, repository and login, then kept", async () => {
+    machine(null, { [ASSIGNED]: { stdout: ASSIGNED_REPLY } });
+    expect(await known.assigned(REMOTE, "lw396", null)).toMatchObject({ total: 1, issues: [{ number: 11 }] });
     machine(null, {});
-    expect(await known.repository(REMOTE, null)).toBe("lw396/herdr-plugin-github");
-    expect(known.peekRepository(REMOTE, "center")).toBeUndefined();
+    expect(await known.assigned(REMOTE, "lw396", null)).toMatchObject({ total: 1 });
+    expect(known.peekAssigned(REMOTE, "lw396", null)).toMatchObject({ total: 1 });
+    expect(known.peekAssigned(REMOTE, "lw396", "center")).toBeUndefined();
+    expect(known.peekAssigned(REMOTE, "someone-else", null)).toBeUndefined();
   });
 
   test("a 404 rejects and keeps nothing", async () => {
-    machine(null, { [FULL_NAME]: { code: 1, stdout: '{"message":"Not Found","status":"404"}', stderr: "gh: Not Found (HTTP 404)\n" } });
-    expect(await known.repository(REMOTE, null).catch((e: unknown) => e)).toMatchObject({ notFound: true });
-    expect(known.peekRepository(REMOTE, null)).toBeUndefined();
+    machine(null, { [ASSIGNED]: {
+      code: 1,
+      stdout: '{"data":{"repository":null},"errors":[{"type":"NOT_FOUND","path":["repository"],"locations":[{"line":1,"column":41}],"message":"Could not resolve to a Repository with the name \'lw396/herdr-plugin-github\'."}]}',
+      stderr: "gh: Could not resolve to a Repository with the name 'lw396/herdr-plugin-github'.\n",
+    } });
+    expect(await known.assigned(REMOTE, "lw396", null).catch((e: unknown) => e)).toMatchObject({ notFound: true });
+    expect(known.peekAssigned(REMOTE, "lw396", null)).toBeUndefined();
   });
 });
