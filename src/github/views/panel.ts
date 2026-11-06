@@ -1,5 +1,5 @@
 // The panel role (the sidebar): the current repository's lists, starting with Issues.
-import { div, type AsyncContext, type Context, type Element } from "gpui-kit";
+import { div, svg, type AsyncContext, type Context, type Element } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
 import { props, closeOverlay } from "herdr";
 import { location, locationKey } from "../io/context.ts";
@@ -114,7 +114,13 @@ export class Panel implements Role {
       .child(h_flex().h(42).flex_none().px(14).gap(8).items_center().border_b(1).border_color(t.border)
         .child(div().font_semibold().child("GitHub"))
         .child(div().flex_1().min_w(0).truncate().text_right().text_size(12).text_color(t.dim).child(repo))
-        .child(button("gh-refresh", this.loading ? "…" : "↻", "Refresh", (_e, cx) => this.refresh(cx, true)))
+        // While loading, Herdr's own spinner (as its tab bar shows a working agent); ↻ otherwise.
+        .when(this.loading, (el) => el.child(div().size(24).flex_none().flex().items_center().justify_center()
+          .child(svg("mods/workspace-chrome/spinner.svg").size(12).text_color(t.dim).spin(900))))
+        .when(!this.loading, (el) => el.child(button("gh-refresh", "↻", "Refresh", (_e, cx) => {
+          this.refresh(cx, true);
+          cx.notify(); // a click doesn't redraw by itself: show the spinner now, not when it's done
+        })))
         .when(Boolean(overlay), (el) => el.child(button("gh-close", "×", "Close", () => closeOverlay(overlay!)))))
       // Tabs: only Issues in this version; PRs, Actions and notifications join it later.
       .child(h_flex().h(34).flex_none().px(10).gap(4).items_center().border_b(1).border_color(t.border)
