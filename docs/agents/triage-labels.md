@@ -10,6 +10,5 @@
 
 Use this mapping whenever a skill refers to a triage role.
 
-GitHub label provisioning is pending repository selection.
-Once the repository is confirmed, list its labels and create only
-missing labels with `gh label create <label> --repo owner/repo`.
+These labels exist on `lw396/herdr-plugin-github` (with `wayfinder:map` and
+`wayfinder:task`). Don't create new labels yourself: ask the person first.

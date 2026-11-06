@@ -2,17 +2,23 @@
 
 Issues and specs live in GitHub Issues. Use the `gh` CLI.
 
+**Never create, restructure or relabel issues on your own initiative, even when a plan seems
+agreed.** Specs come from the `to-spec` skill and tickets from `to-tickets`, when the person runs
+them; outside those, ask first and wait. Reading, and commenting on or closing the ticket you are
+working on, is fine.
+
 ## Repository
 
-Repository selection is pending; no Git remote is configured.
-Before tracker operations, ask for the intended owner/repo.
-Once confirmed, record it here and pass `--repo owner/repo` to
-`gh issue` commands (use explicit repository paths for `gh api`).
-A configured, unambiguous GitHub remote can supply the repository later.
+`lw396/herdr-plugin-github`. Pass `--repo lw396/herdr-plugin-github` to `gh issue`
+commands (explicit repository paths for `gh api`).
+
+The plan is the map, #1 (`wayfinder:map`): cross-cutting decisions and the order;
+its sub-issues are the steps, #3 to #9. #3 (Issues, first version) is a spec; its tickets
+are its sub-issues, #2 and #10 to #18, with native blocking edges.
 
 ## Operations
 
-- Create/publish: `gh issue create --repo owner/repo --title "..." --body-file <file>`.
+- Create/publish (only from `to-spec` / `to-tickets`, or when the person asks): `gh issue create --repo owner/repo --title "..." --body-file <file>`.
 - Read/fetch: `gh issue view <number> --repo owner/repo --json number,title,body,labels,comments`.
 - List: `gh issue list --repo owner/repo --state open --json number,title,body,labels`.
 - Comment: `gh issue comment <number> --repo owner/repo --body "..."`.
