@@ -15,7 +15,8 @@ src/github/         the source (TypeScript)
   remote.ts
   context.ts        the focused folder and machine
   ui.ts             shared UI helpers
-mods/github/        the mod as Herdr loads it: built *.js (committed) + mod.json, github.svg
+  mod.json, *.svg    copied as they are
+mods/github/        build output, committed: the mod as Herdr loads it
 mods/tabs-github/   Herdr's tab bar with a GitHub panel button (a marked copy of the shipped `tabs`)
 layouts/github.json Herdr's `main` layout with `tabs-github` and a `github` child in the side panel
 keys.json           snippet to merge into ~/.config/herdr-app/keys.json
@@ -28,8 +29,9 @@ test/               bun test; `herdr` is test/fake-herdr.ts (its exec answers li
 ## Why a build step
 
 Herdr runs mods in QuickJS: it loads plain ES modules only (no `.ts`, no npm packages,
-no Node/Bun APIs). `tsc` turns each `src/github/*.ts` into `mods/github/*.js` with the
-types erased and comments kept, so the shipped folder stays readable.
+no Node/Bun APIs). `scripts/build.sh` empties `mods/github/`, has `tsc` turn each `src/github/*.ts` into a `.js`
+with the types erased and comments kept (so the shipped folder stays readable), and copies
+the rest of `src/github/` as it is.
 
 Other runtime limits: `fetch` returns no headers and refuses Authorization across
 cross-origin redirects (Actions logs/artifacts), so GitHub goes through `gh`;
@@ -39,13 +41,13 @@ Herdr 0.1.13 `exec` has a 30 s limit and 8 MiB output.
 
 ```sh
 bun install
-bun run dev         # tsc --watch: rebuilds mods/github/ on save (Herdr hot-reloads it)
+bun run dev         # copy assets, then tsc --watch: rebuilds on save (Herdr hot-reloads it); rerun after editing an asset
 bun run build       # build once
 bun run typecheck   # mod sources against types/, tests against Bun
 bun test
 bun run check       # herdr-app check mods/github mods/tabs-github (needs herdr-app on PATH)
 bun run verify      # build + typecheck + test + check
-bun run check:built # fails if committed mods/github/*.js is not what src/ builds
+bun run check:built # fails if committed mods/github/ is not what src/ builds
 bun run types       # refresh types/ and docs/herdr/AGENTS.md from an installed Herdr
 ```
 

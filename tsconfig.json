@@ -1,5 +1,6 @@
 {
-  // src/github/*.ts -> mods/github/*.js (Herdr's QuickJS: no DOM/Node/Bun globals). See AGENTS.md.
+  // src/github/*.ts -> mods/github/*.js; scripts/build.sh copies the rest. Herdr's QuickJS:
+  // no DOM/Node/Bun globals. See AGENTS.md.
   "compilerOptions": {
     "target": "ES2022",
     "module": "ES2022",

@@ -13,9 +13,9 @@ A Herdr mod, written in TypeScript in `src/github/`, built to `mods/github/`. Re
 
 ## Source and output
 
-- Edit `src/github/*.ts`. `mods/github/*.js` is tsc output (one file per source, comments kept):
-  never edit it by hand, but commit it — people install the `mods/github/` folder as it is.
-  `mods/github/mod.json` and assets (`*.svg`) are hand-written and live only in `mods/github/`.
+- `src/github/` is the whole source: `*.ts`, `mod.json`, assets (`*.svg`). `mods/github/` is
+  build output only (`scripts/build.sh`: tsc for `*.ts`, one file per source with comments kept;
+  everything else copied). Never edit it, but commit it: people install that folder as it is.
 - Herdr cannot load `.ts` and resolves only `gpui-kit`, `gpui-base`, `herdr` and the mod's own
   relative files: no npm packages at run time. Import siblings as `./x.ts` (rewritten to `./x.js`).
 - `mods/tabs-github/` and `layouts/github.json` are copies of Herdr 0.1.13's shipped `tabs` mod

@@ -1,2 +1,2 @@
-# Built from src/github/*.ts by `bun run build`: edit the source, not these.
-mods/github/*.js linguist-generated=true
+# Built from src/github/ by `bun run build`: edit the source, not these.
+mods/github/** linguist-generated=true

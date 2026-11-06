@@ -3,8 +3,8 @@
   "type": "module",
   "private": true,
   "scripts": {
-    "build": "tsc -p tsconfig.json",
-    "dev": "tsc -p tsconfig.json --watch --preserveWatchOutput",
+    "build": "sh scripts/build.sh",
+    "dev": "sh scripts/build.sh --watch",
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.test.json",
     "test": "bun test",
     "check": "s=0; for m in github tabs-github; do herdr-app check mods/$m || s=1; rm -f mods/$m/jsconfig.json mods/$m/gpui-kit.d.ts; done; exit $s",
