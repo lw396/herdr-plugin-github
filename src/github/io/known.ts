@@ -1,15 +1,15 @@
 // What the sidebar knows about a place, kept per what each fact depends on: the gh account per
-// machine, the GitHub remote per machine and folder, the "Assigned to me" group per machine,
+// machine, the GitHub remote per machine and folder, each issue group per machine,
 // host/owner/repo and login (each machine's gh may be another account). Switching back to a
 // place shows what is known at once and asks again only once it is stale (or on ↻); two looks
 // at once share one call.
 import { Cache } from "../core/cache.ts";
 import type { Account } from "../core/account.ts";
 import type { RemoteRepo } from "../core/remote.ts";
-import type { IssueGroup } from "../core/issues.ts";
+import { appendPage, type GroupKind, type IssueGroup } from "../core/issues.ts";
 import * as gh from "./gh.ts";
 import { githubRemote } from "./git.ts";
-import { assignedToMe } from "./issues.ts";
+import { issuePage } from "./issues.ts";
 
 /**
  * One kind of fact: kept answers, fresh for `fresh` ms (stale ones still show while asked
@@ -34,6 +34,10 @@ function facts<T>(limit: number, fresh: number, keep: (value: T) => boolean) {
       asking.set(key, p);
       return p;
     },
+    /** Keeps `value` as the answer now (a page loaded by other means: Load more). */
+    put(key: string, value: T): void {
+      cache.set(key, value, Date.now());
+    },
     clear(): void {
       cache.clear();
       asking.clear();
@@ -43,18 +47,20 @@ function facts<T>(limit: number, fresh: number, keep: (value: T) => boolean) {
 
 // Not kept: a gh that isn't signed in, and a folder without a GitHub remote (yet): both are
 // what the person is about to fix, so the next look asks again.
-// Accounts and remotes rarely change; lists do (until #16 polls for changes).
-const accounts = facts<Account>(16, 5 * 60_000, (a) => a.status.ok);
+// A GitHub account hardly ever changes: a signed-in one is kept for an hour, even through ↻.
+// Remotes rarely change; lists do (until #16 polls for changes).
+const accounts = facts<Account>(16, 60 * 60_000, (a) => a.status.ok);
 const remotes = facts<RemoteRepo | null>(64, 5 * 60_000, (r) => r !== null);
-const assignedGroups = facts<IssueGroup>(64, 60_000, () => true);
+const groups = facts<IssueGroup>(64, 60_000, () => true);
 
 const machineKey = (on: string | null | undefined): string => on ?? "";
 const folderKey = (where: gh.Where): string => `${where.on ?? ""}\n${where.cwd ?? ""}`;
-const groupKey = (r: RemoteRepo, login: string, on: string | null): string => `${on ?? ""}\n${r.host}/${r.owner}/${r.repo}\n${login}`;
+const groupKey = (kind: GroupKind, r: RemoteRepo, login: string, on: string | null): string =>
+  `${kind}\n${on ?? ""}\n${r.host}/${r.owner}/${r.repo}\n${login}`;
 
-/** The gh on that machine (null: this computer). */
+/** The gh on that machine (null: this computer). ↻ (`force`) asks again only when none is signed in. */
 export const account = (on: string | null, force = false): Promise<Account> =>
-  accounts.look(machineKey(on), force, () => gh.account(on));
+  accounts.look(machineKey(on), force && !accounts.peek(machineKey(on)), () => gh.account(on));
 export const peekAccount = (on: string | null): Account | undefined => accounts.peek(machineKey(on));
 
 /** The folder's GitHub remote, or null when it has none. */
@@ -63,15 +69,25 @@ export const remote = (where: gh.Where, force = false): Promise<RemoteRepo | nul
 /** undefined: not known (yet). */
 export const peekRemote = (where: gh.Where): RemoteRepo | null | undefined => remotes.peek(folderKey(where));
 
-/** The repository's open issues assigned to `login`, the gh account on `on`. */
-export const assigned = (r: RemoteRepo, login: string, on: string | null, force = false): Promise<IssueGroup> =>
-  assignedGroups.look(groupKey(r, login, on), force, () => assignedToMe(r, login, on));
-export const peekAssigned = (r: RemoteRepo, login: string, on: string | null): IssueGroup | undefined =>
-  assignedGroups.peek(groupKey(r, login, on));
+/** A group's first page in the repository, asked with the gh on `on` (whose account is `login`). */
+export const group = (kind: GroupKind, r: RemoteRepo, login: string, on: string | null, force = false): Promise<IssueGroup> =>
+  groups.look(groupKey(kind, r, login, on), force, () => issuePage(kind, r, login, on, null));
+/** What is kept for the group: its first page, and any pages Load more added. */
+export const peekGroup = (kind: GroupKind, r: RemoteRepo, login: string, on: string | null): IssueGroup | undefined =>
+  groups.peek(groupKey(kind, r, login, on));
+
+/** Load more: `loaded` with the page after it; kept, so switching back shows every loaded row. */
+export async function more(kind: GroupKind, r: RemoteRepo, login: string, on: string | null, loaded: IssueGroup): Promise<IssueGroup> {
+  const key = groupKey(kind, r, login, on);
+  const both = appendPage(loaded, await issuePage(kind, r, login, on, loaded.cursor));
+  // Kept only if `loaded` is still what is kept: a ↻ in the meantime replaced it with newer rows.
+  if (groups.peek(key) === loaded) groups.put(key, both);
+  return both;
+}
 
 /** Forgets everything (tests). */
 export function clear(): void {
   accounts.clear();
   remotes.clear();
-  assignedGroups.clear();
+  groups.clear();
 }

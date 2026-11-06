@@ -1,6 +1,6 @@
 // The only file that reaches GitHub: `gh`, on the folder's machine (`on`, see account()).
 import { exec } from "herdr";
-import { apiArgs, graphqlArgs, parseJson, errorMessage, type ApiOptions, type GraphqlVariables } from "../core/gh-args.ts";
+import { apiArgs, graphqlArgs, parseJson, errorMessage, transient, type ApiOptions, type GraphqlVariables } from "../core/gh-args.ts";
 import type { Account, Status } from "../core/account.ts";
 
 export type { Account, Status };
@@ -25,28 +25,39 @@ export class GhError extends Error {
   }
 }
 
-/** `gh <args>` → stdout, or a GhError. Herdr 0.1.13 exec: 30 s, 8 MiB. */
-export async function gh(args: string[], where: Where = {}): Promise<string> {
-  const r = await exec("gh", args, { cwd: where.cwd ?? undefined, on: where.on ?? null });
-  if (r.code !== 0) throw new GhError(errorMessage(r.stderr), r.code, r.stderr);
-  return r.stdout;
+/** How many times a read is asked in all when the connection drops before GitHub answers. */
+const TRIES = 3;
+
+/**
+ * `gh <args>` → stdout, or a GhError. Herdr 0.1.13 exec: 30 s, 8 MiB. A `read` is asked again
+ * when the connection drops (`Get "…": EOF`); a write never is: GitHub may already have done it.
+ */
+export async function gh(args: string[], where: Where = {}, read = false): Promise<string> {
+  for (let tried = 1; ; tried++) {
+    const r = await exec("gh", args, { cwd: where.cwd ?? undefined, on: where.on ?? null });
+    if (r.code === 0) return r.stdout;
+    if (!read || tried >= TRIES || !transient(r.stderr)) throw new GhError(errorMessage(r.stderr), r.code, r.stderr);
+  }
 }
+
+const reads = (method: string | undefined): boolean => !method || method.toUpperCase() === "GET";
 
 /** `gh api <path>`, parsed as JSON. */
 export async function api(path: string, options: Omit<ApiOptions, "jq"> & Where = {}): Promise<unknown> {
   const { cwd, on, ...rest } = options;
-  return parseJson(await gh(apiArgs(path, rest), { cwd, on }));
+  return parseJson(await gh(apiArgs(path, rest), { cwd, on }, reads(rest.method)));
 }
 
 /** `gh api <path> --jq <filter>`: jq prints plain text (strings unquoted), trimmed here. */
 export async function apiText(path: string, jq: string, options: Omit<ApiOptions, "jq"> & Where = {}): Promise<string> {
   const { cwd, on, ...rest } = options;
-  return (await gh(apiArgs(path, { ...rest, jq }), { cwd, on })).trim();
+  return (await gh(apiArgs(path, { ...rest, jq }), { cwd, on }, reads(rest.method))).trim();
 }
 
 /** `gh api graphql`, parsed; resolves with `data`. */
 export async function graphql<T = unknown>(query: string, variables: GraphqlVariables = {}, where: Where = {}): Promise<T> {
-  const out = parseJson(await gh(graphqlArgs(query, variables), where)) as { data?: T; errors?: { message: string }[] } | null;
+  const read = !/^\s*mutation\b/.test(query);
+  const out = parseJson(await gh(graphqlArgs(query, variables), where, read)) as { data?: T; errors?: { message: string }[] } | null;
   if (out?.errors?.length) throw new GhError(out.errors.map((e) => e.message).join("; "), 1, "");
   return out?.data as T;
 }

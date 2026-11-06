@@ -1,0 +1,37 @@
+{
+  "data": {
+    "repository": {
+      "hasIssuesEnabled": true,
+      "issues": {
+        "totalCount": 3,
+        "pageInfo": {
+          "hasNextPage": false,
+          "endCursor": "Y3Vyc29yOnYyOpK0MjAyNi0xMS0wNlQxMTozNTo1M1rPAAAAAXPlm3k="
+        },
+        "nodes": [
+          {
+            "number": 11,
+            "title": "Issues 标签页：\"指派给我的\"一组",
+            "updatedAt": "2026-11-06T13:28:21Z",
+            "url": "https://github.com/lw396/herdr-plugin-github/issues/11",
+            "assignees": { "nodes": [{ "login": "lw396" }] }
+          },
+          {
+            "number": 10,
+            "title": "焦点在 mod 窗格上时当前仓库保持不变",
+            "updatedAt": "2026-11-06T13:00:07Z",
+            "url": "https://github.com/lw396/herdr-plugin-github/issues/10",
+            "assignees": { "nodes": [{ "login": "lw396" }] }
+          },
+          {
+            "number": 2,
+            "title": "gh 在文件夹所在的机器上运行",
+            "updatedAt": "2026-11-06T11:35:53Z",
+            "url": "https://github.com/lw396/herdr-plugin-github/issues/2",
+            "assignees": { "nodes": [] }
+          }
+        ]
+      }
+    }
+  }
+}

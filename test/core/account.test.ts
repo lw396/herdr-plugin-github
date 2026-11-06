@@ -36,11 +36,15 @@ describe("describeAccount", () => {
       .toEqual({ ok: false, text: "not signed in on center: run gh auth login on center" });
   });
 
-  test("other failures: gh's message and the machine", () => {
-    const status = { ok: false, reason: "error", message: "check your internet connection or https://githubstatus.com" } as const;
+  test("a dropped connection: plain words and the machine", () => {
+    const status = { ok: false, reason: "error", message: 'Get "https://api.github.com/user": EOF' } as const;
     expect(describeAccount({ on: "center", status }))
-      .toEqual({ ok: false, text: "gh on center: check your internet connection or https://githubstatus.com" });
-    expect(describeAccount({ on: null, status }))
-      .toEqual({ ok: false, text: "gh on this computer: check your internet connection or https://githubstatus.com" });
+      .toEqual({ ok: false, text: "gh on center: The connection to GitHub dropped. Try again." });
+  });
+
+  test("other failures: gh's message and the machine", () => {
+    const status = { ok: false, reason: "error", message: "gh: Not Found (HTTP 404)" } as const;
+    expect(describeAccount({ on: "center", status })).toEqual({ ok: false, text: "gh on center: gh: Not Found (HTTP 404)" });
+    expect(describeAccount({ on: null, status })).toEqual({ ok: false, text: "gh on this computer: gh: Not Found (HTTP 404)" });
   });
 });

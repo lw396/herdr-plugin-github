@@ -15,16 +15,19 @@ src/github/         the source (TypeScript); Herdr wants main.js and mod.json at
                     remote: which repository a git remote is; account: what the sidebar says about gh;
                     location: the focused folder, kept while focus is on a pane without one;
                     cache: kept values, fresh for a while, least recently used dropped;
-                    issues: issue groups' GraphQL query, rows and notices; time: "2h"-style times)
+                    issues: issue groups' GraphQL query and pages, rows and notices; issue-detail: metadata and discussion;
+                    projects: an issue's Projects query, pages and access notices; activity: label/assignee events and timeline ordering;
+                    markdown: image links without network requests; time: "2h"-style times)
   io/               Herdr and programs: gh.ts (the only way to GitHub; account(): the folder's machine's gh),
                     git.ts (git on the folder's machine), context.ts (feeds core/location Herdr's live data, remembers its last answer),
-                    issues.ts (issue groups through gh), known.ts (cached: gh account per machine,
-                    remote per machine + folder, "Assigned to me" per machine + host/owner/repo + login)
-  views/            one file per role (panel.ts) and ui.ts (shared UI helpers)
+                    issues.ts (issue groups and complete issue discussions through gh), detail-tabs.ts (native Herdr issue tabs),
+                    known.ts (cached: gh account per machine,
+                    remote per machine + folder, issue groups per kind + machine + host/owner/repo + login)
+  views/            one file per role (panel.ts sidebar, issue.ts detail reader, pane.ts pane header) and ui.ts (shared UI helpers)
   assets/           copied as they are (github.svg -> mods/github/assets/github.svg)
 mods/github/        build output, committed: the mod as Herdr loads it
 mods/tabs-github/   Herdr's tab bar with a GitHub panel button (a marked copy of the shipped `tabs`)
-layouts/github.json Herdr's `main` layout with `tabs-github` and a `github` child in the side panel
+layouts/github.json Herdr's `main` layout with `tabs-github`, a GitHub side panel and GitHub-aware pane headers
 keys.json           snippet to merge into ~/.config/herdr-app/keys.json
 types/              herdr.d.ts + gpui-kit.d.ts from Herdr (see types/VERSION)
 GLOSSARY.md         the words we use (GitHub mod, 侧边栏, 详情窗格, ...)
@@ -32,8 +35,31 @@ docs/adr/           scope and design decisions, one per file
 docs/herdr/         Herdr's own guide (AGENTS.md) and docs, for reference
 docs/reference/     (git-ignored) shipped Herdr mods and herdr-layout-examples mods, read-only examples
 test/               bun test, core/ and io/ like src/; `herdr` is test/fake-herdr.ts (its exec
-                    answers like machines, spaces/panes/focused like a screen); layers.test.ts checks what each folder imports
+                    answers like machines, spaces/panes/focused like a screen); fixtures/ real gh replies;
+                    layers.test.ts checks what each folder imports
 ```
+
+## Reading issues
+
+Click a sidebar issue to open its details in Herdr's **top-level tab bar**, beside terminal tabs.
+Click it again to select its existing issue tab in the same space. No terminal is split and there
+is no second tab bar inside the reader. The reader shows metadata, Markdown body and all comments,
+including reaction counts; images become “🖼 图片” browser links. The compact tab name is
+`#13 · repo`. In the reader heading, click `#13` to open the browser or the adjacent copy icon to
+copy its URL; refresh stays at the top right. Its gh runs on the issue tab's machine, independent of focus.
+
+The body and each comment have their own bordered card, author/time header and reaction badges.
+Label/assignee changes appear between comments in chronological order; same-time label changes
+are grouped into one row. Labels use GitHub's original colors for their border and tinted background.
+Assignees, Labels, Project and Milestone appear in a right-hand column in wide readers and above
+the discussion in narrow ones. Projects are read separately through gh and never block the
+body/comments. Unavailable Projects show a quiet `None yet` placeholder, with the actual access
+or network error in its tooltip; the data layer still distinguishes failure from an empty list. To grant read-only
+Projects access, run `gh auth refresh -h github.com -s read:project` on the reader's machine.
+The `github` layout's pane header adds the GitHub logo while keeping terminal headers/controls.
+
+Open issue contents are session-only: restarting Herdr (or hot-reloading the mod) does not reload
+them. Herdr may keep the native tab frame; it shows an empty reader until an issue is opened again.
 
 ## Why a build step
 

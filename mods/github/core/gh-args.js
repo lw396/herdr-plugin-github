@@ -49,3 +49,18 @@ export function errorMessage(stderr) {
     const lines = stderr.split("\n").map((l) => l.trim()).filter(Boolean);
     return lines.at(-1) ?? "gh failed";
 }
+/**
+ * Whether gh's stderr is a connection dropped before GitHub answered (`Get "https://…": EOF`),
+ * not an answer from GitHub: asking again usually works.
+ */
+export function transient(stderr) {
+    return /^(GET|POST|Get|Post) "https?:\/\/[^"]+": EOF$/m.test(stderr);
+}
+/** gh's failure (its stderr or message) as the sidebar says it: plain words for the network, else gh's own. */
+export function explain(stderr) {
+    if (transient(stderr))
+        return "The connection to GitHub dropped. Try again.";
+    if (/^error connecting to |^check your internet connection/m.test(stderr))
+        return "Can't reach GitHub. Check the internet connection (or githubstatus.com).";
+    return errorMessage(stderr);
+}

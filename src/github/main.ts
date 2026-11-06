@@ -3,8 +3,10 @@ import { View, type AsyncContext, type Context, type Element } from "gpui-kit";
 import { props } from "herdr";
 import type { Role } from "./views/ui.ts";
 import { Panel } from "./views/panel.ts";
+import { Issue } from "./views/issue.ts";
+import { Pane } from "./views/pane.ts";
 
-const ROLES: Record<string, new () => Role> = { panel: Panel };
+const ROLES: Record<string, new () => Role> = { panel: Panel, issue: Issue, pane: Pane };
 
 export default class GitHub extends View {
   role: Role | null = null;

@@ -1,0 +1,226 @@
+{
+  "data": {
+    "repository": {
+      "hasIssuesEnabled": true,
+      "issues": {
+        "totalCount": 1058,
+        "pageInfo": {
+          "hasNextPage": true,
+          "endCursor": "Y3Vyc29yOnYyOpK0MjAyNi0xMS0wMlQxNzowMDozMVrPAAAAAW3jAo8="
+        },
+        "nodes": [
+          {
+            "number": 13118,
+            "title": "Upcoming PGP signing key rotation for GitHub CLI Linux packages [September 2026]",
+            "updatedAt": "2026-11-06T10:41:13Z",
+            "url": "https://github.com/cli/cli/issues/13118",
+            "assignees": { "nodes": [] }
+          },
+          {
+            "number": 14962,
+            "title": "CLI reports `delete_repo` scope needed on 403 for /dependabot/alerts endpoint",
+            "updatedAt": "2026-11-06T08:51:05Z",
+            "url": "https://github.com/cli/cli/issues/14962",
+            "assignees": { "nodes": [] }
+          },
+          {
+            "number": 9789,
+            "title": "`gh auth login --with-token` hangs",
+            "updatedAt": "2026-11-06T07:32:15Z",
+            "url": "https://github.com/cli/cli/issues/9789",
+            "assignees": { "nodes": [] }
+          },
+          {
+            "number": 14615,
+            "title": "Package the official `gh` skill as a Claude Code plugin and emit install hints",
+            "updatedAt": "2026-11-06T02:39:45Z",
+            "url": "https://github.com/cli/cli/issues/14615",
+            "assignees": { "nodes": [] }
+          },
+          {
+            "number": 14959,
+            "title": "Windows: api --input - reports unexpected end of JSON input from Python subprocess while file input works",
+            "updatedAt": "2026-11-05T23:35:39Z",
+            "url": "https://github.com/cli/cli/issues/14959",
+            "assignees": { "nodes": [] }
+          },
+          {
+            "number": 14950,
+            "title": "1password support as option to keep tokens securely",
+            "updatedAt": "2026-11-05T17:07:33Z",
+            "url": "https://github.com/cli/cli/issues/14950",
+            "assignees": { "nodes": [] }
+          },
+          {
+            "number": 14949,
+            "title": "extension install: ad-hoc re-signing of darwin-arm64 binaries breaks Developer ID signed extensions",
+            "updatedAt": "2026-11-05T15:48:30Z",
+            "url": "https://github.com/cli/cli/issues/14949",
+            "assignees": { "nodes": [] }
+          },
+          {
+            "number": 13768,
+            "title": "Better multi-account `gh` account usage",
+            "updatedAt": "2026-11-05T14:21:59Z",
+            "url": "https://github.com/cli/cli/issues/13768",
+            "assignees": { "nodes": [] }
+          },
+          {
+            "number": 14948,
+            "title": "gh run watch fails intermittently when called immediately after gh workflow run",
+            "updatedAt": "2026-11-05T13:44:10Z",
+            "url": "https://github.com/cli/cli/issues/14948",
+            "assignees": { "nodes": [] }
+          },
+          {
+            "number": 14947,
+            "title": "gh skill: add a minimum release age option to install/update (supply chain safety)",
+            "updatedAt": "2026-11-05T12:19:00Z",
+            "url": "https://github.com/cli/cli/issues/14947",
+            "assignees": { "nodes": [] }
+          },
+          {
+            "number": 14946,
+            "title": "`gh issue develop --name <existing-branch>` fails with \"API returned empty branch name\" instead of saying the branch already exists",
+            "updatedAt": "2026-11-05T11:46:51Z",
+            "url": "https://github.com/cli/cli/issues/14946",
+            "assignees": { "nodes": [] }
+          },
+          {
+            "number": 9042,
+            "title": "Allow filtering workflow runs by date range in gh run list",
+            "updatedAt": "2026-11-05T08:55:10Z",
+            "url": "https://github.com/cli/cli/issues/9042",
+            "assignees": { "nodes": [] }
+          },
+          {
+            "number": 13717,
+            "title": "Allow configuring a custom API endpoint per host",
+            "updatedAt": "2026-11-05T07:08:26Z",
+            "url": "https://github.com/cli/cli/issues/13717",
+            "assignees": { "nodes": [] }
+          },
+          {
+            "number": 14941,
+            "title": "gh run rerun --job hides repository authorization failure",
+            "updatedAt": "2026-11-05T04:00:44Z",
+            "url": "https://github.com/cli/cli/issues/14941",
+            "assignees": { "nodes": [] }
+          },
+          {
+            "number": 14090,
+            "title": "[aw] Detection Runs",
+            "updatedAt": "2026-11-04T17:58:52Z",
+            "url": "https://github.com/cli/cli/issues/14090",
+            "assignees": { "nodes": [] }
+          },
+          {
+            "number": 14929,
+            "title": "Preserve literal Unicode escape text in JSON string values",
+            "updatedAt": "2026-11-04T17:18:35Z",
+            "url": "https://github.com/cli/cli/issues/14929",
+            "assignees": { "nodes": [] }
+          },
+          {
+            "number": 12925,
+            "title": "`gh auth login` doesn't poll for success unless you press enter to open web",
+            "updatedAt": "2026-11-04T15:33:01Z",
+            "url": "https://github.com/cli/cli/issues/12925",
+            "assignees": { "nodes": [] }
+          },
+          {
+            "number": 13238,
+            "title": "Auto-detect host for `gh api`",
+            "updatedAt": "2026-11-04T14:57:56Z",
+            "url": "https://github.com/cli/cli/issues/13238",
+            "assignees": { "nodes": [] }
+          },
+          {
+            "number": 14938,
+            "title": "gh extension upgrade shows no progress for a long time, indistinguishable from a hang",
+            "updatedAt": "2026-11-04T13:43:21Z",
+            "url": "https://github.com/cli/cli/issues/14938",
+            "assignees": { "nodes": [] }
+          },
+          {
+            "number": 14937,
+            "title": "gh pr edit --add-reviewer can remove reviewers assigned automatically by GitHub",
+            "updatedAt": "2026-11-04T13:23:55Z",
+            "url": "https://github.com/cli/cli/issues/14937",
+            "assignees": { "nodes": [] }
+          },
+          {
+            "number": 6118,
+            "title": "Extension Manifest & Lockfiles",
+            "updatedAt": "2026-11-04T10:31:07Z",
+            "url": "https://github.com/cli/cli/issues/6118",
+            "assignees": { "nodes": [] }
+          },
+          {
+            "number": 14931,
+            "title": "[aw] Issue Triage (skills-driven): timed out",
+            "updatedAt": "2026-11-03T22:44:10Z",
+            "url": "https://github.com/cli/cli/issues/14931",
+            "assignees": { "nodes": [] }
+          },
+          {
+            "number": 14930,
+            "title": "`gh pr merge` without `--admin` silently bypasses rulesets when `mergeStateStatus` is `UNKNOWN`",
+            "updatedAt": "2026-11-03T22:41:21Z",
+            "url": "https://github.com/cli/cli/issues/14930",
+            "assignees": { "nodes": [] }
+          },
+          {
+            "number": 14868,
+            "title": "Windows: `gh extension upgrade`/`remove` delete the installed extension folder and leave it broken when a file in it is in use",
+            "updatedAt": "2026-11-03T10:32:30Z",
+            "url": "https://github.com/cli/cli/issues/14868",
+            "assignees": { "nodes": [] }
+          },
+          {
+            "number": 6462,
+            "title": "gh and REST API unable to work with same-org forked repos",
+            "updatedAt": "2026-11-03T02:25:58Z",
+            "url": "https://github.com/cli/cli/issues/6462",
+            "assignees": { "nodes": [] }
+          },
+          {
+            "number": 14827,
+            "title": "gh skill install --all: identical skills under skills/ and plugins/<name>/skills/ are rejected as conflicting names",
+            "updatedAt": "2026-11-02T17:11:16Z",
+            "url": "https://github.com/cli/cli/issues/14827",
+            "assignees": { "nodes": [] }
+          },
+          {
+            "number": 14789,
+            "title": "Add provenance verification via `--verify` to `gh download`",
+            "updatedAt": "2026-11-02T17:10:13Z",
+            "url": "https://github.com/cli/cli/issues/14789",
+            "assignees": { "nodes": [] }
+          },
+          {
+            "number": 14811,
+            "title": "Support updating an extension’s associated agent skills alongside the extension",
+            "updatedAt": "2026-11-02T17:08:57Z",
+            "url": "https://github.com/cli/cli/issues/14811",
+            "assignees": { "nodes": [] }
+          },
+          {
+            "number": 14794,
+            "title": "Cannot delete head branch in worktree",
+            "updatedAt": "2026-11-02T17:08:03Z",
+            "url": "https://github.com/cli/cli/issues/14794",
+            "assignees": { "nodes": [] }
+          },
+          {
+            "number": 14882,
+            "title": "`gh pr checks` exits 1 for \"no checks reported\", the same code as failed checks",
+            "updatedAt": "2026-11-02T17:00:31Z",
+            "url": "https://github.com/cli/cli/issues/14882",
+            "assignees": { "nodes": [] }
+          }
+        ]
+      }
+    }
+  }
+}
