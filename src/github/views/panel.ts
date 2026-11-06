@@ -114,7 +114,8 @@ export class Panel implements Role {
     cx.spawn(async (cx) => {
       try {
         const page = await known.group(kind, r.remote, r.login, r.on, force);
-        if (run === this.latest) g.page = page;
+        // What is kept wins: a change from a reader may have replaced this answer while it was out.
+        if (run === this.latest) g.page = known.peekGroup(kind, r.remote, r.login, r.on) ?? page;
       } catch (e) {
         if (run === this.latest) g.failure = gh.failureOf(e);
       } finally {
@@ -165,7 +166,7 @@ export class Panel implements Role {
   receive(cx: Context): void {
     const changes = this.notices.take().flatMap((n) => (n.state ? [n.state] : []));
     if (changes.length === 0) return;
-    changes.forEach(known.applyChange);
+    changes.forEach(known.issueChanged);
     for (const { kind } of GROUPS) {
       this.show(kind);
       this.load(cx, kind);

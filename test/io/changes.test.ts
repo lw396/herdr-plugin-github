@@ -1,6 +1,6 @@
 // Writes made in one view reach the others through Herdr's shared metadata (re-rendering every mod).
 import { afterEach, expect, test } from "bun:test";
-import { reset } from "../fake-herdr.ts";
+import { reset, setShared, shared } from "../fake-herdr.ts";
 import { announce, Notices } from "../../src/github/io/changes.ts";
 
 afterEach(reset);
@@ -25,6 +25,17 @@ test("a view that starts later does not replay earlier writes", () => {
   expect(later.take()).toEqual([]);
   announce(comment);
   expect(later.take()).toEqual([comment]);
+});
+
+test("a write announced from an older copy of the log still reaches a view that took the newer one", () => {
+  const sidebar = new Notices();
+  const before = shared("github.changes");
+  announce(comment);
+  expect(sidebar.take()).toEqual([comment]);
+  // Another mod instance read the log before that write landed, then announced its own over it.
+  setShared("github.changes", before);
+  announce(closed);
+  expect(sidebar.take()).toEqual([closed]);
 });
 
 test("a view that missed more writes than are kept receives the kept ones", () => {

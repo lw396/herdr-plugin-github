@@ -10,7 +10,7 @@ import { relativeTime } from "../core/time.ts";
 import { describeAccount } from "../core/account.ts";
 import { detailMachine, issueCommand, navigatedDetail, readyDetail } from "../io/detail-tabs.ts";
 import { addComment, readIssue, readIssueProjects, setIssueState } from "../io/issues.ts";
-import { announce, Notices } from "../io/changes.ts";
+import { announce, Notices, type IssueNotice } from "../io/changes.ts";
 import { transient } from "../core/gh-args.ts";
 import type { Projects } from "../core/projects.ts";
 import { issueTimeline, activityText, type Activity } from "../core/activity.ts";
@@ -39,6 +39,8 @@ export class Issue implements Role {
   /** The new comment being written; kept when posting fails, and through refreshes. */
   box: TextareaState | null = null;
   draft = "";
+  /** Unsent comments of the issues Back can return to. */
+  drafts = new Map<string, string>();
   writing: "comment" | "state" | null = null;
   writeFailure: string | null = null;
 
@@ -79,6 +81,11 @@ export class Issue implements Role {
 
   /** The tab now shows, and is named after, that issue. */
   private show(cx: Context, ref: IssueRef): void {
+    // Each issue keeps its own unsent comment: Back brings it back, and it is never posted elsewhere.
+    if (this.ref) this.drafts.set(issueKey(this.ref), this.draft);
+    this.draft = this.drafts.get(issueKey(ref)) ?? "";
+    this.drafts.delete(issueKey(ref));
+    this.box?.set_value(this.draft);
     this.ref = ref;
     this.writeFailure = null;
     navigatedDetail(this.reader, ref);
@@ -129,14 +136,24 @@ export class Issue implements Role {
     const body = this.draft;
     this.write(cx, "comment", body.trim() !== "", async (repo, number, on) => {
       const comment = await addComment(repo, number, body, on);
-      announce({ repo, number, comment });
-      this.draft = "";
-      this.box?.set_value("");
+      this.publish({ repo, number, comment });
+      // Empty the box only if it still holds what was sent, on the issue it was sent to.
+      const sentKey = issueKey({ repo, number });
+      if (this.ref && issueKey(this.ref) === sentKey && this.draft === body) {
+        this.draft = "";
+        this.box?.set_value("");
+      } else if (this.drafts.get(sentKey) === body) this.drafts.delete(sentKey);
     });
   }
 
   setState(cx: Context, state: "open" | "closed"): void {
-    this.write(cx, "state", true, async (repo, number, on) => announce({ repo, number, state: await setIssueState(repo, number, state, on) }));
+    this.write(cx, "state", true, async (repo, number, on) => this.publish({ repo, number, state: await setIssueState(repo, number, state, on) }));
+  }
+
+  /** Shows this view's own write at once, then tells the other views. */
+  private publish(notice: IssueNotice): void {
+    this.apply(notice);
+    announce(notice);
   }
 
   /** One write at a time, through the gh that read the issue; a failure is said with gh's words. */
@@ -161,20 +178,18 @@ export class Issue implements Role {
     });
   }
 
-  /** Writes announced by any view (this one too): a new comment joins the timeline, a new state shows. */
-  private receive(): void {
-    for (const notice of this.notices.take()) {
-      const issue = this.entry?.issue;
-      if (!issue || !this.ref || issueKey(notice) !== issueKey(this.ref)) continue;
-      const comment = notice.comment;
-      if (comment && !issue.comments.some(c => c.id === comment.id)) issue.comments = [...issue.comments, comment];
-      if (notice.state) issue.state = notice.state.state;
-    }
+  /** A write to the shown issue: a new comment joins the timeline (once), a new state shows. */
+  private apply(notice: IssueNotice): void {
+    const issue = this.entry?.issue, comment = notice.comment;
+    if (!issue || !this.ref || issueKey(notice) !== issueKey(this.ref)) return;
+    if (comment && !issue.comments.some(c => c.id === comment.id)) issue.comments = [...issue.comments, comment];
+    if (notice.state) issue.state = notice.state.state;
   }
 
   render(_cx: Context): Element {
     if (this.reader) readyDetail(this.reader);
-    this.receive();
+    // Writes announced by other views (shared metadata re-renders this one).
+    this.notices.take().forEach(notice => this.apply(notice));
     const t = colors(), ref = this.ref, entry = this.entry, issue = entry?.issue;
     const url = issue?.url ?? (ref ? `https://github.com/${ref.repo}/issues/${ref.number}` : "");
     return v_flex().id("issue-reader").size_full().min_h(0).overflow_hidden().bg(t.background).text_color(t.foreground).text_size(14)

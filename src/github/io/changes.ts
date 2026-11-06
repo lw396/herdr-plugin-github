@@ -12,27 +12,31 @@ export interface IssueNotice {
   state?: IssueChange;
 }
 
-interface Log { last: number; notices: { seq: number; notice: IssueNotice }[] }
+/**
+ * Each notice has its own id, not a shared counter: a mod instance announcing from an older copy
+ * of the log must not reuse a number another view has already taken.
+ */
+interface Log { notices: { id: string; notice: IssueNotice }[] }
 
 const CHANGES = "github.changes";
 /** The most recent notices kept for views that render late. */
 const KEPT = 20;
-const log = (): Log => (shared(CHANGES) as Log | null) ?? { last: 0, notices: [] };
+const log = (): Log["notices"] => (shared(CHANGES) as Log | null)?.notices ?? [];
 
 export function announce(notice: IssueNotice): void {
-  const { last, notices } = log(), seq = last + 1;
-  setShared(CHANGES, { last: seq, notices: [...notices, { seq, notice }].slice(-KEPT) });
+  const id = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  setShared(CHANGES, { notices: [...log(), { id, notice }].slice(-KEPT) });
 }
 
 /** What one view has taken: it starts after what was announced before it (a read: safe in init). */
 export class Notices {
-  private seen = log().last;
+  private taken = new Set(log().map((n) => n.id));
 
   /** Notices announced since the last take, oldest first. */
   take(): IssueNotice[] {
-    const { last, notices } = log();
-    const fresh = notices.filter((n) => n.seq > this.seen).map((n) => n.notice);
-    this.seen = last;
-    return fresh;
+    const notices = log(), fresh = notices.filter((n) => !this.taken.has(n.id));
+    // Only ids still in the log can come again.
+    this.taken = new Set(notices.map((n) => n.id));
+    return fresh.map((n) => n.notice);
   }
 }

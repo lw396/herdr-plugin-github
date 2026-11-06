@@ -6,7 +6,7 @@
 import { Cache } from "../core/cache.ts";
 import type { Account } from "../core/account.ts";
 import type { RemoteRepo } from "../core/remote.ts";
-import { appendPage, applyChange as changed, type GroupKind, type IssueChange, type IssueGroup } from "../core/issues.ts";
+import { appendPage, applyChange, type GroupKind, type IssueChange, type IssueGroup } from "../core/issues.ts";
 import * as gh from "./gh.ts";
 import { githubRemote } from "./git.ts";
 import { issuePage } from "./issues.ts";
@@ -96,11 +96,11 @@ export async function more(kind: GroupKind, r: RemoteRepo, login: string, on: st
  * An issue closed or reopened (in a reader, maybe another view's): every kept group of its
  * repository shows it where it now belongs at once, and is asked again on the next look.
  */
-export function applyChange(change: IssueChange): void {
+export function issueChanged(change: IssueChange): void {
   const repo = `github.com/${change.repo}`.toLowerCase();
   groups.patch((key) => key.split("\n")[2]?.toLowerCase() === repo, (key, group) => {
     const [kind, , , login] = key.split("\n");
-    return changed(kind as GroupKind, group, change, login ?? "");
+    return applyChange(kind as GroupKind, group, change, login ?? "");
   });
 }
 

@@ -141,7 +141,7 @@ describe("issue groups", () => {
     machine(null, { [ASSIGNED]: { stdout: fixture("assigned-herdr-plugin-github.json") }, [OPEN_CLI]: { stdout: fixture("open-cli-1.json") } });
     await known.group("assigned", REMOTE, "lw396", null);
     const cli = await known.group("open", CLI, "lw396", null);
-    known.applyChange({
+    known.issueChanged({
       repo: "LW396/Herdr-Plugin-GitHub", state: "closed",
       issue: { number: 12, title: "Issues 标签页：Open、Closed、折叠和加载更多", assignees: ["lw396"], updatedAt: "2026-11-06T18:00:00Z", url: "https://github.com/lw396/herdr-plugin-github/issues/12" },
     });

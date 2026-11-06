@@ -1,5 +1,5 @@
 // Herdr smoke mod: runs real parser and reader paths inside Herdr's QuickJS (scripts/smoke.sh).
-import { View } from "gpui-kit";
+import { View, type AsyncContext } from "gpui-kit";
 import { Issue } from "../../src/github/views/issue.ts";
 import { imageLinks, browserUrl, issueLink, readerMarkdown } from "../../src/github/core/markdown.ts";
 import { parseIssueDetail } from "../../src/github/core/issue-detail.ts";
@@ -13,7 +13,11 @@ function expectEqual(actual: string, expected: string, what: string): void {
 export default class Smoke extends View {
   role = new Issue();
 
-  init(): void {
+  init(_props: unknown, cx: AsyncContext): void {
+    // The reader's own init: its comment box (TextareaState) must be creatable in QuickJS.
+    this.role.init(cx);
+    expectEqual(String(this.role.box?.value()), "", "comment box");
+    this.role.draft = "A comment";
     expectEqual(imageLinks("![a](img.png) `![code](x.png)`"), "[🖼 图片](<img.png>) `![code](x.png)`", "Markdown images");
     expectEqual(imageLinks('<!-- <img src="hidden"> -->\n\n<img src="a&#38;b">'),
       '<!-- <img src="hidden"> -->\n\n[🖼 图片](<a&b>)', "HTML images");

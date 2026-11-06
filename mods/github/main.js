@@ -9883,7 +9883,7 @@ async function more(kind, r, login, on, loaded) {
   if (groups.peek(key) === loaded) groups.put(key, both);
   return both;
 }
-function applyChange2(change) {
+function issueChanged(change) {
   const repo = `github.com/${change.repo}`.toLowerCase();
   groups.patch((key) => key.split("\n")[2]?.toLowerCase() === repo, (key, group2) => {
     const [kind, , , login] = key.split("\n");
@@ -10027,19 +10027,18 @@ function issueCommand(command, id) {
 import { shared as shared2, setShared as setShared2 } from "herdr";
 var CHANGES = "github.changes";
 var KEPT = 20;
-var log = () => shared2(CHANGES) ?? { last: 0, notices: [] };
+var log = () => shared2(CHANGES)?.notices ?? [];
 function announce(notice) {
-  const { last, notices } = log(), seq = last + 1;
-  setShared2(CHANGES, { last: seq, notices: [...notices, { seq, notice }].slice(-KEPT) });
+  const id = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  setShared2(CHANGES, { notices: [...log(), { id, notice }].slice(-KEPT) });
 }
 var Notices = class {
-  seen = log().last;
+  taken = new Set(log().map((n) => n.id));
   /** Notices announced since the last take, oldest first. */
   take() {
-    const { last, notices } = log();
-    const fresh = notices.filter((n) => n.seq > this.seen).map((n) => n.notice);
-    this.seen = last;
-    return fresh;
+    const notices = log(), fresh = notices.filter((n) => !this.taken.has(n.id));
+    this.taken = new Set(notices.map((n) => n.id));
+    return fresh.map((n) => n.notice);
   }
 };
 
@@ -10125,7 +10124,7 @@ var Panel = class {
     cx.spawn(async (cx2) => {
       try {
         const page = await group(kind, r.remote, r.login, r.on, force);
-        if (run3 === this.latest) g.page = page;
+        if (run3 === this.latest) g.page = peekGroup(kind, r.remote, r.login, r.on) ?? page;
       } catch (e) {
         if (run3 === this.latest) g.failure = failureOf(e);
       } finally {
@@ -10173,7 +10172,7 @@ var Panel = class {
   receive(cx) {
     const changes = this.notices.take().flatMap((n) => n.state ? [n.state] : []);
     if (changes.length === 0) return;
-    changes.forEach(applyChange2);
+    changes.forEach(issueChanged);
     for (const { kind } of GROUPS) {
       this.show(kind);
       this.load(cx, kind);
@@ -10243,6 +10242,8 @@ var Issue = class {
   /** The new comment being written; kept when posting fails, and through refreshes. */
   box = null;
   draft = "";
+  /** Unsent comments of the issues Back can return to. */
+  drafts = /* @__PURE__ */ new Map();
   writing = null;
   writeFailure = null;
   init(cx) {
@@ -10281,6 +10282,10 @@ var Issue = class {
   }
   /** The tab now shows, and is named after, that issue. */
   show(cx, ref) {
+    if (this.ref) this.drafts.set(issueKey(this.ref), this.draft);
+    this.draft = this.drafts.get(issueKey(ref)) ?? "";
+    this.drafts.delete(issueKey(ref));
+    this.box?.set_value(this.draft);
     this.ref = ref;
     this.writeFailure = null;
     navigatedDetail(this.reader, ref);
@@ -10332,13 +10337,21 @@ var Issue = class {
     const body = this.draft;
     this.write(cx, "comment", body.trim() !== "", async (repo, number, on) => {
       const comment = await addComment(repo, number, body, on);
-      announce({ repo, number, comment });
-      this.draft = "";
-      this.box?.set_value("");
+      this.publish({ repo, number, comment });
+      const sentKey = issueKey({ repo, number });
+      if (this.ref && issueKey(this.ref) === sentKey && this.draft === body) {
+        this.draft = "";
+        this.box?.set_value("");
+      } else if (this.drafts.get(sentKey) === body) this.drafts.delete(sentKey);
     });
   }
   setState(cx, state) {
-    this.write(cx, "state", true, async (repo, number, on) => announce({ repo, number, state: await setIssueState(repo, number, state, on) }));
+    this.write(cx, "state", true, async (repo, number, on) => this.publish({ repo, number, state: await setIssueState(repo, number, state, on) }));
+  }
+  /** Shows this view's own write at once, then tells the other views. */
+  publish(notice) {
+    this.apply(notice);
+    announce(notice);
   }
   /** One write at a time, through the gh that read the issue; a failure is said with gh's words. */
   write(cx, kind, ready, act) {
@@ -10360,19 +10373,16 @@ var Issue = class {
       }
     });
   }
-  /** Writes announced by any view (this one too): a new comment joins the timeline, a new state shows. */
-  receive() {
-    for (const notice of this.notices.take()) {
-      const issue = this.entry?.issue;
-      if (!issue || !this.ref || issueKey(notice) !== issueKey(this.ref)) continue;
-      const comment = notice.comment;
-      if (comment && !issue.comments.some((c) => c.id === comment.id)) issue.comments = [...issue.comments, comment];
-      if (notice.state) issue.state = notice.state.state;
-    }
+  /** A write to the shown issue: a new comment joins the timeline (once), a new state shows. */
+  apply(notice) {
+    const issue = this.entry?.issue, comment = notice.comment;
+    if (!issue || !this.ref || issueKey(notice) !== issueKey(this.ref)) return;
+    if (comment && !issue.comments.some((c) => c.id === comment.id)) issue.comments = [...issue.comments, comment];
+    if (notice.state) issue.state = notice.state.state;
   }
   render(_cx) {
     if (this.reader) readyDetail(this.reader);
-    this.receive();
+    this.notices.take().forEach((notice) => this.apply(notice));
     const t = colors(), ref = this.ref, entry = this.entry, issue = entry?.issue;
     const url = issue?.url ?? (ref ? `https://github.com/${ref.repo}/issues/${ref.number}` : "");
     return v_flex2().id("issue-reader").size_full().min_h(0).overflow_hidden().bg(t.background).text_color(t.foreground).text_size(14).on_size_change((size, cx) => {
