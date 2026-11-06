@@ -33,9 +33,9 @@ report.[0-9]_.[0-9]_.[0-9]_.[0-9]_.json
 # Finder (MacOS) folder config
 .DS_Store
 
-# written by Herdr into each mod folder when it loads (generated, per version)
-mods/*/gpui-kit.d.ts
-mods/*/jsconfig.json
+# written by Herdr into each mod folder (and subfolders, e.g. views/) when it loads or checks (generated, per version)
+mods/**/gpui-kit.d.ts
+mods/**/jsconfig.json
 
 # local reference copies of Herdr / example mods (not ours to ship)
 docs/reference/
