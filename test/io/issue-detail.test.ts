@@ -16,7 +16,10 @@ test("read an issue and its complete discussion using the pane machine's gh", as
   expect(issue).toMatchObject({
     number: 9789, title: "`gh auth login --with-token` hangs", state: "open",
     author: "jtmcg", assignees: [], milestone: null,
-    labels: ["bug", "priority-3", "help wanted", "gh-auth"],
+    labels: [
+      { name: "bug", color: "#d73a4a" }, { name: "priority-3", color: "#eded04" },
+      { name: "help wanted", color: "#98f9f0" }, { name: "gh-auth", color: "#9a3d69" },
+    ],
     url: "https://github.com/cli/cli/issues/9789",
   });
   expect(issue.body).toContain("gh auth login --with-token");
@@ -58,7 +61,7 @@ test("a closed issue retains its milestone, assignee and labels", async () => {
   });
   expect(await readIssue("microsoft/vscode", 346509, null)).toMatchObject({
     title: "Resending the same message to another model doesn't work", state: "closed",
-    author: "ulugbekna", milestone: "1.146.0", assignees: ["justschen"], labels: ["unreleased"], comments: [],
+    author: "ulugbekna", milestone: "1.146.0", assignees: ["justschen"], labels: [{ name: "unreleased", color: "#d1b697" }], comments: [],
   });
 });
 

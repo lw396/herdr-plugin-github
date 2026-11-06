@@ -6,6 +6,15 @@ export const issueKey = (ref: IssueRef): string => `${ref.repo.toLowerCase()}#${
 export const issueTabName = (ref: IssueRef): string => `#${ref.number} · ${ref.repo.split("/").at(-1)}`;
 
 export interface Reaction { emoji: string; count: number }
+export interface Label { name: string; color: `#${string}` | null }
+
+/** GitHub supplies six-digit hex colors, without '#'; older replies can contain names only. */
+export function parseLabel(label: string | { name: string; color?: string }): Label {
+  return typeof label === "string" ? { name: label, color: null } : {
+    name: label.name,
+    color: label.color && /^[a-f\d]{6}$/i.test(label.color) ? `#${label.color.toLowerCase()}` : null,
+  };
+}
 
 export interface Comment {
   id: number;
@@ -22,7 +31,7 @@ export interface IssueDetail {
   author: string;
   createdAt: string;
   url: string;
-  labels: string[];
+  labels: Label[];
   assignees: string[];
   milestone: string | null;
   body: string;
@@ -44,7 +53,7 @@ interface RestIssue {
   user: { login: string } | null;
   created_at: string;
   html_url: string;
-  labels: (string | { name: string })[];
+  labels: (string | { name: string; color?: string })[];
   assignees: { login: string }[];
   milestone: { title: string } | null;
   body: string | null;
@@ -60,7 +69,7 @@ export function parseIssueDetail(issue: unknown, comments: unknown): IssueDetail
   const i = issue as RestIssue;
   return {
     number: i.number, title: i.title, state: i.state, author: i.user?.login ?? "deleted user",
-    createdAt: i.created_at, url: i.html_url, labels: i.labels.map(l => typeof l === "string" ? l : l.name),
+    createdAt: i.created_at, url: i.html_url, labels: i.labels.map(parseLabel),
     assignees: i.assignees.map(a => a.login), milestone: i.milestone?.title ?? null, body: i.body ?? "",
     comments: (comments as RestComment[]).map(c => ({
       id: c.id, author: c.user?.login ?? "deleted user", createdAt: c.created_at, body: c.body ?? "",

@@ -3,6 +3,8 @@ import { groupQuery, groupVariables, parseIssueGroup } from "../core/issues.js";
 import { api, graphql } from "./gh.js";
 import { PROJECTS_QUERY, projectPage, projectsFailure } from "../core/projects.js";
 import { parseIssueDetail } from "../core/issue-detail.js";
+import { parseActivity } from "../core/activity.js";
+import { explain } from "../core/gh-args.js";
 /**
  * One page of a group in the repository, asked with the gh on `on` (whose account is `login`,
  * for Assigned): the first page when `after` is null, else the page after that cursor.
@@ -18,6 +20,15 @@ export async function readIssue(repo, number, on) {
         api(`${path}/comments?per_page=100`, { on, paginate: true }),
     ]);
     return parseIssueDetail(issue, comments);
+}
+/** Activity is optional: a failed timeline read never hides successfully loaded comments. */
+export async function readIssueActivity(repo, number, on) {
+    try {
+        return { ok: true, activities: parseActivity(await api(`repos/${repo}/issues/${number}/timeline?per_page=100`, { on, paginate: true })) };
+    }
+    catch (e) {
+        return { ok: false, message: `Activity unavailable on ${on ?? "this computer"}. ${explain(e instanceof Error ? e.message : String(e))}` };
+    }
 }
 /** Optional metadata: lack of Projects access must never hide the issue body or comments. */
 export async function readIssueProjects(repo, number, on) {

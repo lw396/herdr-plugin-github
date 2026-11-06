@@ -4,6 +4,8 @@ import type { RemoteRepo } from "../core/remote.ts";
 import { api, graphql } from "./gh.ts";
 import { PROJECTS_QUERY, projectPage, projectsFailure, type Project, type Projects } from "../core/projects.ts";
 import { parseIssueDetail, type IssueDetail } from "../core/issue-detail.ts";
+import { parseActivity, type Activities } from "../core/activity.ts";
+import { explain } from "../core/gh-args.ts";
 
 /**
  * One page of a group in the repository, asked with the gh on `on` (whose account is `login`,
@@ -21,6 +23,15 @@ export async function readIssue(repo: string, number: number, on: string | null)
     api(`${path}/comments?per_page=100`, { on, paginate: true }),
   ]);
   return parseIssueDetail(issue, comments);
+}
+
+/** Activity is optional: a failed timeline read never hides successfully loaded comments. */
+export async function readIssueActivity(repo: string, number: number, on: string | null): Promise<Activities> {
+  try {
+    return { ok: true, activities: parseActivity(await api(`repos/${repo}/issues/${number}/timeline?per_page=100`, { on, paginate: true })) };
+  } catch (e) {
+    return { ok: false, message: `Activity unavailable on ${on ?? "this computer"}. ${explain(e instanceof Error ? e.message : String(e))}` };
+  }
 }
 
 /** Optional metadata: lack of Projects access must never hide the issue body or comments. */

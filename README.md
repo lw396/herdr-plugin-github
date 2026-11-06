@@ -16,7 +16,7 @@ src/github/         the source (TypeScript); Herdr wants main.js and mod.json at
                     location: the focused folder, kept while focus is on a pane without one;
                     cache: kept values, fresh for a while, least recently used dropped;
                     issues: issue groups' GraphQL query and pages, rows and notices; issue-detail: metadata and discussion;
-                    projects: an issue's Projects query, pages and access notices;
+                    projects: an issue's Projects query, pages and access notices; activity: label/assignee events and timeline ordering;
                     markdown: image links without network requests; time: "2h"-style times)
   io/               Herdr and programs: gh.ts (the only way to GitHub; account(): the folder's machine's gh),
                     git.ts (git on the folder's machine), context.ts (feeds core/location Herdr's live data, remembers its last answer),
@@ -49,9 +49,12 @@ including reaction counts; images become “🖼 图片” browser links. The co
 copy its URL; refresh stays at the top right. Its gh runs on the issue tab's machine, independent of focus.
 
 The body and each comment have their own bordered card, author/time header and reaction badges.
+Label/assignee changes appear between comments in chronological order; same-time label changes
+are grouped into one row. Labels use GitHub's original colors for their border and tinted background.
 Assignees, Labels, Project and Milestone appear in a right-hand column in wide readers and above
-the discussion in narrow ones. Projects are read separately through gh: missing `read:project`
-shows an access notice, not an empty list, and never blocks the body/comments. To grant read-only
+the discussion in narrow ones. Projects are read separately through gh and never block the
+body/comments. Unavailable Projects show a quiet `None yet` placeholder, with the actual access
+or network error in its tooltip; the data layer still distinguishes failure from an empty list. To grant read-only
 Projects access, run `gh auth refresh -h github.com -s read:project` on the reader's machine.
 The `github` layout's pane header adds the GitHub logo while keeping terminal headers/controls.
 
