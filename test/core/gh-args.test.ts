@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { apiArgs, graphqlArgs, parseJson, errorMessage } from "../src/github/gh-args.ts";
+import { apiArgs, graphqlArgs, parseJson, errorMessage } from "../../src/github/core/gh-args.ts";
 
 describe("apiArgs", () => {
   test("GET is the default and adds no -X", () => {

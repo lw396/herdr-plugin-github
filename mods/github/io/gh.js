@@ -1,6 +1,6 @@
 // The only file that reaches GitHub: `gh`, on this computer or the machine account() picks (`on`).
 import { exec } from "herdr";
-import { apiArgs, graphqlArgs, parseJson, errorMessage } from "./gh-args.js";
+import { apiArgs, graphqlArgs, parseJson, errorMessage } from "../core/gh-args.js";
 export class GhError extends Error {
     code;
     stderr;

@@ -1,6 +1,6 @@
 // Local git facts for a folder, on its machine.
 import { exec } from "herdr";
-import { pickRemote, type RemoteRepo } from "./remote.ts";
+import { pickRemote, type RemoteRepo } from "../core/remote.ts";
 import type { Where } from "./gh.ts";
 
 /** The folder's GitHub remote (gh's choice of remote), or null outside a repo or without one. */

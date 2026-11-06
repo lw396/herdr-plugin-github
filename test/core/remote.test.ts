@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { parseRemoteUrl, pickRemote } from "../src/github/remote.ts";
+import { parseRemoteUrl, pickRemote } from "../../src/github/core/remote.ts";
 
 describe("parseRemoteUrl", () => {
   const want = { host: "github.com", owner: "lw396", repo: "wechat-mcp" };

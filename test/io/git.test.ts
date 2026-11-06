@@ -1,7 +1,7 @@
 // git.ts through a fake `exec`. Replies are real git output.
 import { afterEach, expect, test } from "bun:test";
-import { machine, reset } from "./fake-herdr.ts";
-import { githubRemote } from "../src/github/git.ts";
+import { machine, reset } from "../fake-herdr.ts";
+import { githubRemote } from "../../src/github/io/git.ts";
 
 afterEach(reset);
 

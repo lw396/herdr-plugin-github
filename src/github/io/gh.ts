@@ -1,6 +1,6 @@
 // The only file that reaches GitHub: `gh`, on this computer or the machine account() picks (`on`).
 import { exec } from "herdr";
-import { apiArgs, graphqlArgs, parseJson, errorMessage, type ApiOptions, type GraphqlVariables } from "./gh-args.ts";
+import { apiArgs, graphqlArgs, parseJson, errorMessage, type ApiOptions, type GraphqlVariables } from "../core/gh-args.ts";
 
 export interface Where {
   cwd?: string | null;

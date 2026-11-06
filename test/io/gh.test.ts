@@ -1,7 +1,7 @@
 // gh.ts through a fake `exec`. Replies are real gh 2.96 output (stdout/stderr/exit code).
 import { afterEach, describe, expect, test } from "bun:test";
-import { machine, reset } from "./fake-herdr.ts";
-import * as gh from "../src/github/gh.ts";
+import { machine, reset } from "../fake-herdr.ts";
+import * as gh from "../../src/github/io/gh.ts";
 
 afterEach(reset);
 

@@ -7,15 +7,15 @@ Remote machines need only git: it reads which repository a folder is.
 ## Layout
 
 ```
-src/github/         the source (TypeScript)
-  main.ts           entry: a View; roles picked by props().role
-  gh.ts             the only file that reaches GitHub (exec "gh api ..."); account() picks the gh
-  git.ts            git on the folder's machine (which repository it is)
-  gh-args.ts,       pure helpers (no "herdr" import)
-  remote.ts
-  context.ts        the focused folder and machine
-  ui.ts             shared UI helpers
-  mod.json, *.svg    copied as they are
+src/github/         the source (TypeScript); Herdr wants main.js and mod.json at the top
+  main.ts           entry: a View that hands off to a role (props().role)
+  mod.json          the manifest, copied as it is
+  core/             pure logic, imports nothing else (gh-args: gh's arguments and output;
+                    remote: which repository a git remote is)
+  io/               Herdr and programs: gh.ts (the only way to GitHub; account() picks the gh),
+                    git.ts (git on the folder's machine), context.ts (the focused folder)
+  views/            one file per role (panel.ts) and ui.ts (shared UI helpers)
+  assets/           copied as they are (github.svg -> mods/github/assets/github.svg)
 mods/github/        build output, committed: the mod as Herdr loads it
 mods/tabs-github/   Herdr's tab bar with a GitHub panel button (a marked copy of the shipped `tabs`)
 layouts/github.json Herdr's `main` layout with `tabs-github` and a `github` child in the side panel
@@ -23,7 +23,8 @@ keys.json           snippet to merge into ~/.config/herdr-app/keys.json
 types/              herdr.d.ts + gpui-kit.d.ts from Herdr (see types/VERSION)
 docs/herdr/         Herdr's own guide (AGENTS.md) and docs, for reference
 docs/reference/     (git-ignored) shipped Herdr mods and herdr-layout-examples mods, read-only examples
-test/               bun test; `herdr` is test/fake-herdr.ts (its exec answers like machines)
+test/               bun test, core/ and io/ like src/; `herdr` is test/fake-herdr.ts (its exec
+                    answers like machines); layers.test.ts checks what each folder imports
 ```
 
 ## Why a build step

@@ -16,6 +16,10 @@ A Herdr mod, written in TypeScript in `src/github/`, built to `mods/github/`. Re
 - `src/github/` is the whole source: `*.ts`, `mod.json`, assets (`*.svg`). `mods/github/` is
   build output only (`scripts/build.sh`: tsc for `*.ts`, one file per source with comments kept;
   everything else copied). Never edit it, but commit it: people install that folder as it is.
+- Folders, each importing only what is listed (`test/layers.test.ts` checks core/ and io/):
+  `core/` pure logic, imports only `core/`; `io/` the outside (`herdr`, programs) and `core/`;
+  `views/` the UI, one file per role; `main.ts` picks the role. Assets in `assets/`, referenced
+  as `mods/github/assets/<file>`.
 - Herdr cannot load `.ts` and resolves only `gpui-kit`, `gpui-base`, `herdr` and the mod's own
   relative files: no npm packages at run time. Import siblings as `./x.ts` (rewritten to `./x.js`).
 - `mods/tabs-github/` and `layouts/github.json` are copies of Herdr 0.1.13's shipped `tabs` mod
@@ -27,13 +31,12 @@ A Herdr mod, written in TypeScript in `src/github/`, built to `mods/github/`. Re
 
 ## Rules
 
-- Everything that reaches GitHub goes through `src/github/gh.ts`. Pure logic goes in files
-  without a `herdr` import (like `gh-args.ts`) so `bun test` can load them from `src/`.
+- Everything that reaches GitHub goes through `io/gh.ts`. Logic that can be pure goes in `core/`.
 - Never keep a `cx`; use the one each callback gets. No `setTimeout`: `cx.timer`, `cx.spawn`.
-- Remote machines need only git. `git` runs where the folder is (`{ cwd, on }` from `context.ts`);
+- Remote machines need only git. `git` runs where the folder is (`{ cwd, on }` from `io/context.ts`);
   `gh` runs where `gh.account()` says (this computer first), so give it `owner/repo` from
   `githubRemote()`: never a remote `cwd`, never gh's `{owner}/{repo}` placeholders.
-- Use `theme()` colors (`colors()` in `ui.ts`). In window overlays, stop mouse-down on controls.
+- Use `theme()` colors (`colors()` in `views/ui.ts`). In window overlays, stop mouse-down on controls.
 - `herdr-app check` runs `init()` for real: keep `init()` free of side effects beyond reads.
 - Never open a Herdr window (`herdr-app` with no subcommand) with a changed `HOME` or
   `HERDR_APP_HOME`: it reaches the real core and can overwrite every machine's spaces.
@@ -45,13 +48,13 @@ Prefer TDD (the `tdd` skill): red, then green, one vertical slice at a time. Agr
 before writing tests. Expected values come from real gh/git/GitHub output or the docs, not
 recomputed by the code. The seams:
 
-- Pure modules (`gh-args.ts`, `remote.ts`, ...): command arguments, parsing, turning GitHub data
-  into what the UI shows. Put new logic here first.
-- Adapters (`gh.ts`, `git.ts`): under Bun, `herdr` is `test/fake-herdr.ts` (`test/preload.ts`).
+- `core/`: command arguments, parsing, turning GitHub data into what the UI shows. Put new
+  logic here first. Tests in `test/core/`.
+- `io/` (`gh.ts`, `git.ts`), tests in `test/io/`: under Bun, `herdr` is `test/fake-herdr.ts` (`test/preload.ts`).
   Only its `exec` is faked, as machines answering commands: `machine(on, { "<cwd>$ <cmd>": reply })`,
   with replies copied from running the real command (stdout, stderr, exit code). An unknown
   command rejects like a missing program does in Herdr.
-- Views (`main.ts`): kept thin; checked by `herdr-app check` and by trying them in the app.
+- `views/` and `main.ts`: kept thin; checked by `herdr-app check` and by trying them in the app.
 
-When a bug shows up in the app, first reproduce it as a failing test at a pure seam
+When a bug shows up in the app, first reproduce it as a failing test in `core/` or `io/`
 (e.g. the real output that broke parsing), then fix.
