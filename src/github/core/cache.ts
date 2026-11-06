@@ -1,4 +1,4 @@
-// A small cache for what the sidebar shows (gh accounts, remotes, repositories): one entry per
+// A small cache for what the sidebar shows (gh accounts, remotes, issue groups): one entry per
 // key, fresh for a while; a stale entry still shows while it is fetched again.
 
 export class Cache<T> {

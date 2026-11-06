@@ -51,13 +51,18 @@ interface IssuesData {
   };
 }
 
+/** A group query that failed: not there / not visible (404), or another reason. */
+export interface Failure {
+  notFound: boolean;
+  message: string;
+}
+
 /** What the sidebar knows when it draws the list; undefined: not known yet. */
 export interface ListState {
   account: Account | undefined;
   remote: RemoteRepo | null | undefined;
   group?: IssueGroup;
-  /** The group query failed: not there / not visible (404), or another reason. */
-  failure?: { notFound: boolean; message: string };
+  failure?: Failure;
 }
 
 /** What the list's place says instead of rows, or null when there is a list (or nothing known yet). */
