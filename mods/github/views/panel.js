@@ -26,11 +26,19 @@ export class Panel {
         this.error = null;
         cx.spawn(async (cx) => {
             try {
-                // git and gh both where the folder is (ADR 0003).
-                const [account, remote] = await Promise.all([gh.account(where.on), githubRemote(where)]);
+                // git and gh both where the folder is (ADR 0003). account() never rejects: keep its
+                // status even when git fails there, so the gh line doesn't stay at "checking…".
+                this.remote = null;
+                const [account, remote] = await Promise.all([
+                    gh.account(where.on).then((a) => {
+                        if (locationKey() === context)
+                            this.account = a;
+                        return a;
+                    }),
+                    githubRemote(where),
+                ]);
                 if (locationKey() !== context)
                     return;
-                this.account = account;
                 this.remote = remote;
                 this.repo = null;
                 if (account.status.ok && remote) {

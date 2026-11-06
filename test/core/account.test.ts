@@ -17,7 +17,7 @@ describe("describeAccount", () => {
   const SIGNED_OUT = { ok: false, reason: "auth", message: "Alternatively, populate the GH_TOKEN environment variable with a GitHub API authentication token." } as const;
 
   test("no gh on this computer: install it here", () => {
-    expect(describeAccount({ on: null, status: MISSING }))
+    expect(describeAccount({ on: null, status: { ...MISSING, message: "cannot run gh: No such file or directory (os error 2)" } }))
       .toEqual({ ok: false, text: "gh is not installed on this computer: install it, then run gh auth login" });
   });
 
