@@ -8,7 +8,7 @@ import * as gh from "./gh.js";
 import { githubRemote } from "./git.js";
 class Panel {
     context = null;
-    auth = null;
+    account = null;
     remote = null;
     repo = null;
     error = null;
@@ -25,17 +25,15 @@ class Panel {
         this.error = null;
         cx.spawn(async (cx) => {
             try {
-                const auth = await gh.status({ on: where.on });
+                // git where the folder is; GitHub through the gh account() picks (this computer's first).
+                const [account, remote] = await Promise.all([gh.account(where.on), githubRemote(where)]);
                 if (locationKey() !== context)
                     return;
-                this.auth = auth;
+                this.account = account;
+                this.remote = remote;
                 this.repo = null;
-                this.remote = await githubRemote(where);
-                if (locationKey() !== context)
-                    return;
-                if (auth.ok && this.remote) {
-                    const { owner, repo } = this.remote;
-                    this.repo = await gh.apiText(`repos/${owner}/${repo}`, ".full_name", { on: where.on });
+                if (account.status.ok && remote) {
+                    this.repo = await gh.apiText(`repos/${remote.owner}/${remote.repo}`, ".full_name", { on: account.on });
                 }
             }
             catch (e) {
@@ -43,7 +41,7 @@ class Panel {
                     return;
                 const r = this.remote;
                 this.error = e instanceof gh.GhError && e.notFound && r
-                    ? `${r.owner}/${r.repo} (remote "${r.remote}") doesn't exist on GitHub, or ${this.auth?.ok ? this.auth.user : "this account"} can't see it. Check git remote -v.`
+                    ? `${r.owner}/${r.repo} (remote "${r.remote}") doesn't exist on GitHub, or ${this.account?.status.ok ? this.account.status.user : "this account"} can't see it. Check git remote -v.`
                     : e instanceof Error ? e.message : String(e);
             }
             finally {
@@ -53,11 +51,11 @@ class Panel {
         });
     }
     authText() {
-        const auth = this.auth;
+        const auth = this.account?.status;
         if (!auth)
             return "checking…";
         if (auth.ok)
-            return `signed in as ${auth.user}`;
+            return `signed in as ${auth.user}` + (this.account?.on ? ` (gh on ${this.account.on})` : "");
         if (auth.reason === "missing")
             return "not installed";
         if (auth.reason === "auth")
@@ -83,7 +81,7 @@ class Panel {
             .child(v_flex().p(14).gap(6)
             .child(line("folder", where.cwd ?? "none"))
             .child(line("machine", where.on ?? "this computer"))
-            .child(line("gh", this.authText(), this.auth && !this.auth.ok ? t.blocked : t.foreground))
+            .child(line("gh", this.authText(), this.account && !this.account.status.ok ? t.blocked : t.foreground))
             .child(line("remote", this.remote ? `${this.remote.owner}/${this.remote.repo} (${this.remote.remote})` : this.loading ? "…" : "no GitHub remote"))
             .child(line("repo", this.repo ?? (this.loading ? "…" : "—")))
             .when(Boolean(this.error), (el) => el.child(div().pt(6).text_size(12).text_color(t.blocked).child(this.error ?? ""))));

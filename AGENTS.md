@@ -26,7 +26,9 @@ A Herdr mod, written in TypeScript in `src/github/`, built to `mods/github/`. Re
 - Everything that reaches GitHub goes through `src/github/gh.ts`. Pure logic goes in files
   without a `herdr` import (like `gh-args.ts`) so `bun test` can load them from `src/`.
 - Never keep a `cx`; use the one each callback gets. No `setTimeout`: `cx.timer`, `cx.spawn`.
-- Pass `{ cwd, on }` from `context.ts` to every `gh` call so remote machines work.
+- Remote machines need only git. `git` runs where the folder is (`{ cwd, on }` from `context.ts`);
+  `gh` runs where `gh.account()` says (this computer first), so give it `owner/repo` from
+  `githubRemote()`: never a remote `cwd`, never gh's `{owner}/{repo}` placeholders.
 - Use `theme()` colors (`colors()` in `ui.ts`). In window overlays, stop mouse-down on controls.
 - `herdr-app check` runs `init()` for real: keep `init()` free of side effects beyond reads.
 - Never open a Herdr window (`herdr-app` with no subcommand) with a changed `HOME` or

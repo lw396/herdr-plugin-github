@@ -1,7 +1,8 @@
 # herdr-plugin-github
 
 GitHub for the [Herdr](https://herdr.dev) desktop app: a mod that talks to GitHub
-through the `gh` CLI, on the machine the repository lives on.
+through the `gh` CLI on this computer (or, when it has none, on the repository's machine).
+Remote machines need only git: it reads which repository a folder is.
 
 ## Layout
 
