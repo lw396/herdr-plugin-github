@@ -21,6 +21,7 @@ mods/tabs-github/   Herdr's tab bar with a GitHub panel button (a marked copy of
 layouts/github.json Herdr's `main` layout with `tabs-github` and a `github` child in the side panel
 keys.json           snippet to merge into ~/.config/herdr-app/keys.json
 types/              herdr.d.ts + gpui-kit.d.ts from Herdr (see types/VERSION)
+docs/product.md     what the mod is, how it looks and what comes in which order
 docs/herdr/         Herdr's own guide (AGENTS.md) and docs, for reference
 docs/reference/     (git-ignored) shipped Herdr mods and herdr-layout-examples mods, read-only examples
 test/               bun test, core/ and io/ like src/; `herdr` is test/fake-herdr.ts (its exec
