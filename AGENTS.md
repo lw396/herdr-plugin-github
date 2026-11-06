@@ -18,6 +18,10 @@ A Herdr mod, written in TypeScript in `src/github/`, built to `mods/github/`. Re
   `mods/github/mod.json` and assets (`*.svg`) are hand-written and live only in `mods/github/`.
 - Herdr cannot load `.ts` and resolves only `gpui-kit`, `gpui-base`, `herdr` and the mod's own
   relative files: no npm packages at run time. Import siblings as `./x.ts` (rewritten to `./x.js`).
+- `mods/tabs-github/` and `layouts/github.json` are copies of Herdr 0.1.13's shipped `tabs` mod
+  and `main` layout (plain JS/JSON, not built). Keep them as close to the originals as possible:
+  changes in `tabs-github` are marked `herdr-plugin-github`; the layout only renames the tab bar
+  mod and adds the `github` child to `panel-body`. On a Herdr upgrade, recopy and reapply.
 - Erasable TypeScript only (`erasableSyntaxOnly`): no `enum`, `namespace` or constructor parameter
   properties, so the output is the source minus its types.
 

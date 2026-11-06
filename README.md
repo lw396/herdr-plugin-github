@@ -9,16 +9,20 @@ Remote machines need only git: it reads which repository a folder is.
 ```
 src/github/         the source (TypeScript)
   main.ts           entry: a View; roles picked by props().role
-  gh.ts             the only file that reaches GitHub (exec "gh api ...")
-  gh-args.ts        pure helpers (no "herdr" import): unit-tested with Bun
+  gh.ts             the only file that reaches GitHub (exec "gh api ..."); account() picks the gh
+  git.ts            git on the folder's machine (which repository it is)
+  gh-args.ts,       pure helpers (no "herdr" import)
+  remote.ts
   context.ts        the focused folder and machine
   ui.ts             shared UI helpers
-mods/github/        the mod as Herdr loads it: built *.js (committed) + mod.json, assets
+mods/github/        the mod as Herdr loads it: built *.js (committed) + mod.json, github.svg
+mods/tabs-github/   Herdr's tab bar with a GitHub panel button (a marked copy of the shipped `tabs`)
+layouts/github.json Herdr's `main` layout with `tabs-github` and a `github` child in the side panel
 keys.json           snippet to merge into ~/.config/herdr-app/keys.json
 types/              herdr.d.ts + gpui-kit.d.ts from Herdr (see types/VERSION)
 docs/herdr/         Herdr's own guide (AGENTS.md) and docs, for reference
 docs/reference/     (git-ignored) shipped Herdr mods and herdr-layout-examples mods, read-only examples
-test/               bun test, pure modules only
+test/               bun test; `herdr` is test/fake-herdr.ts (its exec answers like machines)
 ```
 
 ## Why a build step
@@ -39,7 +43,7 @@ bun run dev         # tsc --watch: rebuilds mods/github/ on save (Herdr hot-relo
 bun run build       # build once
 bun run typecheck   # mod sources against types/, tests against Bun
 bun test
-bun run check       # herdr-app check mods/github (needs herdr-app on PATH)
+bun run check       # herdr-app check mods/github mods/tabs-github (needs herdr-app on PATH)
 bun run verify      # build + typecheck + test + check
 bun run check:built # fails if committed mods/github/*.js is not what src/ builds
 bun run types       # refresh types/ and docs/herdr/AGENTS.md from an installed Herdr
@@ -47,7 +51,15 @@ bun run types       # refresh types/ and docs/herdr/AGENTS.md from an installed 
 
 ## Try it in Herdr
 
-Copy (or sync) `mods/github/` to `~/.config/herdr-app/mods/github/`, then:
+Copy (or sync) `mods/github/`, `mods/tabs-github/` and `layouts/github.json` into
+`~/.config/herdr-app/`, then switch to the layout (or `ctrl-shift-l` cycles layouts):
+
+```sh
+herdr-app do layout.switch '{"name":"github"}'   # Files · Changes · GitHub in the tab bar
+```
+
+Herdr's shipped layouts and its `tabs` mod are read-only and draw only Files and Changes,
+so the GitHub button needs this layout. Without it, the panel still opens elsewhere:
 
 ```sh
 herdr-app do mod.open '{"name":"github"}'                      # as a window

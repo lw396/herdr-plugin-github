@@ -7,7 +7,7 @@
     "dev": "tsc -p tsconfig.json --watch --preserveWatchOutput",
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.test.json",
     "test": "bun test",
-    "check": "herdr-app check mods/github; s=$?; rm -f mods/github/jsconfig.json mods/github/gpui-kit.d.ts; exit $s",
+    "check": "s=0; for m in github tabs-github; do herdr-app check mods/$m || s=1; rm -f mods/$m/jsconfig.json mods/$m/gpui-kit.d.ts; done; exit $s",
     "check:built": "bun run build && git diff --exit-code --stat -- mods/github",
     "verify": "bun run build && bun run typecheck && bun test && bun run check",
     "types": "sh scripts/update-types.sh"
