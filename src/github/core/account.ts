@@ -1,4 +1,5 @@
 // The gh that talks to GitHub: the one on the folder's machine (ADR 0003), and what the sidebar says about it.
+import { explain } from "./gh-args.ts";
 
 /** Whether gh is installed and signed in on a machine. */
 export type Status =
@@ -20,5 +21,5 @@ export function describeAccount(account: Account): { ok: boolean; text: string }
     return { ok: false, text: `gh is not installed on ${machine}: install it${on ? " there" : ""}, then run gh auth login${there}` };
   }
   if (status.reason === "auth") return { ok: false, text: `not signed in on ${machine}: run gh auth login${there}` };
-  return { ok: false, text: `gh on ${machine}: ${status.message}` };
+  return { ok: false, text: `gh on ${machine}: ${explain(status.message)}` };
 }

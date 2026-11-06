@@ -1,4 +1,5 @@
 // The gh that talks to GitHub: the one on the folder's machine (ADR 0003), and what the sidebar says about it.
+import { explain } from "./gh-args.js";
 /** The sidebar's gh line: who is signed in where, or what to do on which machine. */
 export function describeAccount(account) {
     const { on, status } = account;
@@ -10,5 +11,5 @@ export function describeAccount(account) {
     }
     if (status.reason === "auth")
         return { ok: false, text: `not signed in on ${machine}: run gh auth login${there}` };
-    return { ok: false, text: `gh on ${machine}: ${status.message}` };
+    return { ok: false, text: `gh on ${machine}: ${explain(status.message)}` };
 }

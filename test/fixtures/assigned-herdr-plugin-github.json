@@ -1,0 +1,23 @@
+{
+  "data": {
+    "repository": {
+      "hasIssuesEnabled": true,
+      "issues": {
+        "totalCount": 1,
+        "pageInfo": {
+          "hasNextPage": false,
+          "endCursor": "Y3Vyc29yOnYyOpK0MjAyNi0xMS0wNlQxMzoyODo1M1rPAAAAAXProvM="
+        },
+        "nodes": [
+          {
+            "number": 12,
+            "title": "Issues 标签页：Open、Closed、折叠和加载更多",
+            "updatedAt": "2026-11-06T13:28:53Z",
+            "url": "https://github.com/lw396/herdr-plugin-github/issues/12",
+            "assignees": { "nodes": [{ "login": "lw396" }] }
+          }
+        ]
+      }
+    }
+  }
+}

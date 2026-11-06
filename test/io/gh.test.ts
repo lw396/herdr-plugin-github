@@ -143,3 +143,48 @@ describe("graphql", () => {
     expect(await gh.graphql("{ viewer { nope } }").catch((e) => e)).toMatchObject({ message: "gh: Field 'nope' doesn't exist on type 'User'" });
   });
 });
+
+describe("a dropped connection (real gh 2.96 on center: exit 1, `Get \"…\": EOF`)", () => {
+  const EOF_USER = { code: 1, stderr: 'Get "https://api.github.com/user": EOF\n' };
+  const EOF_GRAPHQL = { code: 1, stderr: 'Post "https://api.github.com/graphql": EOF\n' };
+  /** A reply that is `drops` dropped connections, then `then`; counts the asks. */
+  function flaky(drops: number, drop: object, then: object) {
+    const asked = { count: 0 };
+    return { asked, get reply() { asked.count++; return asked.count <= drops ? drop : then; } };
+  }
+
+  test("reading asks again: the login check gets through on the third try", async () => {
+    const f = flaky(2, EOF_USER, { stdout: "lw396\n" });
+    machine("center", { get "~$ gh api user --jq .login"() { return f.reply; } });
+    expect(await gh.status({ on: "center" })).toEqual({ ok: true, user: "lw396" });
+    expect(f.asked.count).toBe(3);
+  });
+
+  test("three drops in a row: an error, not missing or signed out", async () => {
+    const f = flaky(9, EOF_USER, { stdout: "lw396\n" });
+    machine("center", { get "~$ gh api user --jq .login"() { return f.reply; } });
+    expect(await gh.status({ on: "center" })).toMatchObject({ ok: false, reason: "error", message: 'Get "https://api.github.com/user": EOF' });
+    expect(f.asked.count).toBe(3);
+  });
+
+  test("a GraphQL query asks again", async () => {
+    const f = flaky(1, EOF_GRAPHQL, { stdout: '{"data":{"viewer":{"login":"lw396"}}}' });
+    machine(null, { get "~$ gh api graphql -f query={ viewer { login } }"() { return f.reply; } });
+    expect(await gh.graphql("{ viewer { login } }")).toEqual({ viewer: { login: "lw396" } });
+    expect(f.asked.count).toBe(2);
+  });
+
+  test("a write never asks twice: GitHub may have done it before the connection dropped", async () => {
+    const f = flaky(1, { code: 1, stderr: 'Post "https://api.github.com/repos/o/r/actions/runs/42/rerun": EOF\n' }, { stdout: "{}" });
+    machine(null, { get "~$ gh api repos/o/r/actions/runs/42/rerun -X POST"() { return f.reply; } });
+    expect(await gh.api("repos/o/r/actions/runs/42/rerun", { method: "POST" }).catch((e: unknown) => e)).toBeInstanceOf(gh.GhError);
+    expect(f.asked.count).toBe(1);
+  });
+
+  test("nor does a GraphQL mutation", async () => {
+    const f = flaky(1, EOF_GRAPHQL, { stdout: "{}" });
+    machine(null, { get "~$ gh api graphql -f query=mutation { closeIssue }"() { return f.reply; } });
+    expect(await gh.graphql("mutation { closeIssue }").catch((e: unknown) => e)).toBeInstanceOf(gh.GhError);
+    expect(f.asked.count).toBe(1);
+  });
+});
