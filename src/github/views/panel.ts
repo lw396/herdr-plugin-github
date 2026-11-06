@@ -9,8 +9,7 @@ import type { RemoteRepo } from "../core/remote.ts";
 import { describeAccount } from "../core/account.ts";
 import { issuesNotice, noRepository, type Failure, type GroupKind, type Issue, type IssueGroup } from "../core/issues.ts";
 import { relativeTime } from "../core/time.ts";
-import { explain } from "../core/gh-args.ts";
-import { colors, stop, button, type Role } from "./ui.ts";
+import { colors, stop, button, spinner, type Role } from "./ui.ts";
 import { DetailTabs } from "../io/detail-tabs.ts";
 
 /** The Issues tab's groups, in order: title, and what an empty one says. */
@@ -28,12 +27,6 @@ interface Group {
   loading: boolean;
   loadingMore: boolean;
   failure: Failure | undefined;
-}
-
-/** A failed ask, in the sidebar's words (a dropped connection reads as such, not as gh's `Post "…": EOF`). */
-function failureOf(e: unknown): Failure {
-  if (e instanceof gh.GhError) return { notFound: e.notFound, message: explain(e.message) };
-  return { notFound: false, message: e instanceof Error ? e.message : String(e) };
 }
 
 export class Panel implements Role {
@@ -92,7 +85,7 @@ export class Panel implements Role {
         this.remote = remote;
         for (const { kind } of GROUPS) if (this.groups[kind].expanded) this.load(cx, kind, force);
       } catch (e) {
-        if (current()) this.failure = failureOf(e);
+        if (current()) this.failure = gh.failureOf(e);
       } finally {
         if (current()) {
           this.loading = false;
@@ -121,7 +114,7 @@ export class Panel implements Role {
         const page = await known.group(kind, r.remote, r.login, r.on, force);
         if (run === this.latest) g.page = page;
       } catch (e) {
-        if (run === this.latest) g.failure = failureOf(e);
+        if (run === this.latest) g.failure = gh.failureOf(e);
       } finally {
         if (run === this.latest) {
           g.loading = false;
@@ -153,7 +146,7 @@ export class Panel implements Role {
         const page = await known.more(kind, r.remote, r.login, r.on, loaded);
         if (run === this.latest) g.page = page;
       } catch (e) {
-        if (run === this.latest) g.failure = failureOf(e);
+        if (run === this.latest) g.failure = gh.failureOf(e);
       } finally {
         if (run === this.latest) {
           g.loadingMore = false;
@@ -169,7 +162,6 @@ export class Panel implements Role {
     // Follow the focused folder: live data re-renders us, so compare here.
     if (locationKey() !== this.context) this.refresh(cx);
     const t = colors(), where = location(), overlay: string | undefined = props()?.overlay;
-    const spinner = () => svg("mods/workspace-chrome/spinner.svg").size(12).flex_none().text_color(t.dim).spin(900);
     const repo = this.remote ? `${this.remote.owner}/${this.remote.repo}` : "";
     // A missing repository (404) or Issues turned off is the same for every group: said once, in
     // the list's place. Any other failure stays in its own group, beside the others' rows.

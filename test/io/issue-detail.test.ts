@@ -1,4 +1,5 @@
-// Captured REST replies from gh api, 2026-11-06; no cwd, on the pane's machine.
+// Captured REST replies from gh api, 2026-11-06/07; no cwd, on the pane's machine.
+// The timeline (issues/N/timeline) carries both comments and label/assignment activity.
 import { afterEach, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { machine, reset } from "../fake-herdr.ts";
@@ -6,11 +7,12 @@ import { readIssue } from "../../src/github/io/issues.ts";
 
 afterEach(reset);
 const fixture = (name: string) => readFileSync(new URL("../fixtures/" + name, import.meta.url), "utf8");
+const TIMELINE = "/timeline?per_page=100 --paginate --slurp";
 
-test("read an issue and its complete discussion using the pane machine's gh", async () => {
+test("one timeline read gives the issue's complete discussion and activity on the pane machine's gh", async () => {
   machine("center", {
     "~$ gh api repos/cli/cli/issues/9789": { stdout: fixture("issue-cli-9789.json") },
-    "~$ gh api repos/cli/cli/issues/9789/comments?per_page=100 --paginate --slurp": { stdout: `[${fixture("comments-cli-9789.json")}]` },
+    [`~$ gh api repos/cli/cli/issues/9789${TIMELINE}`]: { stdout: `[${fixture("timeline-cli-9789.json")}]` },
   });
   const issue = await readIssue("cli/cli", 9789, "center");
   expect(issue).toMatchObject({
@@ -23,6 +25,7 @@ test("read an issue and its complete discussion using the pane machine's gh", as
     url: "https://github.com/cli/cli/issues/9789",
   });
   expect(issue.body).toContain("gh auth login --with-token");
+  // The same three comments the comments endpoint returns (ids, authors, times, reactions).
   expect(issue.comments.map(c => [c.id, c.author, c.createdAt])).toEqual([
     [2426092653, "williammartin", "2024-10-21T09:17:22Z"],
     [5993632414, "babakks", "2026-10-05T11:35:56Z"],
@@ -30,47 +33,55 @@ test("read an issue and its complete discussion using the pane machine's gh", as
   ]);
   expect(issue.comments[0]?.reactions).toEqual([{ emoji: "👍", count: 1 }, { emoji: "❤️", count: 1 }]);
   expect(issue.comments[1]?.reactions).toEqual([]);
+  // Label changes from the same reply; mentions, references and subscriptions are not shown.
+  expect(issue.activities.map(a => [a.id, a.kind])).toEqual([
+    [14728059939, "labeled"], [14728060915, "labeled"], [14728062449, "unlabeled"], [14728062451, "labeled"],
+    [14728062455, "labeled"], [14728062457, "labeled"], [32503471799, "labeled"], [32503509142, "unlabeled"],
+    [32503509195, "unlabeled"], [32503509309, "labeled"],
+  ]);
 });
 
-test("all gh pagination output becomes one chronologically ordered discussion", async () => {
-  // Captured array pages wrapped in the outer array documented by gh --slurp.
+test("all timeline pages become one chronologically ordered discussion", async () => {
+  // Real pages captured with per_page=20 (20 + 13 events), as --slurp prints them.
   machine(null, {
     "~$ gh api repos/cli/cli/issues/9789": { stdout: fixture("issue-cli-9789.json") },
-    "~$ gh api repos/cli/cli/issues/9789/comments?per_page=100 --paginate --slurp": {
-      stdout: `[${fixture("comments-cli-9789-page1.json")},${fixture("comments-cli-9789-page2.json")}]`,
-    },
+    [`~$ gh api repos/cli/cli/issues/9789${TIMELINE}`]: { stdout: fixture("timeline-cli-9789-pages.json") },
   });
   const issue = await readIssue("cli/cli", 9789, null);
   expect(issue.comments.map(c => c.id)).toEqual([2426092653, 5993632414, 6679707396]);
+  expect(issue.activities).toHaveLength(10);
 });
 
-test("the assigned issue includes its assignees even with no discussion", async () => {
+test("label and assignment activity on the assigned issue", async () => {
   machine(null, {
     "~$ gh api repos/lw396/herdr-plugin-github/issues/13": { stdout: fixture("issue-plugin-13.json") },
-    "~$ gh api repos/lw396/herdr-plugin-github/issues/13/comments?per_page=100 --paginate --slurp": { stdout: "[[]]" },
+    [`~$ gh api repos/lw396/herdr-plugin-github/issues/13${TIMELINE}`]: { stdout: `[${fixture("timeline-plugin-13.json")}]` },
   });
-  expect(await readIssue("lw396/herdr-plugin-github", 13, null)).toMatchObject({
-    author: "lw396", assignees: ["lw396"], milestone: null, comments: [],
-  });
+  const issue = await readIssue("lw396/herdr-plugin-github", 13, null);
+  expect(issue).toMatchObject({ author: "lw396", assignees: ["lw396"], milestone: null });
+  expect(issue.activities).toEqual([
+    { id: 35331262662, kind: "labeled", actor: "lw396", createdAt: "2026-11-06T09:01:24Z", labels: [{ name: "wayfinder:task", color: "#0e8a16" }] },
+    { id: 35331263090, kind: "labeled", actor: "lw396", createdAt: "2026-11-06T09:01:24Z", labels: [{ name: "ready-for-agent", color: "#006b75" }] },
+    { id: 35356295613, kind: "assigned", actor: "lw396", createdAt: "2026-11-06T14:23:16Z", assignee: "lw396" },
+  ]);
 });
 
 test("a closed issue retains its milestone, assignee and labels", async () => {
   machine(null, {
     "~$ gh api repos/microsoft/vscode/issues/346509": { stdout: fixture("issue-vscode-346509.json") },
-    "~$ gh api repos/microsoft/vscode/issues/346509/comments?per_page=100 --paginate --slurp": { stdout: "[[]]" },
+    [`~$ gh api repos/microsoft/vscode/issues/346509${TIMELINE}`]: { stdout: "[[]]" },
   });
   expect(await readIssue("microsoft/vscode", 346509, null)).toMatchObject({
     title: "Resending the same message to another model doesn't work", state: "closed",
-    author: "ulugbekna", milestone: "1.146.0", assignees: ["justschen"], labels: [{ name: "unreleased", color: "#d1b697" }], comments: [],
+    author: "ulugbekna", milestone: "1.146.0", assignees: ["justschen"], labels: [{ name: "unreleased", color: "#d1b697" }],
+    comments: [], activities: [],
   });
 });
 
-test("a discussion read failure rejects rather than showing an incomplete issue", async () => {
+test("a timeline read failure rejects rather than showing an incomplete discussion", async () => {
   machine("center", {
     "~$ gh api repos/cli/cli/issues/9789": { stdout: fixture("issue-cli-9789.json") },
-    "~$ gh api repos/cli/cli/issues/9789/comments?per_page=100 --paginate --slurp": {
-      code: 1, stderr: "gh: Not Found (HTTP 404)\n",
-    },
+    [`~$ gh api repos/cli/cli/issues/9789${TIMELINE}`]: { code: 1, stderr: "gh: Not Found (HTTP 404)\n" },
   });
   expect(await readIssue("cli/cli", 9789, "center").catch(e => e)).toMatchObject({ notFound: true });
 });
@@ -79,7 +90,7 @@ test("a missing remote gh never falls back to this computer", async () => {
   machine("center", {});
   machine(null, {
     "~$ gh api repos/cli/cli/issues/9789": { stdout: fixture("issue-cli-9789.json") },
-    "~$ gh api repos/cli/cli/issues/9789/comments?per_page=100 --paginate --slurp": { stdout: "[[]]" },
+    [`~$ gh api repos/cli/cli/issues/9789${TIMELINE}`]: { stdout: "[[]]" },
   });
   expect(await readIssue("cli/cli", 9789, "center").catch(e => e)).toMatchObject({
     message: "cannot start gh: No such file or directory (os error 2)",

@@ -1,6 +1,7 @@
 // The only file that reaches GitHub: `gh`, on the folder's machine (`on`, see account()).
 import { exec } from "herdr";
-import { apiArgs, graphqlArgs, parseJson, errorMessage, transient, type ApiOptions, type GraphqlVariables } from "../core/gh-args.ts";
+import { apiArgs, graphqlArgs, parseJson, errorMessage, explain, transient, type ApiOptions, type GraphqlVariables } from "../core/gh-args.ts";
+import type { Failure } from "../core/issues.ts";
 import type { Account, Status } from "../core/account.ts";
 
 export type { Account, Status };
@@ -23,6 +24,12 @@ export class GhError extends Error {
   get notFound(): boolean {
     return /HTTP 404|Could not resolve to a Repository/.test(this.stderr + this.message);
   }
+}
+
+/** A failed ask in the UI's words (a dropped connection reads as such, not as gh's `Post "…": EOF`). */
+export function failureOf(e: unknown): Failure {
+  if (e instanceof GhError) return { notFound: e.notFound, message: explain(e.message) };
+  return { notFound: false, message: e instanceof Error ? e.message : String(e) };
 }
 
 /** How many times a read is asked in all when the connection drops before GitHub answers. */

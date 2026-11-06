@@ -10,6 +10,16 @@ test("relative image links open against the issue URL, while unsafe schemes neve
   expect(browserUrl("javascript:alert(1)", base)).toBeNull();
 });
 
+// Expected values from the WHATWG URL resolution examples (and Herdr's URL, checked in QuickJS).
+test("relative links resolve dot segments and encode spaces before opening", () => {
+  const base = "https://github.com/o/r/issues/13";
+  expect(browserUrl("../../blob/main/x.md", base)).toBe("https://github.com/o/blob/main/x.md");
+  expect(browserUrl("./a.png", base)).toBe("https://github.com/o/r/issues/a.png");
+  expect(browserUrl("a b.png", base)).toBe("https://github.com/o/r/issues/a%20b.png");
+  expect(browserUrl("HTTPS://Example.com/A", base)).toBe("https://example.com/A");
+  expect(browserUrl("http://[::1", base)).toBeNull();
+});
+
 test("HTML comments stay literal and visible HTML image entities are decoded", () => {
   expect(imageLinks('<!-- ![example](hidden.png) <img src="hidden.png"> -->\n\n<img src="https://example.com/a&#38;b.png">'))
     .toBe('<!-- ![example](hidden.png) <img src="hidden.png"> -->\n\n[🖼 图片](<https://example.com/a&b.png>)');

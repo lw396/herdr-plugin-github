@@ -12,7 +12,9 @@ Keep TypeScript erasable: no enums, namespaces or constructor parameter properti
 ## Dependency constraints
 
 Herdr loads plain JavaScript and resolves only `herdr`, `gpui-kit`, `gpui-base` and relative files.
-Bundle npm dependencies; externalize only those host modules. Runtime code has no DOM, Node or Bun globals.
+Bundle npm dependencies; externalize only those host modules. Runtime code has no DOM, Node or Bun globals
+(and no `Intl`). Herdr does provide some web globals such as WHATWG `URL`: declare each one the mod uses in
+`src/github/runtime.d.ts` and cover it in the smoke test, which runs in Herdr's QuickJS.
 
 Use neutral module conditions. A library's browser entry may require a DOM even when its default entry does not
 —for example, the browser-conditioned entity decoder uses `document.createElement()`.

@@ -1,9 +1,8 @@
 // Herdr smoke mod: runs real parser and reader paths inside Herdr's QuickJS (scripts/smoke.sh).
 import { View } from "gpui-kit";
 import { Issue } from "../../src/github/views/issue.ts";
-import { imageLinks } from "../../src/github/core/markdown.ts";
+import { imageLinks, browserUrl } from "../../src/github/core/markdown.ts";
 import { parseIssueDetail } from "../../src/github/core/issue-detail.ts";
-import { parseActivity } from "../../src/github/core/activity.ts";
 import issue from "../fixtures/issue-plugin-13.json";
 import events from "../fixtures/timeline-plugin-13.json";
 
@@ -18,14 +17,19 @@ export default class Smoke extends View {
     expectEqual(imageLinks("![a](img.png) `![code](x.png)`"), "[🖼 图片](<img.png>) `![code](x.png)`", "Markdown images");
     expectEqual(imageLinks('<!-- <img src="hidden"> -->\n\n<img src="a&#38;b">'),
       '<!-- <img src="hidden"> -->\n\n[🖼 图片](<a&b>)', "HTML images");
-    const timeline = events as { event: string }[];
+    const base = "https://github.com/o/r/issues/13";
+    expectEqual(String(browserUrl("../../blob/main/x.md", base)), "https://github.com/o/blob/main/x.md", "URL dot segments");
+    expectEqual(String(browserUrl("a b.png", base)), "https://github.com/o/r/issues/a%20b.png", "URL encoding");
+    expectEqual(String(browserUrl("javascript:alert(1)", base)), "null", "URL scheme policy");
+    expectEqual(String(browserUrl("http://[::1", base)), "null", "invalid URL");
+    const detail = parseIssueDetail(issue, events);
+    expectEqual(`${detail.comments.length} comments, ${detail.activities.length} activities`, "2 comments, 3 activities", "timeline");
     this.role.wide = true;
     this.role.ref = { repo: "lw396/herdr-plugin-github", number: 13 };
     this.role.entry = {
-      loading: false, projectsLoading: false, activityLoading: false,
+      loading: false, projectsLoading: false,
       projects: { ok: false, message: "Projects require read:project." },
-      activity: { ok: true, activities: parseActivity(timeline) },
-      issue: parseIssueDetail(issue, timeline.filter(e => e.event === "commented")),
+      issue: detail,
     };
   }
 

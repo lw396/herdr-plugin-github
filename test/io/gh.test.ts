@@ -140,6 +140,21 @@ describe("api", () => {
   });
 });
 
+describe("failureOf: a failed ask in the UI's words", () => {
+  test("a dropped connection reads as such, not as gh's EOF line; 404s are marked", () => {
+    expect(gh.failureOf(new gh.GhError('Post "https://api.github.com/graphql": EOF', 1, "")))
+      .toEqual({ notFound: false, message: "The connection to GitHub dropped. Try again." });
+    expect(gh.failureOf(new gh.GhError("gh: Not Found (HTTP 404)", 1, "gh: Not Found (HTTP 404)\n")))
+      .toEqual({ notFound: true, message: "gh: Not Found (HTTP 404)" });
+  });
+
+  test("other errors keep their own message", () => {
+    expect(gh.failureOf(new Error("cannot start gh: No such file or directory (os error 2)")))
+      .toEqual({ notFound: false, message: "cannot start gh: No such file or directory (os error 2)" });
+    expect(gh.failureOf("plain")).toEqual({ notFound: false, message: "plain" });
+  });
+});
+
 describe("graphql", () => {
   const QUERY = "query($o:String!,$n:String!){repository(owner:$o,name:$n){nameWithOwner stargazerCount}}";
 

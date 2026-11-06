@@ -2,20 +2,12 @@ import { fromMarkdown } from "mdast-util-from-markdown";
 import { Parser } from "htmlparser2";
 import type { Nodes, Image, ImageReference } from "mdast";
 
-/** Browser actions need absolute HTTP(S) URLs; do not rely on DOM URL APIs in QuickJS. */
+/** A link resolved against the issue page (Herdr's QuickJS has the WHATWG URL); only HTTP(S) opens. */
 export function browserUrl(href: string, base: string): string | null {
-  const url = href.trim();
-  if (/^https?:\/\//i.test(url)) return url;
-  if (!url || /^[a-z][a-z\d+.-]*:/i.test(url)) return null;
-  const origin = /^https?:\/\/[^/?#]+/i.exec(base)?.[0];
-  if (!origin) return null;
-  if (url.startsWith("//")) return `${origin.split(":")[0]}:${url}`;
-  if (url.startsWith("/")) return origin + url;
-  const document = base.replace(/[?#].*$/, "");
-  if (url.startsWith("#")) return base.split("#")[0] + url;
-  if (url.startsWith("?")) return document + url;
-  // The system browser performs dot-segment normalization when opening the absolute URL.
-  return document.replace(/[^/]*$/, "") + url;
+  if (!href.trim()) return null;
+  let resolved: URL;
+  try { resolved = new URL(href.trim(), base); } catch { return null; }
+  return resolved.protocol === "http:" || resolved.protocol === "https:" ? resolved.href : null;
 }
 
 const link = (url: string): string => `[🖼 图片](<${url.replace(/</g, "%3C").replace(/>/g, "%3E")}>)`;
@@ -31,11 +23,13 @@ export function imageLinks(markdown: string): string {
     if (node.type === "image" || node.type === "imageReference") images.push(node);
     if (node.type === "html") {
       const start = node.position!.start.offset!, end = node.position!.end.offset!;
-      const parser = new Parser({ onopentag(name, attributes) {
-        if (name === "img" && attributes.src !== undefined) patches.push({
-          start: start + parser.startIndex, end: start + parser.endIndex + 1, url: attributes.src,
-        });
-      } }, { decodeEntities: true });
+      const parser = new Parser({
+        onopentag(name, attributes) {
+          if (name === "img" && attributes.src !== undefined) patches.push({
+            start: start + parser.startIndex, end: start + parser.endIndex + 1, url: attributes.src,
+          });
+        }
+      }, { decodeEntities: true });
       // Parse the original span: node.value can normalize CRLF and shift source offsets.
       parser.end(markdown.slice(start, end));
     }

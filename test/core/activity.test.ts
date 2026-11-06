@@ -6,7 +6,7 @@ import { parseActivity, issueTimeline, activityText } from "../../src/github/cor
 test("simultaneous label changes form one row before assignment and later comments", () => {
   const events = parseActivity(JSON.parse(readFileSync(new URL("../fixtures/timeline-plugin-13.json", import.meta.url), "utf8")));
   const timeline = issueTimeline([
-    { id: 6688056796, author: "lw396", createdAt: "2026-11-06T15:08:17Z", body: "Comment", reactions: [] },
+    { id: 6688056796, author: "lw396", createdAt: "2026-11-06T15:08:17Z", body: "Comment", markdown: "Comment", reactions: [] },
   ], events);
   expect(timeline.map(item => item.type === "comment" ? `comment-${item.comment.id}` : `activity-${item.activity.id}`))
     .toEqual(["activity-35331262662", "activity-35356295613", "comment-6688056796"]);

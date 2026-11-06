@@ -4,8 +4,6 @@ import type { RemoteRepo } from "../core/remote.ts";
 import { api, graphql } from "./gh.ts";
 import { PROJECTS_QUERY, projectPage, projectsFailure, type Project, type Projects } from "../core/projects.ts";
 import { parseIssueDetail, type IssueDetail } from "../core/issue-detail.ts";
-import { parseActivity, type Activities } from "../core/activity.ts";
-import { explain } from "../core/gh-args.ts";
 
 /**
  * One page of a group in the repository, asked with the gh on `on` (whose account is `login`,
@@ -15,23 +13,17 @@ export async function issuePage(kind: GroupKind, remote: RemoteRepo, login: stri
   return parseIssueGroup(await graphql(groupQuery(kind), groupVariables(kind, remote, login, after), { on }));
 }
 
-/** One issue and all comment pages. The caller supplies the reader tab's machine, never a cwd. */
+/**
+ * One issue and all timeline pages: the timeline carries both the comments and the label/assignment
+ * activity, so one paginated read serves both. The caller supplies the reader tab's machine, never a cwd.
+ */
 export async function readIssue(repo: string, number: number, on: string | null): Promise<IssueDetail> {
   const path = `repos/${repo}/issues/${number}`;
-  const [issue, comments] = await Promise.all([
+  const [issue, timeline] = await Promise.all([
     api(path, { on }),
-    api(`${path}/comments?per_page=100`, { on, paginate: true }),
+    api(`${path}/timeline?per_page=100`, { on, paginate: true }),
   ]);
-  return parseIssueDetail(issue, comments);
-}
-
-/** Activity is optional: a failed timeline read never hides successfully loaded comments. */
-export async function readIssueActivity(repo: string, number: number, on: string | null): Promise<Activities> {
-  try {
-    return { ok: true, activities: parseActivity(await api(`repos/${repo}/issues/${number}/timeline?per_page=100`, { on, paginate: true })) };
-  } catch (e) {
-    return { ok: false, message: `Activity unavailable on ${on ?? "this computer"}. ${explain(e instanceof Error ? e.message : String(e))}` };
-  }
+  return parseIssueDetail(issue, timeline);
 }
 
 /** Optional metadata: lack of Projects access must never hide the issue body or comments. */

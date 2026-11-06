@@ -1,4 +1,8 @@
-// The REST issue and its discussion as the detail reader displays them.
+import { parseLabel, type Label } from "./labels.ts";
+import { parseActivity, type Activity } from "./activity.ts";
+import { imageLinks } from "./markdown.ts";
+
+export type { Label };
 export interface IssueRef { repo: string; number: number }
 export const issueKey = (ref: IssueRef): string => `${ref.repo.toLowerCase()}#${ref.number}`;
 
@@ -6,21 +10,14 @@ export const issueKey = (ref: IssueRef): string => `${ref.repo.toLowerCase()}#${
 export const issueTabName = (ref: IssueRef): string => `#${ref.number} · ${ref.repo.split("/").at(-1)}`;
 
 export interface Reaction { emoji: string; count: number }
-export interface Label { name: string; color: `#${string}` | null }
-
-/** GitHub supplies six-digit hex colors, without '#'; older replies can contain names only. */
-export function parseLabel(label: string | { name: string; color?: string }): Label {
-  return typeof label === "string" ? { name: label, color: null } : {
-    name: label.name,
-    color: label.color && /^[a-f\d]{6}$/i.test(label.color) ? `#${label.color.toLowerCase()}` : null,
-  };
-}
 
 export interface Comment {
   id: number;
   author: string;
   createdAt: string;
   body: string;
+  /** body as the reader renders it: prepared once here, not on every render (parsing is slow in QuickJS). */
+  markdown: string;
   reactions: Reaction[];
 }
 
@@ -35,10 +32,14 @@ export interface IssueDetail {
   assignees: string[];
   milestone: string | null;
   body: string;
+  markdown: string;
   comments: Comment[];
+  activities: Activity[];
 }
 
+/** A timeline "commented" event: the same fields as the comments endpoint's comment. */
 interface RestComment {
+  event: string;
   id: number;
   user: { login: string } | null;
   created_at: string;
@@ -64,15 +65,19 @@ const EMOJI: [string, string][] = [
   ["confused", "😕"], ["heart", "❤️"], ["rocket", "🚀"], ["eyes", "👀"],
 ];
 
-/** GitHub's REST replies, with comments in creation order and non-zero reaction counts. */
-export function parseIssueDetail(issue: unknown, comments: unknown): IssueDetail {
-  const i = issue as RestIssue;
+/** What the reader renders for a body: images as browser links; an empty body reads as no text. */
+const readerMarkdown = (body: string): string => imageLinks(body || "_No text._");
+
+/** GitHub's REST issue and timeline, with comments in creation order and non-zero reaction counts. */
+export function parseIssueDetail(issue: unknown, timeline: unknown): IssueDetail {
+  const i = issue as RestIssue, events = timeline as RestComment[];
   return {
     number: i.number, title: i.title, state: i.state, author: i.user?.login ?? "deleted user",
     createdAt: i.created_at, url: i.html_url, labels: i.labels.map(parseLabel),
-    assignees: i.assignees.map(a => a.login), milestone: i.milestone?.title ?? null, body: i.body ?? "",
-    comments: (comments as RestComment[]).map(c => ({
-      id: c.id, author: c.user?.login ?? "deleted user", createdAt: c.created_at, body: c.body ?? "",
+    assignees: i.assignees.map(a => a.login), milestone: i.milestone?.title ?? null,
+    body: i.body ?? "", markdown: readerMarkdown(i.body ?? ""), activities: parseActivity(events),
+    comments: events.filter(e => e.event === "commented").map(c => ({
+      id: c.id, author: c.user?.login ?? "deleted user", createdAt: c.created_at, body: c.body ?? "", markdown: readerMarkdown(c.body ?? ""),
       reactions: EMOJI.flatMap(([key, emoji]) => {
         const count = c.reactions[key];
         return typeof count === "number" && count > 0 ? [{ emoji, count }] : [];

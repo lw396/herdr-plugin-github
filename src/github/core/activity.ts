@@ -1,12 +1,11 @@
-// Read-only label/assignee events. Comments are loaded separately and must not be duplicated.
-import { parseLabel, type Label, type Comment } from "./issue-detail.ts";
+import { parseLabel, type Label } from "./labels.ts";
+import type { Comment } from "./issue-detail.ts";
 
 interface EventBase { id: number; actor: string; createdAt: string }
 export type Activity = EventBase & (
   { kind: "labeled" | "unlabeled"; labels: Label[] } |
   { kind: "assigned" | "unassigned"; assignee: string }
 );
-export type Activities = { ok: true; activities: Activity[] } | { ok: false; message: string };
 export type TimelineItem = { type: "comment"; comment: Comment } | { type: "activity"; activity: Activity };
 
 /** The visible timeline: comments and events ordered together, adjacent same-time label changes grouped. */
@@ -44,7 +43,7 @@ interface RestEvent {
   assignee?: { login: string };
 }
 
-/** Ignore commented and other event kinds rather than inventing unsupported descriptions. */
+/** Label and assignment events; comments are parsed by issue-detail, other kinds are not shown. */
 export function parseActivity(data: unknown): Activity[] {
   return (data as RestEvent[]).flatMap((event): Activity[] => {
     const base = { id: event.id, actor: event.actor?.login ?? "deleted user", createdAt: event.created_at };

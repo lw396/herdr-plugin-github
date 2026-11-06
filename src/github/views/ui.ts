@@ -1,5 +1,5 @@
 // Small UI helpers shared by the views.
-import { div, type AsyncContext, type Color, type Context, type Element } from "gpui-kit";
+import { div, svg, type AsyncContext, type Color, type Context, type Element } from "gpui-kit";
 import { theme } from "herdr";
 
 /** One way the mod shows (props().role): created in init, rendered by the mod's View. */
@@ -10,6 +10,10 @@ export interface Role {
 
 /** theme() typed as gpui-kit colors (herdr.d.ts says string; the values are always hex). */
 export const colors = (): Record<string, Color> => theme() as Record<string, Color>;
+
+/** The mod's own loading spinner (not another mod's asset, which a Herdr upgrade may move). */
+export const spinner = (size = 12): Element =>
+  svg("mods/github/assets/spinner.svg").size(size).flex_none().text_color(colors().dim).spin(900);
 
 /** Controls inside a window overlay stop the press, or it drags the window. */
 export const stop = (_e: unknown, cx: Context): void => cx.stop_propagation();
