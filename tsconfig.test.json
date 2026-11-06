@@ -1,0 +1,15 @@
+{
+  // Bun tests import src/ directly: pure modules only (no "herdr" import).
+  "compilerOptions": {
+    "target": "ESNext",
+    "module": "Preserve",
+    "moduleResolution": "bundler",
+    "lib": ["ESNext"],
+    "types": ["bun"],
+    "allowImportingTsExtensions": true,
+    "strict": true,
+    "noEmit": true,
+    "skipLibCheck": true
+  },
+  "include": ["test/**/*.ts"]
+}

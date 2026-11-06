@@ -1,0 +1,26 @@
+{
+  // src/github/*.ts -> mods/github/*.js (Herdr's QuickJS: no DOM/Node/Bun globals). See AGENTS.md.
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ES2022",
+    "moduleResolution": "bundler",
+    "lib": ["ES2022"],
+    "types": [],
+    "strict": true,
+    "noImplicitOverride": true,
+    // "./x.ts" imports become "./x.js".
+    "allowImportingTsExtensions": true,
+    "rewriteRelativeImportExtensions": true,
+    // Output = source minus types.
+    "erasableSyntaxOnly": true,
+    "verbatimModuleSyntax": true,
+    "rootDir": "src/github",
+    "outDir": "mods/github",
+    "newLine": "lf",
+    "skipLibCheck": true,
+    "paths": {
+      "herdr": ["./types/herdr.d.ts"]
+    }
+  },
+  "include": ["src/github/**/*.ts", "types/gpui-kit.d.ts"]
+}
