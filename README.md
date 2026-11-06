@@ -64,9 +64,14 @@ them. Herdr may keep the native tab frame; it shows an empty reader until an iss
 ## Why a build step
 
 Herdr runs mods in QuickJS: it loads plain ES modules only (no `.ts`, no npm packages,
-no Node/Bun APIs). `scripts/build.sh` empties `mods/github/`, has `tsc` turn each `src/github/*.ts` into a `.js`
-with the types erased and comments kept (so the shipped folder stays readable), and copies
-the rest of `src/github/` as it is.
+no Node/Bun APIs). `scripts/build.sh` empties `mods/github/`, bundles `src/github/main.ts` and
+its dependencies into an unminified `main.js` with esbuild, and copies assets unchanged.
+Only Herdr's host modules stay external; installation needs no node_modules. `tsc` checks types only.
+Neutral module conditions avoid browser-only DOM implementations in dependencies.
+
+Markdown image preprocessing uses `mdast-util-from-markdown` and `htmlparser2`; Herdr still
+renders the resulting Markdown. Relative-link safety rules remain unchanged. JSON pagination
+uses gh's `--slurp` rather than joining JSON text: gh on each target machine must support it.
 
 Other runtime limits: `fetch` returns no headers and refuses Authorization across
 cross-origin redirects (Actions logs/artifacts), so GitHub goes through `gh`;
@@ -76,7 +81,7 @@ Herdr 0.1.13 `exec` has a 30 s limit and 8 MiB output.
 
 ```sh
 bun install
-bun run dev         # copy assets, then tsc --watch: rebuilds on save (Herdr hot-reloads it); rerun after editing an asset
+bun run dev         # copy assets, then esbuild watch; rerun after editing an asset; run typecheck separately
 bun run build       # build once
 bun run typecheck   # mod sources against types/, tests against Bun
 bun test

@@ -43,13 +43,15 @@ export async function gh(args: string[], where: Where = {}, read = false): Promi
 const reads = (method: string | undefined): boolean => !method || method.toUpperCase() === "GET";
 
 /** `gh api <path>`, parsed as JSON. */
-export async function api(path: string, options: Omit<ApiOptions, "jq"> & Where = {}): Promise<unknown> {
+export async function api(path: string, options: Omit<ApiOptions, "jq" | "slurp"> & Where = {}): Promise<unknown> {
   const { cwd, on, ...rest } = options;
-  return parseJson(await gh(apiArgs(path, rest), { cwd, on }, reads(rest.method)));
+  const data = parseJson(await gh(apiArgs(path, { ...rest, slurp: rest.paginate }), { cwd, on }, reads(rest.method)));
+  // REST array pages become one list; object pages (e.g. GraphQL) retain their page structure.
+  return rest.paginate && Array.isArray(data) && data.every(Array.isArray) ? data.flat() : data;
 }
 
 /** `gh api <path> --jq <filter>`: jq prints plain text (strings unquoted), trimmed here. */
-export async function apiText(path: string, jq: string, options: Omit<ApiOptions, "jq"> & Where = {}): Promise<string> {
+export async function apiText(path: string, jq: string, options: Omit<ApiOptions, "jq" | "slurp"> & Where = {}): Promise<string> {
   const { cwd, on, ...rest } = options;
   return (await gh(apiArgs(path, { ...rest, jq }), { cwd, on }, reads(rest.method))).trim();
 }

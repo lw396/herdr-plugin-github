@@ -22,7 +22,8 @@ describe("graphqlArgs", () => {
 describe("parseJson", () => {
   test("empty output is null", () => expect(parseJson("  \n")).toBeNull());
   test("one document", () => expect(parseJson('{"a":1}')).toEqual({ a: 1 }));
-  test("paginated arrays are joined", () => expect(parseJson('[{"a":1}]\n[{"a":2}]')).toEqual([{ a: 1 }, { a: 2 }]));
+  test("slurped pages are a JSON document, not a text substitution", () => expect(parseJson('[[{"body":"]["}],[{"body":"end"}],[]]')).toEqual([[{ body: "][" }], [{ body: "end" }], []]));
+  test("concatenated documents are rejected", () => expect(() => parseJson('[{"a":1}]\n[{"a":2}]')).toThrow());
   test("not JSON throws", () => expect(() => parseJson("oops")).toThrow());
 });
 

@@ -10,7 +10,7 @@ const fixture = (name: string) => readFileSync(new URL("../fixtures/" + name, im
 test("read an issue and its complete discussion using the pane machine's gh", async () => {
   machine("center", {
     "~$ gh api repos/cli/cli/issues/9789": { stdout: fixture("issue-cli-9789.json") },
-    "~$ gh api repos/cli/cli/issues/9789/comments?per_page=100 --paginate": { stdout: fixture("comments-cli-9789.json") },
+    "~$ gh api repos/cli/cli/issues/9789/comments?per_page=100 --paginate --slurp": { stdout: `[${fixture("comments-cli-9789.json")}]` },
   });
   const issue = await readIssue("cli/cli", 9789, "center");
   expect(issue).toMatchObject({
@@ -33,11 +33,11 @@ test("read an issue and its complete discussion using the pane machine's gh", as
 });
 
 test("all gh pagination output becomes one chronologically ordered discussion", async () => {
-  // Real pages captured with per_page=2 to exercise gh's concatenated JSON arrays.
+  // Captured array pages wrapped in the outer array documented by gh --slurp.
   machine(null, {
     "~$ gh api repos/cli/cli/issues/9789": { stdout: fixture("issue-cli-9789.json") },
-    "~$ gh api repos/cli/cli/issues/9789/comments?per_page=100 --paginate": {
-      stdout: fixture("comments-cli-9789-page1.json") + fixture("comments-cli-9789-page2.json"),
+    "~$ gh api repos/cli/cli/issues/9789/comments?per_page=100 --paginate --slurp": {
+      stdout: `[${fixture("comments-cli-9789-page1.json")},${fixture("comments-cli-9789-page2.json")}]`,
     },
   });
   const issue = await readIssue("cli/cli", 9789, null);
@@ -47,7 +47,7 @@ test("all gh pagination output becomes one chronologically ordered discussion", 
 test("the assigned issue includes its assignees even with no discussion", async () => {
   machine(null, {
     "~$ gh api repos/lw396/herdr-plugin-github/issues/13": { stdout: fixture("issue-plugin-13.json") },
-    "~$ gh api repos/lw396/herdr-plugin-github/issues/13/comments?per_page=100 --paginate": { stdout: "[]" },
+    "~$ gh api repos/lw396/herdr-plugin-github/issues/13/comments?per_page=100 --paginate --slurp": { stdout: "[[]]" },
   });
   expect(await readIssue("lw396/herdr-plugin-github", 13, null)).toMatchObject({
     author: "lw396", assignees: ["lw396"], milestone: null, comments: [],
@@ -57,7 +57,7 @@ test("the assigned issue includes its assignees even with no discussion", async 
 test("a closed issue retains its milestone, assignee and labels", async () => {
   machine(null, {
     "~$ gh api repos/microsoft/vscode/issues/346509": { stdout: fixture("issue-vscode-346509.json") },
-    "~$ gh api repos/microsoft/vscode/issues/346509/comments?per_page=100 --paginate": { stdout: "[]" },
+    "~$ gh api repos/microsoft/vscode/issues/346509/comments?per_page=100 --paginate --slurp": { stdout: "[[]]" },
   });
   expect(await readIssue("microsoft/vscode", 346509, null)).toMatchObject({
     title: "Resending the same message to another model doesn't work", state: "closed",
@@ -68,7 +68,7 @@ test("a closed issue retains its milestone, assignee and labels", async () => {
 test("a discussion read failure rejects rather than showing an incomplete issue", async () => {
   machine("center", {
     "~$ gh api repos/cli/cli/issues/9789": { stdout: fixture("issue-cli-9789.json") },
-    "~$ gh api repos/cli/cli/issues/9789/comments?per_page=100 --paginate": {
+    "~$ gh api repos/cli/cli/issues/9789/comments?per_page=100 --paginate --slurp": {
       code: 1, stderr: "gh: Not Found (HTTP 404)\n",
     },
   });
@@ -79,7 +79,7 @@ test("a missing remote gh never falls back to this computer", async () => {
   machine("center", {});
   machine(null, {
     "~$ gh api repos/cli/cli/issues/9789": { stdout: fixture("issue-cli-9789.json") },
-    "~$ gh api repos/cli/cli/issues/9789/comments?per_page=100 --paginate": { stdout: "[]" },
+    "~$ gh api repos/cli/cli/issues/9789/comments?per_page=100 --paginate --slurp": { stdout: "[[]]" },
   });
   expect(await readIssue("cli/cli", 9789, "center").catch(e => e)).toMatchObject({
     message: "cannot start gh: No such file or directory (os error 2)",

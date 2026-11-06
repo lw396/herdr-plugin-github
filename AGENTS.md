@@ -18,14 +18,16 @@ A Herdr mod, written in TypeScript in `src/github/`, built to `mods/github/`. Re
 ## Source and output
 
 - `src/github/` is the whole source: `*.ts`, `mod.json`, assets (`*.svg`). `mods/github/` is
-  build output only (`scripts/build.sh`: tsc for `*.ts`, one file per source with comments kept;
-  everything else copied). Never edit it, but commit it: people install that folder as it is.
+  build output only (`scripts/build.sh`: readable self-contained ESM via `scripts/bundle.mjs`,
+  copied assets). Never edit it, but commit it: people install that folder as it is.
 - Folders, each importing only what is listed (`test/layers.test.ts` checks core/ and io/):
-  `core/` pure logic, imports only `core/`; `io/` the outside (`herdr`, programs) and `core/`;
+  `core/` pure logic, imports only `core/`, except `markdown.ts` may import its approved pure
+  parsers (`mdast-util-from-markdown`, `htmlparser2`, type-only `mdast`); `io/` the outside (`herdr`, programs) and `core/`;
   `views/` the UI, one file per role; `main.ts` picks the role. Assets in `assets/`, referenced
   as `mods/github/assets/<file>`.
 - Herdr cannot load `.ts` and resolves only `gpui-kit`, `gpui-base`, `herdr` and the mod's own
-  relative files: no npm packages at run time. Import siblings as `./x.ts` (rewritten to `./x.js`).
+  relative files: npm dependencies must be bundled, never resolved at run time. Import siblings as `./x.ts`.
+  Build with neutral conditions: browser-conditioned dependencies may require a DOM. Externalize only Herdr's host modules.
 - `mods/tabs-github/` and `layouts/github.json` are copies of Herdr 0.1.13's shipped `tabs` mod
   and `main` layout (plain JS/JSON, not built). Keep them as close to the originals as possible:
   changes in `tabs-github` are marked `herdr-plugin-github`; the layout renames the tab bar mod,
@@ -34,7 +36,7 @@ A Herdr mod, written in TypeScript in `src/github/`, built to `mods/github/`. Re
   preserve terminal headers and controls. On a Herdr upgrade, recopy the layout/tab bar,
   compare `views/pane.ts` with the new shipped header, and reapply these changes.
 - Erasable TypeScript only (`erasableSyntaxOnly`): no `enum`, `namespace` or constructor parameter
-  properties, so the output is the source minus its types.
+  properties. Bundled output remains unminified; `tsc` is type-checking only.
 
 ## Runtime limits (Herdr 0.1.13)
 
@@ -52,6 +54,8 @@ A Herdr mod, written in TypeScript in `src/github/`, built to `mods/github/`. Re
 
 - Everything that reaches GitHub goes through `io/gh.ts`. Logic that can be pure goes in `core/`.
 - `gh api --jq` prints plain text (strings unquoted): read it with `apiText()`, not `api()`.
+  JSON pagination uses `--slurp` and ordinary JSON parsing; REST array pages are flattened in `io/gh.ts`.
+  Target machines need gh with `--slurp` support; preserve that machine's error rather than falling back locally.
 - Never keep a `cx`; use the one each callback gets. No `setTimeout`: `cx.timer`, `cx.spawn`.
 - `git` and `gh` both run on the folder's machine (ADR 0003): `git` with `{ cwd, on }` from
   `io/context.ts`, `gh` with the `on` from `gh.account()` (no falling back to this computer), so

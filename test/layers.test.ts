@@ -12,8 +12,10 @@ function imports(folder: string): { file: string; from: string }[] {
       .map((m) => ({ file: `${folder}/${f}`, from: m[1]! })));
 }
 
-test("core/ is pure: it imports only core/", () => {
-  expect(imports("core").filter(({ from }) => !from.startsWith("./"))).toEqual([]);
+test("core/ imports only core/ and the Markdown module\'s approved pure parsers", () => {
+  const parsers = new Set(["mdast-util-from-markdown", "htmlparser2", "mdast"]); // mdast is type-only.
+  expect(imports("core").filter(({ file, from }) => !from.startsWith("./")
+    && !(file === "core/markdown.ts" && parsers.has(from)))).toEqual([]);
 });
 
 test("io/ reaches Herdr and core/, never the UI", () => {

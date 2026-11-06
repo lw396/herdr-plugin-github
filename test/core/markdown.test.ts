@@ -10,6 +10,18 @@ test("relative image links open against the issue URL, while unsafe schemes neve
   expect(browserUrl("javascript:alert(1)", base)).toBeNull();
 });
 
+test("HTML comments stay literal and visible HTML image entities are decoded", () => {
+  expect(imageLinks('<!-- ![example](hidden.png) <img src="hidden.png"> -->\n\n<img src="https://example.com/a&#38;b.png">'))
+    .toBe('<!-- ![example](hidden.png) <img src="hidden.png"> -->\n\n[🖼 图片](<https://example.com/a&b.png>)');
+});
+
+test("source offsets preserve emoji, CRLF, blockquotes and repeated image-like code", () => {
+  expect(imageLinks("🙂 `![a](a.png)`\r\n\r\n> ![a](a.png)\r\n"))
+    .toBe("🙂 `![a](a.png)`\r\n\r\n> [🖼 图片](<a.png>)\r\n");
+  expect(imageLinks('<div>\r\n  <img src="a&amp;b">\r\n</div>'))
+    .toBe("<div>\r\n  [🖼 图片](<a&b>)\r\n</div>");
+});
+
 // CommonMark image examples, plus GitHub's pasted screenshot HTML.
 test("an inline image becomes a browser link with the agreed label", () => {
   expect(imageLinks("Before ![screenshot](https://example.com/screen.png) after"))

@@ -114,10 +114,24 @@ describe("apiText", () => {
 });
 
 describe("api", () => {
+  test("pagination preserves literal brackets in text and accepts an empty last page", async () => {
+    // --slurp's outer array is documented by gh api; body is a worked JSON-string example.
+    machine("center", {
+      "~$ gh api repos/o/r/issues/1/comments --paginate --slurp": { stdout: '[[{"body":"]["}],[{"body":"end"}],[]]' },
+    });
+    expect(await gh.api("repos/o/r/issues/1/comments", { on: "center", paginate: true }))
+      .toEqual([{ body: "][" }, { body: "end" }]);
+  });
+
   test("paginated arrays arrive as one array", async () => {
-    machine(null, { "~$ gh api repos/herdrdev/herdr-app/contributors?per_page=1 --paginate": { stdout: '[{"login":"ogulcancelik","id":7064011},{"login":"dependabot[bot]","id":49699333}]' } });
+    machine(null, { "~$ gh api repos/herdrdev/herdr-app/contributors?per_page=1 --paginate --slurp": { stdout: '[[{"login":"ogulcancelik","id":7064011}],[{"login":"dependabot[bot]","id":49699333}]]' } });
     expect(await gh.api("repos/herdrdev/herdr-app/contributors?per_page=1", { paginate: true }))
       .toEqual([{ login: "ogulcancelik", id: 7064011 }, { login: "dependabot[bot]", id: 49699333 }]);
+  });
+
+  test("paginated object responses keep their page structure", async () => {
+    machine(null, { "~$ gh api graphql --paginate --slurp": { stdout: '[{"data":{"n":1}},{"data":{"n":2}}]' } });
+    expect(await gh.api("graphql", { paginate: true })).toEqual([{ data: { n: 1 } }, { data: { n: 2 } }]);
   });
 
   test("POST with fields", async () => {

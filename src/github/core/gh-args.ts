@@ -6,6 +6,7 @@ export interface ApiOptions {
   fields?: Record<string, string | number | boolean>;
   rawFields?: Record<string, string>;
   paginate?: boolean;
+  slurp?: boolean;
   jq?: string;
   cache?: string;
   hostname?: string;
@@ -20,6 +21,7 @@ export function apiArgs(path: string, options: ApiOptions = {}): string[] {
   for (const [key, value] of Object.entries(options.fields ?? {})) args.push("-F", `${key}=${value}`);
   for (const [key, value] of Object.entries(options.rawFields ?? {})) args.push("-f", `${key}=${value}`);
   if (options.paginate) args.push("--paginate");
+  if (options.slurp) args.push("--slurp");
   if (options.jq) args.push("--jq", options.jq);
   if (options.cache) args.push("--cache", options.cache);
   if (options.hostname) args.push("--hostname", options.hostname);
@@ -41,14 +43,13 @@ export function graphqlArgs(
   return apiArgs("graphql", { ...options, fields, rawFields });
 }
 
-/** Parses gh's JSON output; --paginate prints pages back to back (`[...][...]`), joined here. */
+/** Parse one JSON document. Paginated requests use gh's --slurp instead of textual joining. */
 export function parseJson(stdout: string): unknown {
   const text = stdout.trim();
   if (!text) return null;
   try {
     return JSON.parse(text);
   } catch {
-    if (text.startsWith("[")) return JSON.parse(`[${text.slice(1, -1).replace(/\]\s*\[/g, ",")}]`);
     throw new Error(`gh printed something that isn't JSON: ${text.slice(0, 200)}`);
   }
 }

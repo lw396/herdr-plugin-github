@@ -1,3 +1,7 @@
+import { fromMarkdown } from "mdast-util-from-markdown";
+import { Parser } from "htmlparser2";
+import type { Nodes, Image, ImageReference } from "mdast";
+
 /** Browser actions need absolute HTTP(S) URLs; do not rely on DOM URL APIs in QuickJS. */
 export function browserUrl(href: string, base: string): string | null {
   const url = href.trim();
@@ -14,108 +18,39 @@ export function browserUrl(href: string, base: string): string | null {
   return document.replace(/[^/]*$/, "") + url;
 }
 
-/** Apply a prose transformation without changing fenced/indented code, code spans or escapes. */
-function prose(markdown: string, transform: (text: string) => string): string {
-  const protectedParts: string[] = [];
-  const protect = (text: string): string => {
-    protectedParts.push(text);
-    return `\u0000${protectedParts.length - 1}\u0000`;
-  };
-  // Fences need matching delimiters; a closing fence may be longer than its opening one.
-  let fence: { char: string; length: number } | null = null;
-  let code = "", text = "";
-  for (const line of markdown.match(/[^\n]*\n|[^\n]+$/g) ?? []) {
-    if (fence) {
-      code += line;
-      const end = /^ {0,3}(`+|~+)[ \t]*(?:\n)?$/.exec(line);
-      if (end && end[1]![0] === fence.char && end[1]!.length >= fence.length) {
-        text += protect(code);
-        code = "";
-        fence = null;
-      }
-    } else {
-      const start = /^ {0,3}(`{3,}|~{3,})/.exec(line);
-      if (start) {
-        fence = { char: start[1]![0]!, length: start[1]!.length };
-        code = line;
-      } else text += /^(?: {4}|\t)/.test(line) ? protect(line) : line;
-    }
-  }
-  if (code) text += protect(code);
-  text = text.replace(/\\[\\!`]|(`+)[\s\S]*?\1(?!`)/g, protect);
-  return transform(text).replace(/\u0000(\d+)\u0000/g, (_all, index: string) => protectedParts[Number(index)]!);
-}
-
-/** A Markdown destination, including balanced parentheses and optional title. */
-function destination(text: string, start: number): { url: string; end: number } | null {
-  let i = start;
-  while (/\s/.test(text[i] ?? "") && i < text.length) i++;
-  const from = i;
-  let url: string;
-  if (text[i] === "<") {
-    const end = text.indexOf(">", i + 1);
-    if (end < 0) return null;
-    url = text.slice(i + 1, end);
-    i = end + 1;
-  } else {
-    let depth = 0;
-    for (; i < text.length; i++) {
-      const c = text[i];
-      if (c === "\\") { i++; continue; }
-      if (c === "(") depth++;
-      else if (c === ")") { if (depth === 0) break; depth--; }
-      else if (/\s/.test(c!)) break;
-    }
-    url = text.slice(from, i).replace(/\\([()])/g, "$1");
-  }
-  const end = /^\s*(?:"[^"]*"|'[^']*'|\([^)]*\))?\s*\)/.exec(text.slice(i));
-  return end && url ? { url, end: i + end[0].length } : null;
-}
-
-/** Image descriptions can themselves contain nested or escaped brackets. */
-function labelEnd(text: string, from: number): number {
-  let depth = 1;
-  for (let i = from; i < text.length; i++) {
-    if (text[i] === "\\") { i++; continue; }
-    if (text[i] === "[") depth++;
-    if (text[i] === "]" && --depth === 0) return i;
-  }
-  return -1;
-}
-
 const link = (url: string): string => `[🖼 图片](<${url.replace(/</g, "%3C").replace(/>/g, "%3E")}>)`;
 
-/** Images are links until the person chooses to open them in the browser. */
+/** Images become browser links; source offsets preserve all other Markdown verbatim. */
 export function imageLinks(markdown: string): string {
-  return prose(markdown, text => {
-    text = text.replace(/<img\b(?:[^"'<>]|"[^"]*"|'[^']*')*>/gi, tag => {
-      const src = /\bsrc\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'=<>`]+))/i.exec(tag);
-      return src ? link((src[1] ?? src[2] ?? src[3]!).replace(/&amp;/gi, "&")) : tag;
-    });
-    const normalize = (label: string) => label.trim().replace(/\s+/g, " ").toLowerCase();
-    const references = new Map<string, string>();
-    for (const m of text.matchAll(/^ {0,3}\[([^\]]+)\]:\s*(?:<([^>\n]+)>|(\S+))/gm)) {
-      const label = normalize(m[1]!);
-      if (!references.has(label)) references.set(label, m[2] ?? m[3]!);
+  if (!markdown.includes("![") && !/<img/i.test(markdown)) return markdown;
+  const definitions = new Map<string, string>();
+  const images: (Image | ImageReference)[] = [];
+  const patches: { start: number; end: number; url: string }[] = [];
+  function visit(node: Nodes): void {
+    if (node.type === "definition" && !definitions.has(node.identifier)) definitions.set(node.identifier, node.url);
+    if (node.type === "image" || node.type === "imageReference") images.push(node);
+    if (node.type === "html") {
+      const start = node.position!.start.offset!, end = node.position!.end.offset!;
+      const parser = new Parser({ onopentag(name, attributes) {
+        if (name === "img" && attributes.src !== undefined) patches.push({
+          start: start + parser.startIndex, end: start + parser.endIndex + 1, url: attributes.src,
+        });
+      } }, { decodeEntities: true });
+      // Parse the original span: node.value can normalize CRLF and shift source offsets.
+      parser.end(markdown.slice(start, end));
     }
-    let result = "", copied = 0;
-    for (const match of text.matchAll(/!\[/g)) {
-      if (match.index < copied) continue;
-      const end = labelEnd(text, match.index + 2);
-      if (end < 0) continue;
-      let target = text[end + 1] === "(" ? destination(text, end + 2) : null;
-      if (!target) {
-        const explicit = text[end + 1] === "[", next = explicit ? text.indexOf("]", end + 2) : end;
-        if (next < 0) continue;
-        const alt = text.slice(match.index + 2, end);
-        const label = explicit ? text.slice(end + 2, next) || alt : alt;
-        const url = references.get(normalize(label));
-        if (url) target = { url, end: next + 1 };
-      }
-      if (!target) continue;
-      result += text.slice(copied, match.index) + link(target.url);
-      copied = target.end;
-    }
-    return result + text.slice(copied);
-  });
+    if ("children" in node) node.children.forEach(visit);
+  }
+  visit(fromMarkdown(markdown));
+  for (const image of images) {
+    const url = image.type === "image" ? image.url : definitions.get(image.identifier);
+    if (url !== undefined) patches.push({ start: image.position!.start.offset!, end: image.position!.end.offset!, url });
+  }
+  patches.sort((a, b) => a.start - b.start);
+  let result = "", copied = 0;
+  for (const patch of patches) {
+    result += markdown.slice(copied, patch.start) + link(patch.url);
+    copied = patch.end;
+  }
+  return result + markdown.slice(copied);
 }

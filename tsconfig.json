@@ -1,5 +1,5 @@
 {
-  // src/github/*.ts -> mods/github/*.js; scripts/build.sh copies the rest. Herdr's QuickJS:
+  // Type-check only; scripts/bundle.mjs produces the runtime ESM. Herdr's QuickJS:
   // no DOM/Node/Bun globals. See AGENTS.md.
   "compilerOptions": {
     "target": "ES2022",
@@ -9,14 +9,12 @@
     "types": [],
     "strict": true,
     "noImplicitOverride": true,
-    // "./x.ts" imports become "./x.js".
+    // esbuild resolves these imports into the self-contained bundle.
     "allowImportingTsExtensions": true,
-    "rewriteRelativeImportExtensions": true,
-    // Output = source minus types.
+    "noEmit": true,
+    // Keep application TypeScript erasable even though esbuild bundles it.
     "erasableSyntaxOnly": true,
     "verbatimModuleSyntax": true,
-    "rootDir": "src/github",
-    "outDir": "mods/github",
     "newLine": "lf",
     "skipLibCheck": true,
     "paths": {
