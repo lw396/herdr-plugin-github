@@ -1,14 +1,17 @@
 // One issue at a time in one native Herdr tab; links to its repository's issues open here, with Back.
-// The issue and its Back history are not restored after restart.
+// The issue and its Back history are not restored after restart. Comments, close and reopen are
+// announced to the other views (io/changes.ts); this one applies its own writes the same way.
 import { div, svg, type AsyncContext, type Context, type Element } from "gpui-kit";
-import { h_flex, v_flex, TextView } from "gpui-base";
+import { h_flex, v_flex, TextView, Textarea, TextareaState } from "gpui-base";
 import { nextCommand, props } from "herdr";
 import { issueKey, type IssueRef, type IssueDetail, type Comment, type Label } from "../core/issue-detail.ts";
 import { browserUrl, issueLink } from "../core/markdown.ts";
 import { relativeTime } from "../core/time.ts";
 import { describeAccount } from "../core/account.ts";
 import { detailMachine, issueCommand, navigatedDetail, readyDetail } from "../io/detail-tabs.ts";
-import { readIssue, readIssueProjects } from "../io/issues.ts";
+import { addComment, readIssue, readIssueProjects, setIssueState } from "../io/issues.ts";
+import { announce, Notices } from "../io/changes.ts";
+import { transient } from "../core/gh-args.ts";
 import type { Projects } from "../core/projects.ts";
 import { issueTimeline, activityText, type Activity } from "../core/activity.ts";
 import * as gh from "../io/gh.ts";
@@ -19,6 +22,8 @@ interface Loaded {
   issue?: IssueDetail;
   failure?: string;
   loading: boolean;
+  /** The machine whose gh read the issue: writes go through the same one. */
+  on?: string | null;
   projects?: Projects;
   projectsLoading: boolean;
 }
@@ -30,9 +35,21 @@ export class Issue implements Role {
   history: IssueRef[] = [];
   entry: Loaded | null = null;
   wide = false;
+  notices = new Notices();
+  /** The new comment being written; kept when posting fails, and through refreshes. */
+  box: TextareaState | null = null;
+  draft = "";
+  writing: "comment" | "state" | null = null;
+  writeFailure: string | null = null;
 
   init(cx: AsyncContext): void {
     this.reader = typeof props()?.reader === "string" ? props().reader : "";
+    const box = TextareaState.new({ placeholder: "Leave a comment (Markdown)" });
+    box.set_auto_grow(3, 12);
+    box.on("change", (_e, cx) => { this.draft = box.value(); cx.notify(); });
+    // Enter is a new line; ⌘/Ctrl+Enter posts.
+    box.on("submit", (e, cx) => { if (e.secondary) this.comment(cx); });
+    this.box = box;
     // Waiting is a read: init neither opens tabs nor writes shared state.
     cx.spawn(async cx => {
       for (; ;) {
@@ -63,6 +80,7 @@ export class Issue implements Role {
   /** The tab now shows, and is named after, that issue. */
   private show(cx: Context, ref: IssueRef): void {
     this.ref = ref;
+    this.writeFailure = null;
     navigatedDetail(this.reader, ref);
     this.load(cx);
     cx.notify();
@@ -89,6 +107,7 @@ export class Issue implements Role {
         const issue = await readIssue(ref.repo, ref.number, account.on);
         if (this.entry !== entry) return;
         entry.issue = issue;
+        entry.on = account.on;
         entry.projectsLoading = true;
         // Optional Projects load on their own: the discussion shows now.
         cx.spawn(async cx => {
@@ -105,8 +124,57 @@ export class Issue implements Role {
     });
   }
 
+  /** Posts the comment box's text; the box is emptied once GitHub has it. */
+  comment(cx: Context): void {
+    const body = this.draft;
+    this.write(cx, "comment", body.trim() !== "", async (repo, number, on) => {
+      const comment = await addComment(repo, number, body, on);
+      announce({ repo, number, comment });
+      this.draft = "";
+      this.box?.set_value("");
+    });
+  }
+
+  setState(cx: Context, state: "open" | "closed"): void {
+    this.write(cx, "state", true, async (repo, number, on) => announce({ repo, number, state: await setIssueState(repo, number, state, on) }));
+  }
+
+  /** One write at a time, through the gh that read the issue; a failure is said with gh's words. */
+  private write(cx: Context, kind: "comment" | "state", ready: boolean, act: (repo: string, number: number, on: string | null) => Promise<void>): void {
+    const ref = this.ref, entry = this.entry;
+    if (!ref || !entry?.issue || entry.on === undefined || this.writing || !ready) return;
+    const on = entry.on;
+    this.writing = kind;
+    this.writeFailure = null;
+    cx.notify();
+    cx.spawn(async cx => {
+      try {
+        await act(ref.repo, ref.number, on);
+      } catch (e) {
+        this.writeFailure = gh.failureOf(e).message;
+        // A dropped connection may still have reached GitHub: show what it has, so nothing is sent twice.
+        if (e instanceof gh.GhError && transient(e.stderr) && this.entry === entry) this.load(cx);
+      } finally {
+        this.writing = null;
+        cx.notify();
+      }
+    });
+  }
+
+  /** Writes announced by any view (this one too): a new comment joins the timeline, a new state shows. */
+  private receive(): void {
+    for (const notice of this.notices.take()) {
+      const issue = this.entry?.issue;
+      if (!issue || !this.ref || issueKey(notice) !== issueKey(this.ref)) continue;
+      const comment = notice.comment;
+      if (comment && !issue.comments.some(c => c.id === comment.id)) issue.comments = [...issue.comments, comment];
+      if (notice.state) issue.state = notice.state.state;
+    }
+  }
+
   render(_cx: Context): Element {
     if (this.reader) readyDetail(this.reader);
+    this.receive();
     const t = colors(), ref = this.ref, entry = this.entry, issue = entry?.issue;
     const url = issue?.url ?? (ref ? `https://github.com/${ref.repo}/issues/${ref.number}` : "");
     return v_flex().id("issue-reader").size_full().min_h(0).overflow_hidden().bg(t.background).text_color(t.foreground).text_size(14)
@@ -139,6 +207,27 @@ export class Issue implements Role {
         .child(issue ? this.document(issue) : div())));
   }
 
+  /** A new comment, and close / reopen: GitHub's own order of the two buttons. */
+  private composer(issue: IssueDetail): Element {
+    const t = colors(), box = this.box, open = issue.state === "open";
+    const action = (id: string, label: string, tip: string, enabled: boolean, primary: boolean, act: (cx: Context) => void) =>
+      h_flex().id(id).h(32).px(14).gap(6).items_center().rounded(6).border_1().text_size(13).font_medium()
+        .border_color(primary ? t.accent : t.border).bg(primary ? t.accent : t.raised).text_color(primary ? t.background : t.foreground)
+        .when(enabled, el => el.cursor_pointer().hover(s => s.opacity(0.85)).on_click((_e, cx) => { cx.stop_propagation(); act(cx); }))
+        .when(!enabled, el => el.opacity(0.5))
+        .tooltip(tip).accessibility_label(tip).on_mouse_down("left", stop).child(label);
+    const busy = this.writing !== null;
+    return v_flex().id("issue-composer").min_w(0).w_full().gap(10).pt(4)
+      .when(Boolean(box), el => el.child(div().min_w(0).rounded(8).border_1().border_color(t.border).bg(t.background).p(8)
+        .on_mouse_down("left", stop).child(Textarea.new(box!).w_full().text_size(13).text_color(t.foreground))))
+      .when(Boolean(this.writeFailure), el => el.child(div().text_size(12).text_color(t.blocked).child(this.writeFailure ?? "")))
+      .child(h_flex().gap(8).items_center().justify_end()
+        .when(busy, el => el.child(spinner(14)))
+        .child(action("issue-state", open ? "Close issue" : "Reopen issue", open ? `Close #${issue.number}` : `Reopen #${issue.number}`,
+          !busy, false, cx => this.setState(cx, open ? "closed" : "open")))
+        .child(action("issue-comment", "Comment", "Comment (⌘/Ctrl+Enter)", !busy && this.draft.trim() !== "", true, cx => this.comment(cx))));
+  }
+
   private back(): Element {
     const previous = this.history.at(-1)!;
     return button("issue-back", "←", `Back to #${previous.number}`, (_e, cx) => this.goBack(cx)).size(36).flex_none().flex().items_center().justify_center().text_size(22);
@@ -169,7 +258,8 @@ export class Issue implements Role {
       .when(this.wide, el => el.flex_1())
       .when(!this.wide, el => el.w_full().flex_none())
       .child(post("issue-body", issue, "opened this issue"))
-      .children(rows.map(row => row.type === "comment" ? post(`comment-${row.comment.id}`, row.comment, "commented") : this.activity(row.activity)));
+      .children(rows.map(row => row.type === "comment" ? post(`comment-${row.comment.id}`, row.comment, "commented") : this.activity(row.activity)))
+      .child(this.composer(issue));
     const metadata = this.metadata(issue);
     const content = this.wide
       ? h_flex().gap(24).items_start().child(timeline).child(metadata)

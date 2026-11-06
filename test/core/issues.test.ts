@@ -3,7 +3,7 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { appendPage, groupQuery, groupVariables, issuesNotice, noRepository, parseIssueGroup } from "../../src/github/core/issues.ts";
+import { appendPage, applyChange, groupQuery, groupVariables, issuesNotice, noRepository, parseIssueGroup } from "../../src/github/core/issues.ts";
 
 /** A real reply saved from gh (test/fixtures), as `data`. */
 const fixtureData = (name: string): unknown => JSON.parse(readFileSync(join(import.meta.dir, "../fixtures", name), "utf8")).data;
@@ -147,5 +147,33 @@ describe("noRepository: what the sidebar says in a folder without a GitHub remot
     expect(noRepository("/home/valian/work/").detail).toStartWith("work has no GitHub remote.");
     expect(noRepository("/").detail).toStartWith("/ has no GitHub remote.");
     expect(noRepository(null).detail).toBe("Focus a terminal in a repository cloned from GitHub.");
+  });
+});
+
+describe("applyChange: a group after an issue was closed or reopened in a reader", () => {
+  const row = (number: number, assignees: string[] = [], updatedAt = "2026-11-01T00:00:00Z") =>
+    ({ number, title: `issue ${number}`, assignees, updatedAt, url: `https://github.com/o/r/issues/${number}` });
+  const group = (total: number, ...issues: ReturnType<typeof row>[]) => ({ issuesEnabled: true, total, more: true, cursor: "c", issues });
+  const closed20 = { repo: "o/r", state: "closed" as const, issue: row(20, ["lw396"], "2026-11-06T18:23:20Z") };
+  const reopened20 = { repo: "o/r", state: "open" as const, issue: row(20, ["lw396"], "2026-11-06T18:23:21Z") };
+
+  test("closed: it leaves Assigned and Open, one fewer each, and heads Closed, one more", () => {
+    expect(applyChange("assigned", group(42, row(1), row(20, ["lw396"])), closed20, "lw396")).toEqual(group(41, row(1)));
+    expect(applyChange("open", group(42, row(20, ["lw396"]), row(2)), closed20, "lw396")).toEqual(group(41, row(2)));
+    expect(applyChange("closed", group(41, row(3)), closed20, "lw396")).toEqual(group(42, closed20.issue, row(3)));
+  });
+
+  test("reopened: it leaves Closed, heads Open, and heads Assigned only when assigned to this login", () => {
+    expect(applyChange("closed", group(42, row(20), row(3)), reopened20, "lw396")).toEqual(group(41, row(3)));
+    expect(applyChange("open", group(41, row(2)), reopened20, "lw396")).toEqual(group(42, reopened20.issue, row(2)));
+    expect(applyChange("assigned", group(41, row(1)), reopened20, "LW396")).toEqual(group(42, reopened20.issue, row(1)));
+    expect(applyChange("assigned", group(41, row(1)), reopened20, "someone")).toEqual(group(41, row(1)));
+  });
+
+  test("applied twice, or already shown where it belongs: nothing more changes", () => {
+    const once = applyChange("closed", group(41, row(3)), closed20, "lw396");
+    expect(applyChange("closed", once, closed20, "lw396")).toEqual(once);
+    // Not among the loaded rows (a later page): the next load corrects the count.
+    expect(applyChange("open", group(41, row(2)), closed20, "lw396")).toEqual(group(41, row(2)));
   });
 });

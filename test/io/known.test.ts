@@ -2,7 +2,7 @@
 // machine, repository and login, each fetched once and then kept. Replies are the real ones
 // used in gh.test.ts and issues.test.ts (test/fixtures).
 import { afterEach, describe, expect, test } from "bun:test";
-import { machine, reset } from "../fake-herdr.ts";
+import { execCalls, machine, reset } from "../fake-herdr.ts";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { groupQuery } from "../../src/github/core/issues.ts";
@@ -135,6 +135,22 @@ describe("issue groups", () => {
     const both = await known.more("open", CLI, "lw396", null, first);
     expect(both.issues).toHaveLength(60);
     expect(known.peekGroup("open", CLI, "lw396", null)?.issues).toHaveLength(60);
+  });
+
+  test("an issue closed in a reader leaves its kept groups at once; they are asked again on the next look", async () => {
+    machine(null, { [ASSIGNED]: { stdout: fixture("assigned-herdr-plugin-github.json") }, [OPEN_CLI]: { stdout: fixture("open-cli-1.json") } });
+    await known.group("assigned", REMOTE, "lw396", null);
+    const cli = await known.group("open", CLI, "lw396", null);
+    known.applyChange({
+      repo: "LW396/Herdr-Plugin-GitHub", state: "closed",
+      issue: { number: 12, title: "Issues 标签页：Open、Closed、折叠和加载更多", assignees: ["lw396"], updatedAt: "2026-11-06T18:00:00Z", url: "https://github.com/lw396/herdr-plugin-github/issues/12" },
+    });
+    expect(known.peekGroup("assigned", REMOTE, "lw396", null)).toMatchObject({ total: 0, issues: [] });
+    expect(known.peekGroup("open", CLI, "lw396", null)).toBe(cli);
+    machine(null, { [ASSIGNED]: { stdout: '{"data":{"repository":{"hasIssuesEnabled":true,"issues":{"totalCount":0,"pageInfo":{"hasNextPage":false,"endCursor":null},"nodes":[]}}}}' } });
+    await known.group("assigned", REMOTE, "lw396", null);
+    expect(execCalls().filter((c) => c.command === "gh")).toHaveLength(3);
+    expect(await known.group("open", CLI, "lw396", null)).toBe(cli);
   });
 
   test("↻ while Load more is still out: the refreshed first page stays, not the older rows plus page 2", async () => {

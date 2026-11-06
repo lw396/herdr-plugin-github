@@ -35,6 +35,8 @@ test("errorMessage takes gh's last line", () => {
 describe("transient: a dropped connection worth asking again (real gh 2.96 stderr on center, exit 1)", () => {
   test("GET dropped mid-way", () => expect(transient('Get "https://api.github.com/user": EOF\n')).toBe(true));
   test("GraphQL POST dropped mid-way", () => expect(transient('Post "https://api.github.com/graphql": EOF\n')).toBe(true));
+  test("closing an issue (PATCH) dropped mid-way", () =>
+    expect(transient('Patch "https://api.github.com/repos/lw396/no-such-repo-xyz/issues/1": EOF\n')).toBe(true));
   test("GitHub's own answers are not", () => {
     expect(transient("gh: Not Found (HTTP 404)\n")).toBe(false);
     expect(transient("gh: Bad credentials (HTTP 401)\n")).toBe(false);

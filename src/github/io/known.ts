@@ -6,7 +6,7 @@
 import { Cache } from "../core/cache.ts";
 import type { Account } from "../core/account.ts";
 import type { RemoteRepo } from "../core/remote.ts";
-import { appendPage, type GroupKind, type IssueGroup } from "../core/issues.ts";
+import { appendPage, applyChange as changed, type GroupKind, type IssueChange, type IssueGroup } from "../core/issues.ts";
 import * as gh from "./gh.ts";
 import { githubRemote } from "./git.ts";
 import { issuePage } from "./issues.ts";
@@ -37,6 +37,13 @@ function facts<T>(limit: number, fresh: number, keep: (value: T) => boolean) {
     /** Keeps `value` as the answer now (a page loaded by other means: Load more). */
     put(key: string, value: T): void {
       cache.set(key, value, Date.now());
+    },
+    /** Shows `change(value)` for every kept key until asked again: kept stale, and an answer still out is dropped. */
+    patch(match: (key: string) => boolean, change: (key: string, value: T) => T): void {
+      for (const key of cache.keys().filter(match)) {
+        cache.set(key, change(key, cache.get(key) as T), -Infinity);
+        asking.delete(key);
+      }
     },
     clear(): void {
       cache.clear();
@@ -83,6 +90,18 @@ export async function more(kind: GroupKind, r: RemoteRepo, login: string, on: st
   // Kept only if `loaded` is still what is kept: a ↻ in the meantime replaced it with newer rows.
   if (groups.peek(key) === loaded) groups.put(key, both);
   return both;
+}
+
+/**
+ * An issue closed or reopened (in a reader, maybe another view's): every kept group of its
+ * repository shows it where it now belongs at once, and is asked again on the next look.
+ */
+export function applyChange(change: IssueChange): void {
+  const repo = `github.com/${change.repo}`.toLowerCase();
+  groups.patch((key) => key.split("\n")[2]?.toLowerCase() === repo, (key, group) => {
+    const [kind, , , login] = key.split("\n");
+    return changed(kind as GroupKind, group, change, login ?? "");
+  });
 }
 
 /** Forgets everything (tests). */

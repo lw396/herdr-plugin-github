@@ -65,7 +65,7 @@ export function errorMessage(stderr: string): string {
  * not an answer from GitHub: asking again usually works.
  */
 export function transient(stderr: string): boolean {
-  return /^(GET|POST|Get|Post) "https?:\/\/[^"]+": EOF$/m.test(stderr);
+  return /^(GET|POST|PATCH|Get|Post|Patch) "https?:\/\/[^"]+": EOF$/m.test(stderr);
 }
 
 /** gh's failure (its stderr or message) as the sidebar says it: plain words for the network, else gh's own. */

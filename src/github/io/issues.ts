@@ -1,9 +1,9 @@
 // Issues from GitHub, through gh on the folder/reader's machine (ADR 0003).
-import { groupQuery, groupVariables, parseIssueGroup, type GroupKind, type IssueGroup } from "../core/issues.ts";
+import { groupQuery, groupVariables, parseIssueChange, parseIssueGroup, type GroupKind, type IssueChange, type IssueGroup } from "../core/issues.ts";
 import type { RemoteRepo } from "../core/remote.ts";
 import { api, graphql } from "./gh.ts";
 import { PROJECTS_QUERY, projectPage, projectsFailure, type Project, type Projects } from "../core/projects.ts";
-import { parseIssueDetail, type IssueDetail } from "../core/issue-detail.ts";
+import { parseComment, parseIssueDetail, type Comment, type IssueDetail } from "../core/issue-detail.ts";
 
 /**
  * One page of a group in the repository, asked with the gh on `on` (whose account is `login`,
@@ -24,6 +24,17 @@ export async function readIssue(repo: string, number: number, on: string | null)
     api(`${path}/timeline?per_page=100`, { on, paginate: true }),
   ]);
   return parseIssueDetail(issue, timeline);
+}
+
+/** Posts a new comment; resolves with it as the timeline shows it. A write is never asked twice (see gh()). */
+export async function addComment(repo: string, number: number, body: string, on: string | null): Promise<Comment> {
+  const comment = await api(`repos/${repo}/issues/${number}/comments`, { on, method: "POST", rawFields: { body } });
+  return parseComment(comment, `https://github.com/${repo}/issues/${number}`);
+}
+
+/** Closes or reopens the issue; resolves with its new state and row, for the sidebar's groups. */
+export async function setIssueState(repo: string, number: number, state: IssueChange["state"], on: string | null): Promise<IssueChange> {
+  return parseIssueChange(await api(`repos/${repo}/issues/${number}`, { on, method: "PATCH", rawFields: { state } }), repo);
 }
 
 /** Optional metadata: lack of Projects access must never hide the issue body or comments. */

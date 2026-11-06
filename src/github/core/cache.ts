@@ -9,6 +9,10 @@ export class Cache<T> {
     this.limit = limit;
   }
 
+  keys(): string[] {
+    return [...this.entries.keys()];
+  }
+
   has(key: string): boolean {
     return this.entries.has(key);
   }

@@ -11,6 +11,7 @@ import { issuesNotice, noRepository, type Failure, type GroupKind, type Issue, t
 import { relativeTime } from "../core/time.ts";
 import { colors, stop, button, spinner, type Role } from "./ui.ts";
 import { DetailTabs } from "../io/detail-tabs.ts";
+import { Notices } from "../io/changes.ts";
 
 /** The Issues tab's groups, in order: title, and what an empty one says. */
 const GROUPS: { kind: GroupKind; title: string; empty: string }[] = [
@@ -48,6 +49,7 @@ export class Panel implements Role {
   hovered: string | null = null;
   details = new DetailTabs();
   openFailure: string | null = null;
+  notices = new Notices();
 
   init(cx: AsyncContext): void {
     this.refresh(cx);
@@ -156,9 +158,24 @@ export class Panel implements Role {
     });
   }
 
+  /**
+   * An issue closed or reopened in a reader: every kept group of its repository shows it at once,
+   * then the shown expanded groups ask GitHub again (the change made them stale).
+   */
+  receive(cx: Context): void {
+    const changes = this.notices.take().flatMap((n) => (n.state ? [n.state] : []));
+    if (changes.length === 0) return;
+    changes.forEach(known.applyChange);
+    for (const { kind } of GROUPS) {
+      this.show(kind);
+      this.load(cx, kind);
+    }
+  }
+
   render(cx: Context): Element {
     // Readiness is live shared metadata, not a timer or persisted issue selection.
     this.details.deliver();
+    this.receive(cx);
     // Follow the focused folder: live data re-renders us, so compare here.
     if (locationKey() !== this.context) this.refresh(cx);
     const t = colors(), where = location(), overlay: string | undefined = props()?.overlay;

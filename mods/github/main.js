@@ -75,7 +75,7 @@ function errorMessage(stderr) {
   return lines.at(-1) ?? "gh failed";
 }
 function transient(stderr) {
-  return /^(GET|POST|Get|Post) "https?:\/\/[^"]+": EOF$/m.test(stderr);
+  return /^(GET|POST|PATCH|Get|Post|Patch) "https?:\/\/[^"]+": EOF$/m.test(stderr);
 }
 function explain(stderr) {
   if (transient(stderr)) return "The connection to GitHub dropped. Try again.";
@@ -147,6 +147,9 @@ var Cache = class {
   constructor(limit) {
     this.limit = limit;
   }
+  keys() {
+    return [...this.entries.keys()];
+  }
   has(key) {
     return this.entries.has(key);
   }
@@ -186,6 +189,14 @@ function describeAccount(account3) {
 }
 
 // src/github/core/issues.ts
+function parseIssueChange(data, repo) {
+  const i = data;
+  return {
+    repo,
+    state: i.state,
+    issue: { number: i.number, title: i.title, assignees: i.assignees.map((a) => a.login), updatedAt: i.updated_at, url: i.html_url }
+  };
+}
 var PAGE = 30;
 function groupQuery(kind) {
   const assigned = kind === "assigned";
@@ -202,6 +213,13 @@ function groupQuery(kind) {
 }
 function groupVariables(kind, remote2, login, after) {
   return { owner: remote2.owner, name: remote2.repo, after, ...kind === "assigned" ? { assignee: login } : {} };
+}
+function applyChange(kind, group2, change, login) {
+  const belongs = change.state === "closed" ? kind === "closed" : kind === "open" || kind === "assigned" && change.issue.assignees.some((a) => a.toLowerCase() === login.toLowerCase());
+  const others = group2.issues.filter((i) => i.number !== change.issue.number);
+  const shown = others.length < group2.issues.length;
+  if (belongs) return { ...group2, total: group2.total + (shown ? 0 : 1), issues: [change.issue, ...others] };
+  return shown ? { ...group2, total: group2.total - 1, issues: others } : group2;
 }
 function appendPage(group2, page) {
   const shown = new Set(group2.issues.map((i) => i.number));
@@ -9737,6 +9755,20 @@ var EMOJI = [
   ["rocket", "\u{1F680}"],
   ["eyes", "\u{1F440}"]
 ];
+function parseComment(comment, issueUrl) {
+  const c = comment;
+  return {
+    id: c.id,
+    author: c.user?.login ?? "deleted user",
+    createdAt: c.created_at,
+    body: c.body ?? "",
+    markdown: readerMarkdown(c.body ?? "", issueUrl),
+    reactions: EMOJI.flatMap(([key, emoji]) => {
+      const count = c.reactions[key];
+      return typeof count === "number" && count > 0 ? [{ emoji, count }] : [];
+    })
+  };
+}
 function parseIssueDetail(issue, timeline) {
   const i = issue, events = timeline;
   return {
@@ -9752,17 +9784,7 @@ function parseIssueDetail(issue, timeline) {
     body: i.body ?? "",
     markdown: readerMarkdown(i.body ?? "", i.html_url),
     activities: parseActivity(events),
-    comments: events.filter((e) => e.event === "commented").map((c) => ({
-      id: c.id,
-      author: c.user?.login ?? "deleted user",
-      createdAt: c.created_at,
-      body: c.body ?? "",
-      markdown: readerMarkdown(c.body ?? "", i.html_url),
-      reactions: EMOJI.flatMap(([key, emoji]) => {
-        const count = c.reactions[key];
-        return typeof count === "number" && count > 0 ? [{ emoji, count }] : [];
-      })
-    })).sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id - b.id)
+    comments: events.filter((e) => e.event === "commented").map((c) => parseComment(c, i.html_url)).sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id - b.id)
   };
 }
 
@@ -9777,6 +9799,13 @@ async function readIssue(repo, number, on) {
     api(`${path}/timeline?per_page=100`, { on, paginate: true })
   ]);
   return parseIssueDetail(issue, timeline);
+}
+async function addComment(repo, number, body, on) {
+  const comment = await api(`repos/${repo}/issues/${number}/comments`, { on, method: "POST", rawFields: { body } });
+  return parseComment(comment, `https://github.com/${repo}/issues/${number}`);
+}
+async function setIssueState(repo, number, state, on) {
+  return parseIssueChange(await api(`repos/${repo}/issues/${number}`, { on, method: "PATCH", rawFields: { state } }), repo);
 }
 async function readIssueProjects(repo, number, on) {
   const [owner, name] = repo.split("/");
@@ -9819,6 +9848,13 @@ function facts(limit, fresh, keep) {
     put(key, value) {
       cache.set(key, value, Date.now());
     },
+    /** Shows `change(value)` for every kept key until asked again: kept stale, and an answer still out is dropped. */
+    patch(match, change) {
+      for (const key of cache.keys().filter(match)) {
+        cache.set(key, change(key, cache.get(key)), -Infinity);
+        asking.delete(key);
+      }
+    },
     clear() {
       cache.clear();
       asking.clear();
@@ -9846,6 +9882,13 @@ async function more(kind, r, login, on, loaded) {
   const both = appendPage(loaded, await issuePage(kind, r, login, on, loaded.cursor));
   if (groups.peek(key) === loaded) groups.put(key, both);
   return both;
+}
+function applyChange2(change) {
+  const repo = `github.com/${change.repo}`.toLowerCase();
+  groups.patch((key) => key.split("\n")[2]?.toLowerCase() === repo, (key, group2) => {
+    const [kind, , , login] = key.split("\n");
+    return applyChange(kind, group2, change, login ?? "");
+  });
 }
 
 // src/github/core/time.ts
@@ -9980,6 +10023,26 @@ function issueCommand(command, id) {
   }
 }
 
+// src/github/io/changes.ts
+import { shared as shared2, setShared as setShared2 } from "herdr";
+var CHANGES = "github.changes";
+var KEPT = 20;
+var log = () => shared2(CHANGES) ?? { last: 0, notices: [] };
+function announce(notice) {
+  const { last, notices } = log(), seq = last + 1;
+  setShared2(CHANGES, { last: seq, notices: [...notices, { seq, notice }].slice(-KEPT) });
+}
+var Notices = class {
+  seen = log().last;
+  /** Notices announced since the last take, oldest first. */
+  take() {
+    const { last, notices } = log();
+    const fresh = notices.filter((n) => n.seq > this.seen).map((n) => n.notice);
+    this.seen = last;
+    return fresh;
+  }
+};
+
 // src/github/views/panel.ts
 var GROUPS = [
   // One word like the others; the empty text says whose.
@@ -10006,6 +10069,7 @@ var Panel = class {
   hovered = null;
   details = new DetailTabs();
   openFailure = null;
+  notices = new Notices();
   init(cx) {
     this.refresh(cx);
   }
@@ -10102,8 +10166,22 @@ var Panel = class {
       }
     });
   }
+  /**
+   * An issue closed or reopened in a reader: every kept group of its repository shows it at once,
+   * then the shown expanded groups ask GitHub again (the change made them stale).
+   */
+  receive(cx) {
+    const changes = this.notices.take().flatMap((n) => n.state ? [n.state] : []);
+    if (changes.length === 0) return;
+    changes.forEach(applyChange2);
+    for (const { kind } of GROUPS) {
+      this.show(kind);
+      this.load(cx, kind);
+    }
+  }
   render(cx) {
     this.details.deliver();
+    this.receive(cx);
     if (locationKey() !== this.context) this.refresh(cx);
     const t = colors(), where = location(), overlay = props()?.overlay;
     const repo = this.remote ? `${this.remote.owner}/${this.remote.repo}` : "";
@@ -10152,7 +10230,7 @@ var Panel = class {
 
 // src/github/views/issue.ts
 import { div as div3, svg as svg3 } from "gpui-kit";
-import { h_flex as h_flex2, v_flex as v_flex2, TextView } from "gpui-base";
+import { h_flex as h_flex2, v_flex as v_flex2, TextView, Textarea, TextareaState } from "gpui-base";
 import { nextCommand, props as props2 } from "herdr";
 var Issue = class {
   reader = "";
@@ -10161,8 +10239,24 @@ var Issue = class {
   history = [];
   entry = null;
   wide = false;
+  notices = new Notices();
+  /** The new comment being written; kept when posting fails, and through refreshes. */
+  box = null;
+  draft = "";
+  writing = null;
+  writeFailure = null;
   init(cx) {
     this.reader = typeof props2()?.reader === "string" ? props2().reader : "";
+    const box = TextareaState.new({ placeholder: "Leave a comment (Markdown)" });
+    box.set_auto_grow(3, 12);
+    box.on("change", (_e, cx2) => {
+      this.draft = box.value();
+      cx2.notify();
+    });
+    box.on("submit", (e, cx2) => {
+      if (e.secondary) this.comment(cx2);
+    });
+    this.box = box;
     cx.spawn(async (cx2) => {
       for (; ; ) {
         const ref = issueCommand(await nextCommand(), this.reader);
@@ -10188,6 +10282,7 @@ var Issue = class {
   /** The tab now shows, and is named after, that issue. */
   show(cx, ref) {
     this.ref = ref;
+    this.writeFailure = null;
     navigatedDetail(this.reader, ref);
     this.load(cx);
     cx.notify();
@@ -10211,6 +10306,7 @@ var Issue = class {
         const issue = await readIssue(ref.repo, ref.number, account3.on);
         if (this.entry !== entry) return;
         entry.issue = issue;
+        entry.on = account3.on;
         entry.projectsLoading = true;
         cx2.spawn(async (cx3) => {
           const projects = await readIssueProjects(ref.repo, ref.number, account3.on);
@@ -10231,8 +10327,52 @@ var Issue = class {
       }
     });
   }
+  /** Posts the comment box's text; the box is emptied once GitHub has it. */
+  comment(cx) {
+    const body = this.draft;
+    this.write(cx, "comment", body.trim() !== "", async (repo, number, on) => {
+      const comment = await addComment(repo, number, body, on);
+      announce({ repo, number, comment });
+      this.draft = "";
+      this.box?.set_value("");
+    });
+  }
+  setState(cx, state) {
+    this.write(cx, "state", true, async (repo, number, on) => announce({ repo, number, state: await setIssueState(repo, number, state, on) }));
+  }
+  /** One write at a time, through the gh that read the issue; a failure is said with gh's words. */
+  write(cx, kind, ready, act) {
+    const ref = this.ref, entry = this.entry;
+    if (!ref || !entry?.issue || entry.on === void 0 || this.writing || !ready) return;
+    const on = entry.on;
+    this.writing = kind;
+    this.writeFailure = null;
+    cx.notify();
+    cx.spawn(async (cx2) => {
+      try {
+        await act(ref.repo, ref.number, on);
+      } catch (e) {
+        this.writeFailure = failureOf(e).message;
+        if (e instanceof GhError && transient(e.stderr) && this.entry === entry) this.load(cx2);
+      } finally {
+        this.writing = null;
+        cx2.notify();
+      }
+    });
+  }
+  /** Writes announced by any view (this one too): a new comment joins the timeline, a new state shows. */
+  receive() {
+    for (const notice of this.notices.take()) {
+      const issue = this.entry?.issue;
+      if (!issue || !this.ref || issueKey(notice) !== issueKey(this.ref)) continue;
+      const comment = notice.comment;
+      if (comment && !issue.comments.some((c) => c.id === comment.id)) issue.comments = [...issue.comments, comment];
+      if (notice.state) issue.state = notice.state.state;
+    }
+  }
   render(_cx) {
     if (this.reader) readyDetail(this.reader);
+    this.receive();
     const t = colors(), ref = this.ref, entry = this.entry, issue = entry?.issue;
     const url = issue?.url ?? (ref ? `https://github.com/${ref.repo}/issues/${ref.number}` : "");
     return v_flex2().id("issue-reader").size_full().min_h(0).overflow_hidden().bg(t.background).text_color(t.foreground).text_size(14).on_size_change((size, cx) => {
@@ -10248,6 +10388,23 @@ var Issue = class {
       this.load(cx);
       cx.notify();
     }).size(36).flex_none().flex().items_center().justify_center().text_size(22)))).when(Boolean(ref), (el) => el.child(v_flex2().id(`issue-scroll-${ref ? issueKey(ref) : ""}`).flex_1().min_h(0).overflow_y_scroll().px(24).pb(18).gap(12).when(Boolean(entry?.loading), (el2) => el2.child(div3().text_size(12).text_color(t.dim).child("Loading issue\u2026"))).when(Boolean(entry?.failure), (el2) => el2.child(div3().text_color(t.blocked).child(entry?.failure ?? ""))).child(issue ? this.document(issue) : div3())));
+  }
+  /** A new comment, and close / reopen: GitHub's own order of the two buttons. */
+  composer(issue) {
+    const t = colors(), box = this.box, open = issue.state === "open";
+    const action = (id, label, tip, enabled, primary, act) => h_flex2().id(id).h(32).px(14).gap(6).items_center().rounded(6).border_1().text_size(13).font_medium().border_color(primary ? t.accent : t.border).bg(primary ? t.accent : t.raised).text_color(primary ? t.background : t.foreground).when(enabled, (el) => el.cursor_pointer().hover((s) => s.opacity(0.85)).on_click((_e, cx) => {
+      cx.stop_propagation();
+      act(cx);
+    })).when(!enabled, (el) => el.opacity(0.5)).tooltip(tip).accessibility_label(tip).on_mouse_down("left", stop).child(label);
+    const busy = this.writing !== null;
+    return v_flex2().id("issue-composer").min_w(0).w_full().gap(10).pt(4).when(Boolean(box), (el) => el.child(div3().min_w(0).rounded(8).border_1().border_color(t.border).bg(t.background).p(8).on_mouse_down("left", stop).child(Textarea.new(box).w_full().text_size(13).text_color(t.foreground)))).when(Boolean(this.writeFailure), (el) => el.child(div3().text_size(12).text_color(t.blocked).child(this.writeFailure ?? ""))).child(h_flex2().gap(8).items_center().justify_end().when(busy, (el) => el.child(spinner(14))).child(action(
+      "issue-state",
+      open ? "Close issue" : "Reopen issue",
+      open ? `Close #${issue.number}` : `Reopen #${issue.number}`,
+      !busy,
+      false,
+      (cx) => this.setState(cx, open ? "closed" : "open")
+    )).child(action("issue-comment", "Comment", "Comment (\u2318/Ctrl+Enter)", !busy && this.draft.trim() !== "", true, (cx) => this.comment(cx))));
   }
   back() {
     const previous3 = this.history.at(-1);
@@ -10265,7 +10422,7 @@ var Issue = class {
       if (external) cx.open_url(external);
     })).when(Boolean(p.reactions?.length), (el) => el.child(h_flex2().gap(6).flex_wrap().children((p.reactions ?? []).map((r) => div3().px(8).py(3).rounded(12).border_1().border_color(t.border).bg(t.raised).text_size(12).child(`${r.emoji} ${r.count}`))))));
     const rows = issueTimeline(issue.comments, issue.activities);
-    const timeline = v_flex2().min_w(0).gap(20).when(this.wide, (el) => el.flex_1()).when(!this.wide, (el) => el.w_full().flex_none()).child(post("issue-body", issue, "opened this issue")).children(rows.map((row) => row.type === "comment" ? post(`comment-${row.comment.id}`, row.comment, "commented") : this.activity(row.activity)));
+    const timeline = v_flex2().min_w(0).gap(20).when(this.wide, (el) => el.flex_1()).when(!this.wide, (el) => el.w_full().flex_none()).child(post("issue-body", issue, "opened this issue")).children(rows.map((row) => row.type === "comment" ? post(`comment-${row.comment.id}`, row.comment, "commented") : this.activity(row.activity))).child(this.composer(issue));
     const metadata = this.metadata(issue);
     const content3 = this.wide ? h_flex2().gap(24).items_start().child(timeline).child(metadata) : v_flex2().gap(20).child(metadata).child(timeline);
     return v_flex2().gap(18).child(h_flex2().gap(10).pb(4).items_center().flex_wrap().child(div3().px(10).py(4).rounded(14).bg(issue.state === "open" ? `${t.done}26` : `${t.accent}26`).text_size(13).font_semibold().text_color(issue.state === "open" ? t.done : t.accent).child(issue.state === "open" ? "\u25CB Open" : "\u25CF Closed")).child(div3().text_size(13).font_medium().child(issue.author))).child(content3);

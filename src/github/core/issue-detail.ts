@@ -37,9 +37,9 @@ export interface IssueDetail {
   activities: Activity[];
 }
 
-/** A timeline "commented" event: the same fields as the comments endpoint's comment. */
+/** A comments endpoint's comment; a timeline "commented" event has the same fields and its `event`. */
 interface RestComment {
-  event: string;
+  event?: string;
   id: number;
   user: { login: string } | null;
   created_at: string;
@@ -65,6 +65,18 @@ const EMOJI: [string, string][] = [
   ["confused", "😕"], ["heart", "❤️"], ["rocket", "🚀"], ["eyes", "👀"],
 ];
 
+/** A REST comment as the reader shows it (non-zero reaction counts); `issueUrl` resolves its #123 references. */
+export function parseComment(comment: unknown, issueUrl: string): Comment {
+  const c = comment as RestComment;
+  return {
+    id: c.id, author: c.user?.login ?? "deleted user", createdAt: c.created_at, body: c.body ?? "", markdown: readerMarkdown(c.body ?? "", issueUrl),
+    reactions: EMOJI.flatMap(([key, emoji]) => {
+      const count = c.reactions[key];
+      return typeof count === "number" && count > 0 ? [{ emoji, count }] : [];
+    }),
+  };
+}
+
 /** GitHub's REST issue and timeline, with comments in creation order and non-zero reaction counts. */
 export function parseIssueDetail(issue: unknown, timeline: unknown): IssueDetail {
   const i = issue as RestIssue, events = timeline as RestComment[];
@@ -73,12 +85,6 @@ export function parseIssueDetail(issue: unknown, timeline: unknown): IssueDetail
     createdAt: i.created_at, url: i.html_url, labels: i.labels.map(parseLabel),
     assignees: i.assignees.map(a => a.login), milestone: i.milestone?.title ?? null,
     body: i.body ?? "", markdown: readerMarkdown(i.body ?? "", i.html_url), activities: parseActivity(events),
-    comments: events.filter(e => e.event === "commented").map(c => ({
-      id: c.id, author: c.user?.login ?? "deleted user", createdAt: c.created_at, body: c.body ?? "", markdown: readerMarkdown(c.body ?? "", i.html_url),
-      reactions: EMOJI.flatMap(([key, emoji]) => {
-        const count = c.reactions[key];
-        return typeof count === "number" && count > 0 ? [{ emoji, count }] : [];
-      }),
-    })).sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id - b.id),
+    comments: events.filter(e => e.event === "commented").map(c => parseComment(c, i.html_url)).sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id - b.id),
   };
 }
