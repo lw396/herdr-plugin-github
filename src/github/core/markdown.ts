@@ -19,15 +19,20 @@ function githubPath(href: string): string[] | null {
   return url.pathname.split("/").filter(Boolean);
 }
 
+/** The github.com repository an issue URL belongs to, as owner/repo; otherwise null. */
+function ownRepository(issueUrl: string): string | null {
+  const own = githubPath(issueUrl);
+  return own && own.length >= 2 ? `${own[0]}/${own[1]}` : null;
+}
+
 /** An issue of the reader's own repository (the issue URL's repository), resolved like browserUrl; otherwise null. */
 export function issueLink(href: string, issueUrl: string): { repo: string; number: number } | null {
   const target = browserUrl(href, issueUrl);
-  if (!target) return null;
-  const own = githubPath(issueUrl), path = githubPath(target);
-  if (!own || !path || own.length < 2 || path.length !== 4 || path[2] !== "issues" || !/^[1-9]\d*$/.test(path[3]!)) return null;
+  const repo = ownRepository(issueUrl), own = repo?.split("/"), path = target ? githubPath(target) : null;
+  if (!repo || !own || !path || path.length !== 4 || path[2] !== "issues" || !/^[1-9]\d*$/.test(path[3]!)) return null;
   if (path[0]!.toLowerCase() !== own[0]!.toLowerCase() || path[1]!.toLowerCase() !== own[1]!.toLowerCase()) return null;
   const number = Number(path[3]);
-  return Number.isSafeInteger(number) ? { repo: `${own[0]}/${own[1]}`, number } : null;
+  return Number.isSafeInteger(number) ? { repo, number } : null;
 }
 
 const link = (text: string, url: string): string => `[${text}](<${url.replace(/</g, "%3C").replace(/>/g, "%3E")}>)`;
@@ -37,7 +42,7 @@ export function readerMarkdown(body: string, issueUrl: string): string {
   return links(body || "_No text._", issueUrl);
 }
 
-/** Images become browser links; source offsets preserve all other Markdown verbatim. */
+/** Images only (no issue to resolve references against); source offsets preserve all other Markdown verbatim. */
 export function imageLinks(markdown: string): string {
   return links(markdown, null);
 }
@@ -45,12 +50,15 @@ export function imageLinks(markdown: string): string {
 // GitHub's autolinked reference: #<number> after a non-word character, not followed by a word character.
 const REFERENCE = /#([1-9]\d*)(?![\w-])/g;
 const BEFORE_REFERENCE = /[\s([{"',;:!?*_~]/;
+// A ; that ends a character reference (&amp; &#38; &#x26;) is not punctuation before a reference.
+const CHARACTER_REFERENCE = /&(?:[a-z][a-z\d]*|#\d+|#x[\da-f]+);$/i;
 
 /** One parse for both rewrites (parsing is slow in QuickJS); a null issue URL rewrites images only. */
 function links(markdown: string, issueUrl: string | null): string {
-  const references = issueUrl !== null && /#[1-9]/.test(markdown);
+  // #123 links only where issueLink would open it in the reader: a github.com issue's own repository.
+  const repository = issueUrl === null ? null : ownRepository(issueUrl);
+  const references = repository !== null && /#[1-9]/.test(markdown);
   if (!references && !markdown.includes("![") && !/<img/i.test(markdown)) return markdown;
-  const repository = issueUrl?.replace(/\/issues\/\d+.*$/, "");
   const definitions = new Map<string, string>();
   const images: (Image | ImageReference)[] = [];
   const patches: { start: number; end: number; text: string; url: string }[] = [];
@@ -61,8 +69,9 @@ function links(markdown: string, issueUrl: string | null): string {
       // Match the source, not node.value: escapes and character references are not references.
       for (const match of markdown.slice(start, end).matchAll(REFERENCE)) {
         const at = start + match.index!, before = markdown[at - 1];
-        if (before === undefined || BEFORE_REFERENCE.test(before)) patches.push({
-          start: at, end: at + match[0].length, text: match[0], url: `${repository}/issues/${match[1]}`,
+        if (before !== undefined && (!BEFORE_REFERENCE.test(before) || CHARACTER_REFERENCE.test(markdown.slice(Math.max(0, at - 12), at)))) continue;
+        patches.push({
+          start: at, end: at + match[0].length, text: match[0], url: `https://github.com/${repository}/issues/${match[1]}`,
         });
       }
     }

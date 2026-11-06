@@ -49,9 +49,19 @@ export class Issue implements Role {
     });
   }
 
-  /** Follow a link (or go Back): the tab now shows, and is named after, that issue. */
-  show(cx: Context, ref: IssueRef, back: boolean): void {
-    if (this.ref && !back) this.history.push(this.ref);
+  /** Follow a link: Back returns to the issue shown now. */
+  follow(cx: Context, ref: IssueRef): void {
+    if (this.ref) this.history.push(this.ref);
+    this.show(cx, ref);
+  }
+
+  goBack(cx: Context): void {
+    const ref = this.history.pop();
+    if (ref) this.show(cx, ref);
+  }
+
+  /** The tab now shows, and is named after, that issue. */
+  private show(cx: Context, ref: IssueRef): void {
     this.ref = ref;
     navigatedDetail(this.reader, ref);
     this.load(cx);
@@ -131,10 +141,7 @@ export class Issue implements Role {
 
   private back(): Element {
     const previous = this.history.at(-1)!;
-    return button("issue-back", "←", `Back to #${previous.number}`, (_e, cx) => {
-      const ref = this.history.pop();
-      if (ref) this.show(cx, ref, true);
-    }).size(36).flex_none().flex().items_center().justify_center().text_size(22);
+    return button("issue-back", "←", `Back to #${previous.number}`, (_e, cx) => this.goBack(cx)).size(36).flex_none().flex().items_center().justify_center().text_size(22);
   }
 
   private document(issue: IssueDetail): Element {
@@ -151,7 +158,7 @@ export class Issue implements Role {
             .on_link_click((url, cx) => {
               const linked = issueLink(url, issue.url);
               // A link to the shown issue itself (e.g. one of its comments) has nothing new to show.
-              if (linked) { if (this.ref && issueKey(linked) !== issueKey(this.ref)) this.show(cx, linked, false); return; }
+              if (linked) { if (this.ref && issueKey(linked) !== issueKey(this.ref)) this.follow(cx, linked); return; }
               const external = browserUrl(url, issue.url);
               if (external) cx.open_url(external);
             }))

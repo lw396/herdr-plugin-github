@@ -93,7 +93,8 @@ export function navigatedDetail(id: string, issue: IssueRef): void {
   const r = reader(id), space = spaces().find(s => s.tabs.some(t => t.id === r?.tab));
   if (!r || !space) return;
   remember(id, { ...r, identity: `${space.id}:${issueKey(issue)}` });
-  run("tab.rename", { id: r.tab, name: issueTabName(issue) });
+  const name = issueTabName(issue);
+  if (space.tabs.find(t => t.id === r.tab)?.name !== name) run("tab.rename", { id: r.tab, name });
 }
 
 /** The native reader tab's space determines gh's machine, never current focus. */

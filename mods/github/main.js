@@ -9651,14 +9651,17 @@ function githubPath(href) {
   if (url.hostname !== "github.com" && url.hostname !== "www.github.com") return null;
   return url.pathname.split("/").filter(Boolean);
 }
+function ownRepository(issueUrl) {
+  const own3 = githubPath(issueUrl);
+  return own3 && own3.length >= 2 ? `${own3[0]}/${own3[1]}` : null;
+}
 function issueLink(href, issueUrl) {
   const target = browserUrl(href, issueUrl);
-  if (!target) return null;
-  const own3 = githubPath(issueUrl), path = githubPath(target);
-  if (!own3 || !path || own3.length < 2 || path.length !== 4 || path[2] !== "issues" || !/^[1-9]\d*$/.test(path[3])) return null;
+  const repo = ownRepository(issueUrl), own3 = repo?.split("/"), path = target ? githubPath(target) : null;
+  if (!repo || !own3 || !path || path.length !== 4 || path[2] !== "issues" || !/^[1-9]\d*$/.test(path[3])) return null;
   if (path[0].toLowerCase() !== own3[0].toLowerCase() || path[1].toLowerCase() !== own3[1].toLowerCase()) return null;
   const number = Number(path[3]);
-  return Number.isSafeInteger(number) ? { repo: `${own3[0]}/${own3[1]}`, number } : null;
+  return Number.isSafeInteger(number) ? { repo, number } : null;
 }
 var link = (text3, url) => `[${text3}](<${url.replace(/</g, "%3C").replace(/>/g, "%3E")}>)`;
 function readerMarkdown(body, issueUrl) {
@@ -9666,10 +9669,11 @@ function readerMarkdown(body, issueUrl) {
 }
 var REFERENCE = /#([1-9]\d*)(?![\w-])/g;
 var BEFORE_REFERENCE = /[\s([{"',;:!?*_~]/;
+var CHARACTER_REFERENCE = /&(?:[a-z][a-z\d]*|#\d+|#x[\da-f]+);$/i;
 function links(markdown, issueUrl) {
-  const references = issueUrl !== null && /#[1-9]/.test(markdown);
+  const repository = issueUrl === null ? null : ownRepository(issueUrl);
+  const references = repository !== null && /#[1-9]/.test(markdown);
   if (!references && !markdown.includes("![") && !/<img/i.test(markdown)) return markdown;
-  const repository = issueUrl?.replace(/\/issues\/\d+.*$/, "");
   const definitions = /* @__PURE__ */ new Map();
   const images = [];
   const patches = [];
@@ -9678,11 +9682,12 @@ function links(markdown, issueUrl) {
       const start = node2.position.start.offset, end = node2.position.end.offset;
       for (const match of markdown.slice(start, end).matchAll(REFERENCE)) {
         const at = start + match.index, before = markdown[at - 1];
-        if (before === void 0 || BEFORE_REFERENCE.test(before)) patches.push({
+        if (before !== void 0 && (!BEFORE_REFERENCE.test(before) || CHARACTER_REFERENCE.test(markdown.slice(Math.max(0, at - 12), at)))) continue;
+        patches.push({
           start: at,
           end: at + match[0].length,
           text: match[0],
-          url: `${repository}/issues/${match[1]}`
+          url: `https://github.com/${repository}/issues/${match[1]}`
         });
       }
     }
@@ -9956,7 +9961,8 @@ function navigatedDetail(id, issue) {
   const r = reader(id), space = spaces2().find((s) => s.tabs.some((t) => t.id === r?.tab));
   if (!r || !space) return;
   remember(id, { ...r, identity: `${space.id}:${issueKey(issue)}` });
-  run("tab.rename", { id: r.tab, name: issueTabName(issue) });
+  const name = issueTabName(issue);
+  if (space.tabs.find((t) => t.id === r.tab)?.name !== name) run("tab.rename", { id: r.tab, name });
 }
 function detailMachine(id) {
   const tab = reader(id)?.tab;
@@ -10170,9 +10176,17 @@ var Issue = class {
       }
     });
   }
-  /** Follow a link (or go Back): the tab now shows, and is named after, that issue. */
-  show(cx, ref, back) {
-    if (this.ref && !back) this.history.push(this.ref);
+  /** Follow a link: Back returns to the issue shown now. */
+  follow(cx, ref) {
+    if (this.ref) this.history.push(this.ref);
+    this.show(cx, ref);
+  }
+  goBack(cx) {
+    const ref = this.history.pop();
+    if (ref) this.show(cx, ref);
+  }
+  /** The tab now shows, and is named after, that issue. */
+  show(cx, ref) {
     this.ref = ref;
     navigatedDetail(this.reader, ref);
     this.load(cx);
@@ -10237,17 +10251,14 @@ var Issue = class {
   }
   back() {
     const previous3 = this.history.at(-1);
-    return button("issue-back", "\u2190", `Back to #${previous3.number}`, (_e, cx) => {
-      const ref = this.history.pop();
-      if (ref) this.show(cx, ref, true);
-    }).size(36).flex_none().flex().items_center().justify_center().text_size(22);
+    return button("issue-back", "\u2190", `Back to #${previous3.number}`, (_e, cx) => this.goBack(cx)).size(36).flex_none().flex().items_center().justify_center().text_size(22);
   }
   document(issue) {
     const t = colors();
     const post = (id, p, verb) => v_flex2().id(`${id}-card`).min_w(0).w_full().overflow_hidden().rounded(8).border_1().border_color(t.border).bg(t.background).child(h_flex2().px(16).py(10).gap(8).items_center().flex_wrap().bg(t.raised).border_b(1).border_color(t.border).text_size(12).child(div3().font_semibold().child(p.author)).child(div3().text_color(t.dim).child(verb)).child(div3().flex_1()).child(div3().text_color(t.dim).tooltip(p.createdAt).child(relativeTime(p.createdAt, Date.now())))).child(v_flex2().min_w(0).px(16).py(16).gap(12).child(TextView.markdown(id, p.markdown).selectable(true).scrollable(false).on_link_click((url, cx) => {
       const linked = issueLink(url, issue.url);
       if (linked) {
-        if (this.ref && issueKey(linked) !== issueKey(this.ref)) this.show(cx, linked, false);
+        if (this.ref && issueKey(linked) !== issueKey(this.ref)) this.follow(cx, linked);
         return;
       }
       const external = browserUrl(url, issue.url);

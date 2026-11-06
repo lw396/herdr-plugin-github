@@ -17,6 +17,12 @@ test("#123 inside code, links, HTML, words, URLs and escapes stays as written", 
     "```", "#9", "```", "", "<div>#10</div>", "", "&#35;11 # 12",
   ].join("\n");
   expect(readerMarkdown(source, base)).toBe(source);
+  expect(readerMarkdown("&amp;#12 &#x26;#13", base)).toBe("&amp;#12 &#x26;#13");
+});
+
+test("#123 links only for a github.com issue, the same repositories issueLink opens in the reader", () => {
+  expect(readerMarkdown("see #2", "https://example.com/o/r/issues/1")).toBe("see #2");
+  expect(readerMarkdown("see #2", "https://github.com/o/r/issues/1#issuecomment-5")).toBe("see [#2](<https://github.com/o/r/issues/2>)");
 });
 
 test("reader Markdown turns images and #123 into links together and marks an empty body", () => {
