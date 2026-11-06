@@ -43,8 +43,9 @@ test/               bun test, core/ and io/ like src/; `herdr` is test/fake-herd
 Click a sidebar issue to open its details in Herdr's **top-level tab bar**, beside terminal tabs.
 Click it again to select its existing issue tab in the same space. No terminal is split and there
 is no second tab bar inside the reader. The reader shows metadata, Markdown body and all comments,
-including reaction counts; images become “🖼 图片” browser links. Copy the issue link or open it in
-the browser from the reader toolbar. Its gh runs on the issue tab's machine, independent of focus.
+including reaction counts; images become “🖼 图片” browser links. The compact tab name is
+`#13 · repo`. In the reader heading, click `#13` to open the browser or the adjacent copy icon to
+copy its URL; refresh stays at the top right. Its gh runs on the issue tab's machine, independent of focus.
 
 Open issue contents are session-only: restarting Herdr (or hot-reloading the mod) does not reload
 them. Herdr may keep the native tab frame; it shows an empty reader until an issue is opened again.

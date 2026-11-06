@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
-import { commands, execCalls, machine, reset, screen } from "../fake-herdr.ts";
+import { commands, execCalls, machine, reset, screen, setShared } from "../fake-herdr.ts";
 import { DetailTabs, readyDetail, issueCommand, detailMachine } from "../../src/github/io/detail-tabs.ts";
 
 afterEach(() => { reset(); Math.random = originalRandom; Date.now = originalNow; });
@@ -9,7 +9,7 @@ const reader = "issue-1700000000000-i";
 const source = { pane: "center/p1", tab: "center/tb1", terminal: "center/t19" };
 const detail = { pane: "center/p2", tab: "center/tb2", terminal: null, mod: "github" };
 const space = { id: "center/s1", machine: "center", tabs: [{ id: source.tab }, { id: detail.tab }] };
-const create = `~$ herdr-app do tab.new {"space":"center/s1","name":"#9789 · cli/cli","mod":"github","props":{"role":"issue","reader":"${reader}"}}`;
+const create = `~$ herdr-app do tab.new {"space":"center/s1","name":"#9789 · cli","mod":"github","props":{"role":"issue","reader":"${reader}"}}`;
 const atSource = (withDetail = false) => screen({ spaces: [space], panes: withDetail ? [source, detail] : [source], focused: { space: space.id, tab: source.tab, pane: source.pane } });
 const atDetail = () => screen({ spaces: [space], panes: [source, detail], focused: { space: space.id, tab: detail.tab, pane: detail.pane } });
 
@@ -45,7 +45,7 @@ test("different issues get separate native tabs and their machines do not follow
   tabs.deliver();
 
   spyOn(Math, "random").mockReturnValue(0.25);
-  const next = '~$ herdr-app do tab.new {"space":"center/s1","name":"#13 · lw396/herdr-plugin-github","mod":"github","props":{"role":"issue","reader":"issue-1700000000000-9"}}';
+  const next = '~$ herdr-app do tab.new {"space":"center/s1","name":"#13 · herdr-plugin-github","mod":"github","props":{"role":"issue","reader":"issue-1700000000000-9"}}';
   machine(null, { [next]: { stdout: '{"tab":"center/tb3","pane":"center/p3"}' } });
   await tabs.open({ repo: "lw396/herdr-plugin-github", number: 13 });
   screen({ spaces: [space, { id: "s-local", machine: null, tabs: [{ id: "tb-local" }] }],
@@ -92,9 +92,26 @@ test("a fresh sidebar session does not replay previously opened issue contents",
   readyDetail(reader);
   tabs.deliver();
   const sent = commands().length;
-  new DetailTabs().deliver();
+  const restarted = new DetailTabs();
+  restarted.deliver();
   expect(commands()).toHaveLength(sent);
+  atSource(true);
+  machine(null, {});
+  await restarted.open({ repo: "cli/cli", number: 9789 });
+  expect(execCalls().filter(c => c.command === "herdr-app")).toHaveLength(1);
+  expect(commands()).toContainEqual({ name: "tab.select", args: { id: "center/tb2" } });
   expect(issueCommand('issue:{"reader":"someone-else","repo":"cli/cli","number":9789}', reader)).toBeNull();
+});
+
+test("existing long tab names are shortened and reused after upgrading the mod", async () => {
+  setShared("github.readers", { [reader]: { tab: detail.tab, request: "old", ready: "old" } });
+  screen({ spaces: [{ ...space, tabs: [{ id: source.tab }, { id: detail.tab, name: "#9789 · cli/cli" }] }],
+    panes: [source, detail], focused: { space: space.id, tab: source.tab, pane: source.pane } });
+  machine(null, {});
+  await new DetailTabs().open({ repo: "cli/cli", number: 9789 });
+  expect(execCalls()).toEqual([]);
+  expect(commands()).toContainEqual({ name: "tab.rename", args: { id: detail.tab, name: "#9789 · cli" } });
+  expect(commands()).toContainEqual({ name: "tab.select", args: { id: detail.tab } });
 });
 
 test("a failed native tab creation can be retried, without selecting a nonexistent tab", async () => {

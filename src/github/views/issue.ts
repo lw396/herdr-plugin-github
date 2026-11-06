@@ -1,16 +1,16 @@
 // One issue in one native Herdr tab. The issue itself is not restored after restart.
-import { div, type AsyncContext, type Context, type Element } from "gpui-kit";
+import { div, svg, type AsyncContext, type Context, type Element } from "gpui-kit";
 import { h_flex, v_flex, TextView } from "gpui-base";
 import { nextCommand, props } from "herdr";
 import { issueKey, type IssueRef, type IssueDetail, type Comment } from "../core/issue-detail.ts";
-import { imageLinks } from "../core/markdown.ts";
+import { browserUrl, imageLinks } from "../core/markdown.ts";
 import { relativeTime } from "../core/time.ts";
 import { describeAccount } from "../core/account.ts";
 import { explain } from "../core/gh-args.ts";
 import { detailMachine, issueCommand, readyDetail } from "../io/detail-tabs.ts";
 import { readIssue } from "../io/issues.ts";
 import * as gh from "../io/gh.ts";
-import { button, colors, type Role } from "./ui.ts";
+import { button, colors, stop, type Role } from "./ui.ts";
 
 interface Loaded { issue?: IssueDetail; failure?: string; loading: boolean }
 
@@ -23,7 +23,7 @@ export class Issue implements Role {
     this.reader = typeof props()?.reader === "string" ? props().reader : "";
     // Waiting is a read: init neither opens tabs nor writes shared state.
     cx.spawn(async cx => {
-      for (;;) {
+      for (; ;) {
         const ref = issueCommand(await nextCommand(), this.reader);
         if (!ref) continue;
         if (!this.ref || issueKey(this.ref) !== issueKey(ref)) {
@@ -65,20 +65,23 @@ export class Issue implements Role {
   render(_cx: Context): Element {
     if (this.reader) readyDetail(this.reader);
     const t = colors(), ref = this.ref, entry = this.entry, issue = entry?.issue;
+    const url = issue?.url ?? (ref ? `https://github.com/${ref.repo}/issues/${ref.number}` : "");
     return v_flex().id("issue-reader").size_full().min_h(0).overflow_hidden().bg(t.background).text_color(t.foreground).text_size(14)
       .when(!ref, el => el.child(v_flex().flex_1().gap(8).items_center().justify_center().p(24)
         .child(div().font_semibold().child("Issue details"))
         .child(div().text_size(13).text_color(t.dim).text_center().child("Choose an issue in the GitHub sidebar. Issue details are not restored after restarting Herdr."))))
-      .when(Boolean(ref), el => el.child(h_flex().flex_none().px(24).py(10).gap(8).items_center().border_b(1).border_color(t.border)
-        .child(div().flex_1().min_w(0).truncate().text_size(12).text_color(t.dim).child(ref ? `${ref.repo} #${ref.number}` : ""))
-        .child(button("issue-copy", "Copy link", "Copy issue link", (_e, cx) => {
-          if (ref) cx.write_to_clipboard(issue?.url ?? `https://github.com/${ref.repo}/issues/${ref.number}`);
-        }))
-        .child(button("issue-browser", "↗", "Open in browser", (_e, cx) => {
-          if (ref) cx.open_url(issue?.url ?? `https://github.com/${ref.repo}/issues/${ref.number}`);
-        }))
+      .when(Boolean(ref), el => el.child(h_flex().flex_none().px(24).pt(18).pb(12).gap(12).items_start()
+        .child(h_flex().flex_1().min_w(0).gap(8).items_center().flex_wrap().text_size(22)
+          .child(div().min_w(0).font_semibold().child(issue?.title ?? "Issue details"))
+          .child(h_flex().gap(2).items_center().flex_none()
+            .child(div().id("issue-browser").px(2).rounded(4).text_color(t.accent).cursor_pointer()
+              .hover(s => s.bg(t.hover)).tooltip(`Open ${ref?.repo} #${ref?.number} in browser`)
+              .accessibility_label(`Open #${ref?.number} in browser`).on_mouse_down("left", stop)
+              .on_click((_e, cx) => { cx.stop_propagation(); cx.open_url(url); })
+              .child(ref ? `#${ref.number}` : ""))
+            .child(button("issue-copy", svg("mods/github/assets/copy.svg").size(16), "Copy issue link", (_e, cx) => cx.write_to_clipboard(url)))))
         .child(button("issue-refresh", "↻", "Refresh issue", (_e, cx) => { this.load(cx); cx.notify(); }))))
-      .when(Boolean(ref), el => el.child(v_flex().id("issue-scroll").flex_1().min_h(0).overflow_y_scroll().px(24).py(18).gap(12)
+      .when(Boolean(ref), el => el.child(v_flex().id("issue-scroll").flex_1().min_h(0).overflow_y_scroll().px(24).pb(18).gap(12)
         .when(Boolean(entry?.loading), el => el.child(div().text_size(12).text_color(t.dim).child("Loading issue…")))
         .when(Boolean(entry?.failure), el => el.child(div().text_color(t.blocked).child(entry?.failure ?? "")))
         .child(issue ? this.document(issue) : div())));
@@ -94,12 +97,12 @@ export class Issue implements Role {
         .child(TextView.markdown(id, imageLinks(p.body || "_No description._")).selectable(true).scrollable(false)
           .on_link_click((url, cx) => {
             // Same-repository issue navigation is #14; do not execute document-supplied schemes.
-            if (/^https?:\/\//i.test(url)) cx.open_url(url);
+            const external = browserUrl(url, issue.url);
+            if (external) cx.open_url(external);
           }))
         .when(Boolean(p.reactions?.length), el => el.child(h_flex().gap(6).flex_wrap().children((p.reactions ?? []).map(r =>
           div().px(7).py(2).rounded(10).bg(t.raised).text_size(12).child(`${r.emoji} ${r.count}`)))));
     return v_flex().gap(12)
-      .child(div().text_size(22).font_semibold().child(issue.title))
       .child(h_flex().gap(8).items_center().flex_wrap()
         .child(div().px(9).py(3).rounded(12).bg(t.raised).text_size(12).font_medium()
           .text_color(issue.state === "open" ? t.done : t.accent).child(issue.state === "open" ? "● Open" : "● Closed"))

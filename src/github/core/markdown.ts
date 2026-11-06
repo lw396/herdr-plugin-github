@@ -1,3 +1,19 @@
+/** Browser actions need absolute HTTP(S) URLs; do not rely on DOM URL APIs in QuickJS. */
+export function browserUrl(href: string, base: string): string | null {
+  const url = href.trim();
+  if (/^https?:\/\//i.test(url)) return url;
+  if (!url || /^[a-z][a-z\d+.-]*:/i.test(url)) return null;
+  const origin = /^https?:\/\/[^/?#]+/i.exec(base)?.[0];
+  if (!origin) return null;
+  if (url.startsWith("//")) return `${origin.split(":")[0]}:${url}`;
+  if (url.startsWith("/")) return origin + url;
+  const document = base.replace(/[?#].*$/, "");
+  if (url.startsWith("#")) return base.split("#")[0] + url;
+  if (url.startsWith("?")) return document + url;
+  // The system browser performs dot-segment normalization when opening the absolute URL.
+  return document.replace(/[^/]*$/, "") + url;
+}
+
 /** Apply a prose transformation without changing fenced/indented code, code spans or escapes. */
 function prose(markdown: string, transform: (text: string) => string): string {
   const protectedParts: string[] = [];

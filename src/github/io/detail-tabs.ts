@@ -1,8 +1,8 @@
 // Issue readers are native Herdr tabs, not split panes or a second tab bar inside the mod.
 import { exec, focused, panes, run, shared, setShared, spaces } from "herdr";
-import { issueKey, type IssueRef } from "../core/issue-detail.ts";
+import { issueKey, issueTabName, type IssueRef } from "../core/issue-detail.ts";
 
-interface Reader { tab: string; request: string; ready: string | null }
+interface Reader { tab: string; identity?: string; request: string; ready: string | null }
 interface OpenReader { id: string; reader: Reader }
 const READERS = "github.readers";
 const readers = (): Record<string, Reader> => (shared(READERS) as Record<string, Reader> | null) ?? {};
@@ -15,23 +15,26 @@ function remember(id: string, value: Reader): void {
   setShared(READERS, { ...kept, [id]: value });
 }
 
-/** Called after init installed the view's listener. Shared state contains no issue selection. */
+/** Called after init installed the listener. Saved identities never load an issue by themselves. */
 export function readyDetail(id: string): void {
   const r = reader(id);
   if (r && r.ready !== r.request) remember(id, { ...r, ready: r.request });
 }
 
-/** Only this session remembers which issue each native tab displays. */
+/** Explicit clicks can reuse native tab frames; issue contents and pending opens are session-only. */
 export class DetailTabs {
   opened = new Map<string, string>();
   pending = new Map<string, IssueRef>();
   creating = new Map<string, Promise<OpenReader>>();
 
   async open(issue: IssueRef): Promise<void> {
-    const space = focused()?.space;
-    if (!space || !spaces().some(s => s.id === space)) throw new Error("Select a Herdr space before opening an issue.");
+    const space = focused()?.space, owner = spaces().find(s => s.id === space);
+    if (!space || !owner) throw new Error("Select a Herdr space before opening an issue.");
     const identity = `${space}:${issueKey(issue)}`;
-    const existingId = this.opened.get(identity), existing = existingId ? reader(existingId) : undefined;
+    const oldName = `#${issue.number} · ${issue.repo}`.toLowerCase();
+    const existingId = this.opened.get(identity) ?? Object.entries(readers()).find(([, r]) =>
+      r.identity === identity || (!r.identity && owner.tabs.some(t => t.id === r.tab && t.name.toLowerCase() === oldName)))?.[0];
+    const existing = existingId ? reader(existingId) : undefined;
     let target: OpenReader;
     if (existingId && existing && panes().some(p => p.tab === existing.tab && p.mod === "github")) {
       target = { id: existingId, reader: existing };
@@ -48,13 +51,17 @@ export class DetailTabs {
     }
     this.pending.set(target.id, issue);
     // A fresh handshake prevents persisted readiness from accepting an issue before init.
-    remember(target.id, { ...target.reader, request: `${Date.now()}-${Math.random()}`, ready: null });
+    remember(target.id, { ...target.reader, identity, request: `${Date.now()}-${Math.random()}`, ready: null });
+    const tabName = owner.tabs.find(t => t.id === target.reader.tab)?.name;
+    if (tabName?.toLowerCase() === oldName && tabName !== issueTabName(issue)) {
+      run("tab.rename", { id: target.reader.tab, name: issueTabName(issue) });
+    }
     if (focused()?.space === space) run("tab.select", { id: target.reader.tab });
   }
 
   private async create(space: string, issue: IssueRef): Promise<OpenReader> {
     const id = `issue-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-    const args = { space, name: `#${issue.number} · ${issue.repo}`, mod: "github", props: { role: "issue", reader: id } };
+    const args = { space, name: issueTabName(issue), mod: "github", props: { role: "issue", reader: id } };
     // Local IPC creates a tab on the selected space's machine. gh itself still runs there.
     const result = await exec("herdr-app", ["do", "tab.new", JSON.stringify(args)]);
     if (result.code !== 0) throw new Error(result.stderr.trim() || result.stdout.trim() || "Could not open the issue tab.");

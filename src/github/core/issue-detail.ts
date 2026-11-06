@@ -2,6 +2,9 @@
 export interface IssueRef { repo: string; number: number }
 export const issueKey = (ref: IssueRef): string => `${ref.repo.toLowerCase()}#${ref.number}`;
 
+/** Keep native tabs compact; the full repository remains visible in the reader's link tooltip. */
+export const issueTabName = (ref: IssueRef): string => `#${ref.number} · ${ref.repo.split("/").at(-1)}`;
+
 export interface Reaction { emoji: string; count: number }
 
 export interface Comment {

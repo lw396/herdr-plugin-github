@@ -1,5 +1,14 @@
 import { expect, test } from "bun:test";
-import { imageLinks } from "../../src/github/core/markdown.ts";
+import { imageLinks, browserUrl } from "../../src/github/core/markdown.ts";
+
+test("relative image links open against the issue URL, while unsafe schemes never open", () => {
+  const base = "https://github.com/lw396/herdr-plugin-github/issues/13";
+  expect(browserUrl("docs/a.png", base)).toBe("https://github.com/lw396/herdr-plugin-github/issues/docs/a.png");
+  expect(browserUrl("/user-attachments/assets/screenshot", base)).toBe("https://github.com/user-attachments/assets/screenshot");
+  expect(browserUrl("//cdn.example.com/a.png", base)).toBe("https://cdn.example.com/a.png");
+  expect(browserUrl("https://example.com/a.png", base)).toBe("https://example.com/a.png");
+  expect(browserUrl("javascript:alert(1)", base)).toBeNull();
+});
 
 // CommonMark image examples, plus GitHub's pasted screenshot HTML.
 test("an inline image becomes a browser link with the agreed label", () => {

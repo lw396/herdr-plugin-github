@@ -1,4 +1,6 @@
 export const issueKey = (ref) => `${ref.repo.toLowerCase()}#${ref.number}`;
+/** Keep native tabs compact; the full repository remains visible in the reader's link tooltip. */
+export const issueTabName = (ref) => `#${ref.number} · ${ref.repo.split("/").at(-1)}`;
 const EMOJI = [
     ["+1", "👍"], ["-1", "👎"], ["laugh", "😄"], ["hooray", "🎉"],
     ["confused", "😕"], ["heart", "❤️"], ["rocket", "🚀"], ["eyes", "👀"],
