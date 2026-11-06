@@ -58,8 +58,9 @@ export async function status(where: Where = {}): Promise<Status> {
     return { ok: true, user };
   } catch (e) {
     const message = e instanceof Error ? e.message : String(e);
-    if (/cannot start|not found|No such file/i.test(message)) return { ok: false, reason: "missing", message };
-    if (e instanceof GhError && /auth|login|401|token/i.test(e.stderr + message)) return { ok: false, reason: "auth", message };
+    // exec itself rejected: gh didn't run (Herdr: "cannot run gh: ...", "cannot start gh: ..." on another machine).
+    if (!(e instanceof GhError)) return { ok: false, reason: /^cannot (run|start) gh\b/.test(message) ? "missing" : "error", message };
+    if (/gh auth login|HTTP 401/.test(e.stderr)) return { ok: false, reason: "auth", message };
     return { ok: false, reason: "error", message };
   }
 }

@@ -1,0 +1,3 @@
+[test]
+# `herdr` exists only inside Herdr: tests get a fake whose exec answers like real machines.
+preload = ["./test/preload.ts"]

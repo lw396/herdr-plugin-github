@@ -1,5 +1,5 @@
 {
-  // Bun tests import src/ directly: pure modules only (no "herdr" import).
+  // Bun tests import src/ directly; "herdr" is test/fake-herdr.ts at run time (test/preload.ts).
   "compilerOptions": {
     "target": "ESNext",
     "module": "Preserve",
@@ -9,7 +9,10 @@
     "allowImportingTsExtensions": true,
     "strict": true,
     "noEmit": true,
-    "skipLibCheck": true
+    "skipLibCheck": true,
+    "paths": {
+      "herdr": ["./types/herdr.d.ts"]
+    }
   },
-  "include": ["test/**/*.ts"]
+  "include": ["test/**/*.ts", "types/gpui-kit.d.ts"]
 }

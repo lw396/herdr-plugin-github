@@ -36,13 +36,16 @@ A Herdr mod, written in TypeScript in `src/github/`, built to `mods/github/`. Re
 ## Test-driven
 
 Prefer TDD (the `tdd` skill): red, then green, one vertical slice at a time. Agree the seams
-before writing tests. Bun can only load modules without a `herdr` import, so the seams are:
+before writing tests. Expected values come from real gh/git/GitHub output or the docs, not
+recomputed by the code. The seams:
 
-- Pure modules (`gh-args.ts`, `remote.ts`, ...): command arguments, parsing gh/git output,
-  turning GitHub data into what the UI shows. Put new logic here first and test it with `bun test`.
-  Expected values come from real gh/git/GitHub output or the docs, not recomputed by the code.
-- Adapters (`gh.ts`, `git.ts`) and views (`main.ts`): kept thin; checked by `herdr-app check`
-  and by trying them in the app, not unit-tested.
+- Pure modules (`gh-args.ts`, `remote.ts`, ...): command arguments, parsing, turning GitHub data
+  into what the UI shows. Put new logic here first.
+- Adapters (`gh.ts`, `git.ts`): under Bun, `herdr` is `test/fake-herdr.ts` (`test/preload.ts`).
+  Only its `exec` is faked, as machines answering commands: `machine(on, { "<cwd>$ <cmd>": reply })`,
+  with replies copied from running the real command (stdout, stderr, exit code). An unknown
+  command rejects like a missing program does in Herdr.
+- Views (`main.ts`): kept thin; checked by `herdr-app check` and by trying them in the app.
 
 When a bug shows up in the app, first reproduce it as a failing test at a pure seam
 (e.g. the real output that broke parsing), then fix.
