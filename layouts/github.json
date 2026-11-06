@@ -117,7 +117,8 @@
                   },
                   "header": {
                     "content": {
-                      "mod": "pane"
+                      "mod": "github",
+                      "props": { "role": "pane" }
                     },
                     "height": 30,
                     "position": "top",

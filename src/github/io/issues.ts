@@ -2,6 +2,7 @@
 import { groupQuery, groupVariables, parseIssueGroup, type GroupKind, type IssueGroup } from "../core/issues.ts";
 import type { RemoteRepo } from "../core/remote.ts";
 import { api, graphql } from "./gh.ts";
+import { PROJECTS_QUERY, projectPage, projectsFailure, type Project, type Projects } from "../core/projects.ts";
 import { parseIssueDetail, type IssueDetail } from "../core/issue-detail.ts";
 
 /**
@@ -20,4 +21,23 @@ export async function readIssue(repo: string, number: number, on: string | null)
     api(`${path}/comments?per_page=100`, { on, paginate: true }),
   ]);
   return parseIssueDetail(issue, comments);
+}
+
+/** Optional metadata: lack of Projects access must never hide the issue body or comments. */
+export async function readIssueProjects(repo: string, number: number, on: string | null): Promise<Projects> {
+  const [owner, name] = repo.split("/");
+  const projects: Project[] = [];
+  let after: string | null = null;
+  try {
+    do {
+      const page = projectPage(await graphql(PROJECTS_QUERY, { owner: owner!, name: name!, number, after }, { on }));
+      projects.push(...page.projects);
+      if (!page.more) return { ok: true, projects };
+      if (!page.cursor || page.cursor === after) throw new Error("GitHub did not return the next Projects page.");
+      after = page.cursor;
+    } while (after);
+  } catch (e) {
+    return projectsFailure(e instanceof Error ? e.message : String(e), on);
+  }
+  return { ok: true, projects };
 }

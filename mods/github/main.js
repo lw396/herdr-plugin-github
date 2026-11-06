@@ -3,7 +3,8 @@ import { View } from "gpui-kit";
 import { props } from "herdr";
 import { Panel } from "./views/panel.js";
 import { Issue } from "./views/issue.js";
-const ROLES = { panel: Panel, issue: Issue };
+import { Pane } from "./views/pane.js";
+const ROLES = { panel: Panel, issue: Issue, pane: Pane };
 export default class GitHub extends View {
     role = null;
     init(p, cx) {

@@ -28,8 +28,11 @@ A Herdr mod, written in TypeScript in `src/github/`, built to `mods/github/`. Re
   relative files: no npm packages at run time. Import siblings as `./x.ts` (rewritten to `./x.js`).
 - `mods/tabs-github/` and `layouts/github.json` are copies of Herdr 0.1.13's shipped `tabs` mod
   and `main` layout (plain JS/JSON, not built). Keep them as close to the originals as possible:
-  changes in `tabs-github` are marked `herdr-plugin-github`; the layout only renames the tab bar
-  mod and adds the `github` child to `panel-body`. On a Herdr upgrade, recopy and reapply.
+  changes in `tabs-github` are marked `herdr-plugin-github`; the layout renames the tab bar mod,
+  adds the `github` child to `panel-body`, and uses GitHub's `pane` role for pane headers.
+  `src/github/views/pane.ts` adapts the shipped `pane` header only to add GitHub's logo/name;
+  preserve terminal headers and controls. On a Herdr upgrade, recopy the layout/tab bar,
+  compare `views/pane.ts` with the new shipped header, and reapply these changes.
 - Erasable TypeScript only (`erasableSyntaxOnly`): no `enum`, `namespace` or constructor parameter
   properties, so the output is the source minus its types.
 
