@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
 import { commands, execCalls, machine, reset, screen, setShared } from "../fake-herdr.ts";
-import { DetailTabs, readyDetail, issueCommand, detailMachine } from "../../src/github/io/detail-tabs.ts";
+import { DetailTabs, readyDetail, issueCommand, detailMachine, navigatedDetail } from "../../src/github/io/detail-tabs.ts";
 
 afterEach(() => { reset(); Math.random = originalRandom; Date.now = originalNow; });
 const originalRandom = Math.random, originalNow = Date.now;
@@ -54,6 +54,33 @@ test("different issues get separate native tabs and their machines do not follow
   expect(detailMachine("unknown-reader")).toBeNull();
   expect(execCalls().filter(c => c.command === "herdr-app")).toHaveLength(2);
   expect(commands().some(c => c.name.startsWith("pane."))).toBe(false);
+});
+
+test("a tab that followed a link belongs to the linked issue; its first issue gets a new tab", async () => {
+  atSource();
+  machine(null, { [create]: { stdout: '{"tab":"center/tb2","pane":"center/p2"}' } });
+  const tabs = new DetailTabs();
+  await tabs.open({ repo: "cli/cli", number: 9789 });
+  atDetail();
+  readyDetail(reader);
+  tabs.deliver();
+
+  navigatedDetail(reader, { repo: "cli/cli", number: 1 });
+  expect(commands()).toContainEqual({ name: "tab.rename", args: { id: detail.tab, name: "#1 · cli" } });
+  expect(detailMachine(reader)).toEqual({ on: "center" });
+
+  machine(null, {}); // The linked issue reuses its tab.
+  atSource(true);
+  await tabs.open({ repo: "cli/cli", number: 1 });
+  expect(commands().at(-1)).toEqual({ name: "tab.select", args: { id: detail.tab } });
+  expect(execCalls().filter(c => c.command === "herdr-app")).toHaveLength(1);
+
+  spyOn(Math, "random").mockReturnValue(0.25);
+  const next = create.replace(reader, "issue-1700000000000-9");
+  machine(null, { [next]: { stdout: '{"tab":"center/tb3","pane":"center/p3"}' } });
+  await tabs.open({ repo: "cli/cli", number: 9789 });
+  expect(execCalls().filter(c => c.command === "herdr-app")).toHaveLength(2);
+  expect(commands().at(-1)).toEqual({ name: "tab.select", args: { id: "center/tb3" } });
 });
 
 test("rapid repeated clicks while creating a native tab do not create duplicates", async () => {

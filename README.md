@@ -10,6 +10,7 @@ The mod uses GitHub CLI (`gh`) on the machine hosting the repository, so local a
 - **Issue sidebar** — browse issues assigned to you, all open issues, and closed issues, with pagination.
 - **Native issue tabs** — open different issues in separate tabs; selecting an already-open issue reuses its tab.
 - **Discussion reader** — read Markdown descriptions, comments, and reaction counts in individual cards.
+- **Issue links** — `#123` and links to the repository's issues open in the same tab, with **←** to go back; other links open in your browser.
 - **Issue metadata** — view colored labels, assignees, linked Projects, and milestones.
 - **Activity timeline** — see label and assignment changes between comments in chronological order.
 - **Quick actions** — refresh an issue, copy its URL, or open it in your browser.

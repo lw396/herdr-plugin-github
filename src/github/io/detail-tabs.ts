@@ -32,7 +32,9 @@ export class DetailTabs {
     if (!space || !owner) throw new Error("Select a Herdr space before opening an issue.");
     const identity = `${space}:${issueKey(issue)}`;
     const oldName = `#${issue.number} · ${issue.repo}`.toLowerCase();
-    const existingId = this.opened.get(identity) ?? Object.entries(readers()).find(([, r]) =>
+    // A tab that followed a link to another issue no longer belongs to this one.
+    const openedId = this.opened.get(identity);
+    const existingId = (openedId && reader(openedId)?.identity === identity ? openedId : undefined) ?? Object.entries(readers()).find(([, r]) =>
       r.identity === identity || (!r.identity && owner.tabs.some(t => t.id === r.tab && t.name.toLowerCase() === oldName)))?.[0];
     const existing = existingId ? reader(existingId) : undefined;
     let target: OpenReader;
@@ -84,6 +86,14 @@ export class DetailTabs {
       run(`github.issue:${JSON.stringify({ reader: id, ...issue })}`);
     }
   }
+}
+
+/** A reader that followed a link now belongs to that issue: the sidebar finds its tab for it, and the tab is named after it. */
+export function navigatedDetail(id: string, issue: IssueRef): void {
+  const r = reader(id), space = spaces().find(s => s.tabs.some(t => t.id === r?.tab));
+  if (!r || !space) return;
+  remember(id, { ...r, identity: `${space.id}:${issueKey(issue)}` });
+  run("tab.rename", { id: r.tab, name: issueTabName(issue) });
 }
 
 /** The native reader tab's space determines gh's machine, never current focus. */

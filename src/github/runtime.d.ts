@@ -2,6 +2,8 @@
 interface URL {
   readonly href: string;
   readonly protocol: string;
+  readonly hostname: string;
+  readonly pathname: string;
 }
 declare var URL: {
   prototype: URL;

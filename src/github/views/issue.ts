@@ -1,12 +1,13 @@
-// One issue in one native Herdr tab. The issue itself is not restored after restart.
+// One issue at a time in one native Herdr tab; links to its repository's issues open here, with Back.
+// The issue and its Back history are not restored after restart.
 import { div, svg, type AsyncContext, type Context, type Element } from "gpui-kit";
 import { h_flex, v_flex, TextView } from "gpui-base";
 import { nextCommand, props } from "herdr";
 import { issueKey, type IssueRef, type IssueDetail, type Comment, type Label } from "../core/issue-detail.ts";
-import { browserUrl } from "../core/markdown.ts";
+import { browserUrl, issueLink } from "../core/markdown.ts";
 import { relativeTime } from "../core/time.ts";
 import { describeAccount } from "../core/account.ts";
-import { detailMachine, issueCommand, readyDetail } from "../io/detail-tabs.ts";
+import { detailMachine, issueCommand, navigatedDetail, readyDetail } from "../io/detail-tabs.ts";
 import { readIssue, readIssueProjects } from "../io/issues.ts";
 import type { Projects } from "../core/projects.ts";
 import { issueTimeline, activityText, type Activity } from "../core/activity.ts";
@@ -14,6 +15,7 @@ import * as gh from "../io/gh.ts";
 import { button, colors, spinner, stop, type Role } from "./ui.ts";
 
 interface Loaded {
+  key: string;
   issue?: IssueDetail;
   failure?: string;
   loading: boolean;
@@ -24,6 +26,8 @@ interface Loaded {
 export class Issue implements Role {
   reader = "";
   ref: IssueRef | null = null;
+  /** Issues this tab showed before following links, most recent last. */
+  history: IssueRef[] = [];
   entry: Loaded | null = null;
   wide = false;
 
@@ -35,6 +39,8 @@ export class Issue implements Role {
         const ref = issueCommand(await nextCommand(), this.reader);
         if (!ref) continue;
         if (!this.ref || issueKey(this.ref) !== issueKey(ref)) {
+          // The sidebar opens an issue afresh: Back belongs to links followed in this tab.
+          this.history = [];
           this.ref = ref;
           this.load(cx);
         }
@@ -43,12 +49,22 @@ export class Issue implements Role {
     });
   }
 
+  /** Follow a link (or go Back): the tab now shows, and is named after, that issue. */
+  show(cx: Context, ref: IssueRef, back: boolean): void {
+    if (this.ref && !back) this.history.push(this.ref);
+    this.ref = ref;
+    navigatedDetail(this.reader, ref);
+    this.load(cx);
+    cx.notify();
+  }
+
   load(cx: Context): void {
     const ref = this.ref;
     if (!ref) return;
     // A refresh keeps the shown issue until the new one arrives. ↻ is hidden while loading (one refresh at a time);
-    // a different issue still replaces a load in progress, whose result is then dropped.
-    const entry: Loaded = { issue: this.entry?.issue, loading: true, projectsLoading: false };
+    // a different issue still replaces a load in progress, whose result is then dropped, and is not shown meanwhile.
+    const key = issueKey(ref);
+    const entry: Loaded = { key, issue: this.entry?.key === key ? this.entry.issue : undefined, loading: true, projectsLoading: false };
     this.entry = entry;
     const machine = detailMachine(this.reader);
     if (!machine) {
@@ -92,6 +108,7 @@ export class Issue implements Role {
         .child(div().font_semibold().child("Issue details"))
         .child(div().text_size(13).text_color(t.dim).text_center().child("Choose an issue in the GitHub sidebar. Issue details are not restored after restarting Herdr."))))
       .when(Boolean(ref), el => el.child(h_flex().flex_none().px(24).pt(18).pb(12).gap(12).items_start()
+        .when(this.history.length > 0, el => el.child(this.back()))
         .child(h_flex().flex_1().min_w(0).gap(8).items_center().flex_wrap().text_size(22)
           .child(div().min_w(0).font_semibold().child(issue?.title ?? "Issue details"))
           .child(h_flex().gap(2).items_center().flex_none()
@@ -105,10 +122,19 @@ export class Issue implements Role {
           ? div().size(36).flex_none().flex().items_center().justify_center().child(spinner(18))
           : button("issue-refresh", "↻", "Refresh issue", (_e, cx) => { this.load(cx); cx.notify(); })
             .size(36).flex_none().flex().items_center().justify_center().text_size(22))))
-      .when(Boolean(ref), el => el.child(v_flex().id("issue-scroll").flex_1().min_h(0).overflow_y_scroll().px(24).pb(18).gap(12)
+      // Keyed by issue: another issue starts at its top, not at the previous one's scroll position.
+      .when(Boolean(ref), el => el.child(v_flex().id(`issue-scroll-${ref ? issueKey(ref) : ""}`).flex_1().min_h(0).overflow_y_scroll().px(24).pb(18).gap(12)
         .when(Boolean(entry?.loading), el => el.child(div().text_size(12).text_color(t.dim).child("Loading issue…")))
         .when(Boolean(entry?.failure), el => el.child(div().text_color(t.blocked).child(entry?.failure ?? "")))
         .child(issue ? this.document(issue) : div())));
+  }
+
+  private back(): Element {
+    const previous = this.history.at(-1)!;
+    return button("issue-back", "←", `Back to #${previous.number}`, (_e, cx) => {
+      const ref = this.history.pop();
+      if (ref) this.show(cx, ref, true);
+    }).size(36).flex_none().flex().items_center().justify_center().text_size(22);
   }
 
   private document(issue: IssueDetail): Element {
@@ -123,6 +149,9 @@ export class Issue implements Role {
         .child(v_flex().min_w(0).px(16).py(16).gap(12)
           .child(TextView.markdown(id, p.markdown).selectable(true).scrollable(false)
             .on_link_click((url, cx) => {
+              const linked = issueLink(url, issue.url);
+              // A link to the shown issue itself (e.g. one of its comments) has nothing new to show.
+              if (linked) { if (this.ref && issueKey(linked) !== issueKey(this.ref)) this.show(cx, linked, false); return; }
               const external = browserUrl(url, issue.url);
               if (external) cx.open_url(external);
             }))

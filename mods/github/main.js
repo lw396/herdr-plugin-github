@@ -9640,13 +9640,52 @@ function browserUrl(href, base) {
   }
   return resolved.protocol === "http:" || resolved.protocol === "https:" ? resolved.href : null;
 }
-var link = (url) => `[\u{1F5BC} \u56FE\u7247](<${url.replace(/</g, "%3C").replace(/>/g, "%3E")}>)`;
-function imageLinks(markdown) {
-  if (!markdown.includes("![") && !/<img/i.test(markdown)) return markdown;
+function githubPath(href) {
+  let url;
+  try {
+    url = new URL(href);
+  } catch {
+    return null;
+  }
+  if (url.protocol !== "https:" && url.protocol !== "http:") return null;
+  if (url.hostname !== "github.com" && url.hostname !== "www.github.com") return null;
+  return url.pathname.split("/").filter(Boolean);
+}
+function issueLink(href, issueUrl) {
+  const target = browserUrl(href, issueUrl);
+  if (!target) return null;
+  const own3 = githubPath(issueUrl), path = githubPath(target);
+  if (!own3 || !path || own3.length < 2 || path.length !== 4 || path[2] !== "issues" || !/^[1-9]\d*$/.test(path[3])) return null;
+  if (path[0].toLowerCase() !== own3[0].toLowerCase() || path[1].toLowerCase() !== own3[1].toLowerCase()) return null;
+  const number = Number(path[3]);
+  return Number.isSafeInteger(number) ? { repo: `${own3[0]}/${own3[1]}`, number } : null;
+}
+var link = (text3, url) => `[${text3}](<${url.replace(/</g, "%3C").replace(/>/g, "%3E")}>)`;
+function readerMarkdown(body, issueUrl) {
+  return links(body || "_No text._", issueUrl);
+}
+var REFERENCE = /#([1-9]\d*)(?![\w-])/g;
+var BEFORE_REFERENCE = /[\s([{"',;:!?*_~]/;
+function links(markdown, issueUrl) {
+  const references = issueUrl !== null && /#[1-9]/.test(markdown);
+  if (!references && !markdown.includes("![") && !/<img/i.test(markdown)) return markdown;
+  const repository = issueUrl?.replace(/\/issues\/\d+.*$/, "");
   const definitions = /* @__PURE__ */ new Map();
   const images = [];
   const patches = [];
-  function visit(node2) {
+  function visit(node2, inLink) {
+    if (references && !inLink && node2.type === "text") {
+      const start = node2.position.start.offset, end = node2.position.end.offset;
+      for (const match of markdown.slice(start, end).matchAll(REFERENCE)) {
+        const at = start + match.index, before = markdown[at - 1];
+        if (before === void 0 || BEFORE_REFERENCE.test(before)) patches.push({
+          start: at,
+          end: at + match[0].length,
+          text: match[0],
+          url: `${repository}/issues/${match[1]}`
+        });
+      }
+    }
     if (node2.type === "definition" && !definitions.has(node2.identifier)) definitions.set(node2.identifier, node2.url);
     if (node2.type === "image" || node2.type === "imageReference") images.push(node2);
     if (node2.type === "html") {
@@ -9656,23 +9695,25 @@ function imageLinks(markdown) {
           if (name === "img" && attributes.src !== void 0) patches.push({
             start: start + parser.startIndex,
             end: start + parser.endIndex + 1,
+            text: "\u{1F5BC} \u56FE\u7247",
             url: attributes.src
           });
         }
       }, { decodeEntities: true });
       parser.end(markdown.slice(start, end));
     }
-    if ("children" in node2) node2.children.forEach(visit);
+    const linked = inLink || node2.type === "link" || node2.type === "linkReference";
+    if ("children" in node2) for (const child of node2.children) visit(child, linked);
   }
-  visit(fromMarkdown(markdown));
+  visit(fromMarkdown(markdown), false);
   for (const image2 of images) {
     const url = image2.type === "image" ? image2.url : definitions.get(image2.identifier);
-    if (url !== void 0) patches.push({ start: image2.position.start.offset, end: image2.position.end.offset, url });
+    if (url !== void 0) patches.push({ start: image2.position.start.offset, end: image2.position.end.offset, text: "\u{1F5BC} \u56FE\u7247", url });
   }
   patches.sort((a, b) => a.start - b.start);
   let result = "", copied = 0;
   for (const patch of patches) {
-    result += markdown.slice(copied, patch.start) + link(patch.url);
+    result += markdown.slice(copied, patch.start) + link(patch.text, patch.url);
     copied = patch.end;
   }
   return result + markdown.slice(copied);
@@ -9691,7 +9732,6 @@ var EMOJI = [
   ["rocket", "\u{1F680}"],
   ["eyes", "\u{1F440}"]
 ];
-var readerMarkdown = (body) => imageLinks(body || "_No text._");
 function parseIssueDetail(issue, timeline) {
   const i = issue, events = timeline;
   return {
@@ -9705,14 +9745,14 @@ function parseIssueDetail(issue, timeline) {
     assignees: i.assignees.map((a) => a.login),
     milestone: i.milestone?.title ?? null,
     body: i.body ?? "",
-    markdown: readerMarkdown(i.body ?? ""),
+    markdown: readerMarkdown(i.body ?? "", i.html_url),
     activities: parseActivity(events),
     comments: events.filter((e) => e.event === "commented").map((c) => ({
       id: c.id,
       author: c.user?.login ?? "deleted user",
       createdAt: c.created_at,
       body: c.body ?? "",
-      markdown: readerMarkdown(c.body ?? ""),
+      markdown: readerMarkdown(c.body ?? "", i.html_url),
       reactions: EMOJI.flatMap(([key, emoji]) => {
         const count = c.reactions[key];
         return typeof count === "number" && count > 0 ? [{ emoji, count }] : [];
@@ -9854,7 +9894,8 @@ var DetailTabs = class {
     if (!space || !owner) throw new Error("Select a Herdr space before opening an issue.");
     const identity = `${space}:${issueKey(issue)}`;
     const oldName = `#${issue.number} \xB7 ${issue.repo}`.toLowerCase();
-    const existingId = this.opened.get(identity) ?? Object.entries(readers()).find(([, r]) => r.identity === identity || !r.identity && owner.tabs.some((t) => t.id === r.tab && t.name.toLowerCase() === oldName))?.[0];
+    const openedId = this.opened.get(identity);
+    const existingId = (openedId && reader(openedId)?.identity === identity ? openedId : void 0) ?? Object.entries(readers()).find(([, r]) => r.identity === identity || !r.identity && owner.tabs.some((t) => t.id === r.tab && t.name.toLowerCase() === oldName))?.[0];
     const existing = existingId ? reader(existingId) : void 0;
     let target;
     if (existingId && existing && panes2().some((p) => p.tab === existing.tab && p.mod === "github")) {
@@ -9911,6 +9952,12 @@ var DetailTabs = class {
     }
   }
 };
+function navigatedDetail(id, issue) {
+  const r = reader(id), space = spaces2().find((s) => s.tabs.some((t) => t.id === r?.tab));
+  if (!r || !space) return;
+  remember(id, { ...r, identity: `${space.id}:${issueKey(issue)}` });
+  run("tab.rename", { id: r.tab, name: issueTabName(issue) });
+}
 function detailMachine(id) {
   const tab = reader(id)?.tab;
   const space = spaces2().find((s) => s.tabs.some((t) => t.id === tab));
@@ -10104,6 +10151,8 @@ import { nextCommand, props as props2 } from "herdr";
 var Issue = class {
   reader = "";
   ref = null;
+  /** Issues this tab showed before following links, most recent last. */
+  history = [];
   entry = null;
   wide = false;
   init(cx) {
@@ -10113,6 +10162,7 @@ var Issue = class {
         const ref = issueCommand(await nextCommand(), this.reader);
         if (!ref) continue;
         if (!this.ref || issueKey(this.ref) !== issueKey(ref)) {
+          this.history = [];
           this.ref = ref;
           this.load(cx2);
         }
@@ -10120,10 +10170,19 @@ var Issue = class {
       }
     });
   }
+  /** Follow a link (or go Back): the tab now shows, and is named after, that issue. */
+  show(cx, ref, back) {
+    if (this.ref && !back) this.history.push(this.ref);
+    this.ref = ref;
+    navigatedDetail(this.reader, ref);
+    this.load(cx);
+    cx.notify();
+  }
   load(cx) {
     const ref = this.ref;
     if (!ref) return;
-    const entry = { issue: this.entry?.issue, loading: true, projectsLoading: false };
+    const key = issueKey(ref);
+    const entry = { key, issue: this.entry?.key === key ? this.entry.issue : void 0, loading: true, projectsLoading: false };
     this.entry = entry;
     const machine = detailMachine(this.reader);
     if (!machine) {
@@ -10168,17 +10227,29 @@ var Issue = class {
         this.wide = wide;
         cx.notify();
       }
-    }).when(!ref, (el) => el.child(v_flex2().flex_1().gap(8).items_center().justify_center().p(24).child(div3().font_semibold().child("Issue details")).child(div3().text_size(13).text_color(t.dim).text_center().child("Choose an issue in the GitHub sidebar. Issue details are not restored after restarting Herdr.")))).when(Boolean(ref), (el) => el.child(h_flex2().flex_none().px(24).pt(18).pb(12).gap(12).items_start().child(h_flex2().flex_1().min_w(0).gap(8).items_center().flex_wrap().text_size(22).child(div3().min_w(0).font_semibold().child(issue?.title ?? "Issue details")).child(h_flex2().gap(2).items_center().flex_none().child(div3().id("issue-browser").px(2).rounded(4).text_color(t.accent).cursor_pointer().hover((s) => s.bg(t.hover)).tooltip(`Open ${ref?.repo} #${ref?.number} in browser`).accessibility_label(`Open #${ref?.number} in browser`).on_mouse_down("left", stop).on_click((_e, cx) => {
+    }).when(!ref, (el) => el.child(v_flex2().flex_1().gap(8).items_center().justify_center().p(24).child(div3().font_semibold().child("Issue details")).child(div3().text_size(13).text_color(t.dim).text_center().child("Choose an issue in the GitHub sidebar. Issue details are not restored after restarting Herdr.")))).when(Boolean(ref), (el) => el.child(h_flex2().flex_none().px(24).pt(18).pb(12).gap(12).items_start().when(this.history.length > 0, (el2) => el2.child(this.back())).child(h_flex2().flex_1().min_w(0).gap(8).items_center().flex_wrap().text_size(22).child(div3().min_w(0).font_semibold().child(issue?.title ?? "Issue details")).child(h_flex2().gap(2).items_center().flex_none().child(div3().id("issue-browser").px(2).rounded(4).text_color(t.accent).cursor_pointer().hover((s) => s.bg(t.hover)).tooltip(`Open ${ref?.repo} #${ref?.number} in browser`).accessibility_label(`Open #${ref?.number} in browser`).on_mouse_down("left", stop).on_click((_e, cx) => {
       cx.stop_propagation();
       cx.open_url(url);
     }).child(ref ? `#${ref.number}` : "")).child(button("issue-copy", svg3("mods/github/assets/copy.svg").size(16), "Copy issue link", (_e, cx) => cx.write_to_clipboard(url))))).child(entry?.loading ? div3().size(36).flex_none().flex().items_center().justify_center().child(spinner(18)) : button("issue-refresh", "\u21BB", "Refresh issue", (_e, cx) => {
       this.load(cx);
       cx.notify();
-    }).size(36).flex_none().flex().items_center().justify_center().text_size(22)))).when(Boolean(ref), (el) => el.child(v_flex2().id("issue-scroll").flex_1().min_h(0).overflow_y_scroll().px(24).pb(18).gap(12).when(Boolean(entry?.loading), (el2) => el2.child(div3().text_size(12).text_color(t.dim).child("Loading issue\u2026"))).when(Boolean(entry?.failure), (el2) => el2.child(div3().text_color(t.blocked).child(entry?.failure ?? ""))).child(issue ? this.document(issue) : div3())));
+    }).size(36).flex_none().flex().items_center().justify_center().text_size(22)))).when(Boolean(ref), (el) => el.child(v_flex2().id(`issue-scroll-${ref ? issueKey(ref) : ""}`).flex_1().min_h(0).overflow_y_scroll().px(24).pb(18).gap(12).when(Boolean(entry?.loading), (el2) => el2.child(div3().text_size(12).text_color(t.dim).child("Loading issue\u2026"))).when(Boolean(entry?.failure), (el2) => el2.child(div3().text_color(t.blocked).child(entry?.failure ?? ""))).child(issue ? this.document(issue) : div3())));
+  }
+  back() {
+    const previous3 = this.history.at(-1);
+    return button("issue-back", "\u2190", `Back to #${previous3.number}`, (_e, cx) => {
+      const ref = this.history.pop();
+      if (ref) this.show(cx, ref, true);
+    }).size(36).flex_none().flex().items_center().justify_center().text_size(22);
   }
   document(issue) {
     const t = colors();
     const post = (id, p, verb) => v_flex2().id(`${id}-card`).min_w(0).w_full().overflow_hidden().rounded(8).border_1().border_color(t.border).bg(t.background).child(h_flex2().px(16).py(10).gap(8).items_center().flex_wrap().bg(t.raised).border_b(1).border_color(t.border).text_size(12).child(div3().font_semibold().child(p.author)).child(div3().text_color(t.dim).child(verb)).child(div3().flex_1()).child(div3().text_color(t.dim).tooltip(p.createdAt).child(relativeTime(p.createdAt, Date.now())))).child(v_flex2().min_w(0).px(16).py(16).gap(12).child(TextView.markdown(id, p.markdown).selectable(true).scrollable(false).on_link_click((url, cx) => {
+      const linked = issueLink(url, issue.url);
+      if (linked) {
+        if (this.ref && issueKey(linked) !== issueKey(this.ref)) this.show(cx, linked, false);
+        return;
+      }
       const external = browserUrl(url, issue.url);
       if (external) cx.open_url(external);
     })).when(Boolean(p.reactions?.length), (el) => el.child(h_flex2().gap(6).flex_wrap().children((p.reactions ?? []).map((r) => div3().px(8).py(3).rounded(12).border_1().border_color(t.border).bg(t.raised).text_size(12).child(`${r.emoji} ${r.count}`))))));
