@@ -4,16 +4,19 @@ import { v_flex, h_flex } from "gpui-base";
 import { props, closeOverlay } from "herdr";
 import { location, locationKey } from "../io/context.ts";
 import * as gh from "../io/gh.ts";
-import { githubRemote } from "../io/git.ts";
+import * as known from "../io/known.ts";
 import type { RemoteRepo } from "../core/remote.ts";
 import { describeAccount } from "../core/account.ts";
 import { colors, stop, type Role } from "./ui.ts";
 
 export class Panel implements Role {
+  /** The place shown (locationKey()), and which refresh is the latest: older ones drop their results. */
   context: string | null = null;
-  account: gh.Account | null = null;
-  remote: RemoteRepo | null = null;
-  repo: string | null = null;
+  latest = 0;
+  // undefined: not known yet for this place.
+  account: gh.Account | undefined;
+  remote: RemoteRepo | null | undefined;
+  repo: string | undefined;
   error: string | null = null;
   loading = false;
 
@@ -21,46 +24,49 @@ export class Panel implements Role {
     this.refresh(cx);
   }
 
-  refresh(cx: Context): void {
-    if (this.loading) return;
-    const where = location(), context = JSON.stringify(where);
-    this.context = context;
-    this.loading = true;
+  /** Shows what is known about the focused place at once, then asks for what is stale (all of it when `force`, ↻). */
+  refresh(cx: Context, force = false): void {
+    const where = location(), run = ++this.latest, current = () => run === this.latest;
+    this.context = JSON.stringify(where);
+    // Never the previous place's facts: this place's known ones, or "…" until they arrive.
+    this.account = known.peekAccount(where.on);
+    this.remote = known.peekRemote(where);
+    this.repo = this.remote && this.account?.status.ok ? known.peekRepository(this.remote, this.account.on) : undefined;
     this.error = null;
+    this.loading = true;
     cx.spawn(async (cx) => {
       try {
-        // git and gh both where the folder is (ADR 0003). account() never rejects: keep its
+        // git and gh both where the folder is (ADR 0003). account() never rejects: show its
         // status even when git fails there, so the gh line doesn't stay at "checking…".
-        this.remote = null;
         const [account, remote] = await Promise.all([
-          gh.account(where.on).then((a) => {
-            if (locationKey() === context) this.account = a;
+          known.account(where.on, force).then((a) => {
+            if (current()) this.account = a;
             return a;
           }),
-          githubRemote(where),
+          known.remote(where, force),
         ]);
-        if (locationKey() !== context) return;
+        if (!current()) return;
         this.remote = remote;
-        this.repo = null;
-        if (account.status.ok && remote) {
-          this.repo = await gh.apiText(`repos/${remote.owner}/${remote.repo}`, ".full_name", { on: account.on });
-        }
+        const repo = account.status.ok && remote ? await known.repository(remote, account.on, force) : undefined;
+        if (current()) this.repo = repo;
       } catch (e) {
-        if (locationKey() !== context) return;
+        if (!current()) return;
         const r = this.remote;
         this.error = e instanceof gh.GhError && e.notFound && r
           ? `${r.owner}/${r.repo} (remote "${r.remote}") doesn't exist on GitHub, or ${this.account?.status.ok ? this.account.status.user : "this account"} can't see it. Check git remote -v.`
           : e instanceof Error ? e.message : String(e);
       } finally {
-        this.loading = false;
-        cx.notify();
+        if (current()) {
+          this.loading = false;
+          cx.notify();
+        }
       }
     });
   }
 
   render(cx: Context): Element {
     // Follow the focused folder: live data re-renders us, so compare here.
-    if (locationKey() !== this.context && !this.loading) this.refresh(cx);
+    if (locationKey() !== this.context) this.refresh(cx);
     const t = colors(), where = location(), overlay: string | undefined = props()?.overlay;
     const line = (label: string, value: string, color: Color = t.foreground, wrap = false) =>
       h_flex().gap(8).items_start()
@@ -78,13 +84,14 @@ export class Panel implements Role {
       .child(h_flex().h(42).flex_none().px(14).gap(8).items_center().border_b(1).border_color(t.border)
         .child(div().font_semibold().child("GitHub"))
         .child(div().flex_1().min_w(0).truncate().text_right().text_size(12).text_color(t.dim).child(this.repo ?? ""))
-        .child(button("gh-refresh", this.loading ? "…" : "↻", (_e, cx) => this.refresh(cx)))
+        .child(button("gh-refresh", this.loading ? "…" : "↻", (_e, cx) => this.refresh(cx, true)))
         .when(Boolean(overlay), (el) => el.child(button("gh-close", "×", () => closeOverlay(overlay!)))))
       .child(v_flex().p(14).gap(6)
         .child(line("folder", where.cwd ?? "none"))
         .child(line("machine", where.on ?? "this computer"))
         .child(line("gh", account.text, account.ok ? t.foreground : t.blocked, !account.ok))
-        .child(line("remote", this.remote ? `${this.remote.owner}/${this.remote.repo} (${this.remote.remote})` : this.loading ? "…" : "no GitHub remote"))
+        .child(line("remote", this.remote ? `${this.remote.owner}/${this.remote.repo} (${this.remote.remote})`
+          : this.remote === null ? "no GitHub remote" : this.loading ? "…" : "—"))
         .child(line("repo", this.repo ?? (this.loading ? "…" : "—")))
         .when(Boolean(this.error), (el) => el.child(div().pt(6).text_size(12).text_color(t.blocked).child(this.error ?? ""))));
   }
