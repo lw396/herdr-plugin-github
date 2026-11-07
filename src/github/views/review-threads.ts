@@ -225,7 +225,7 @@ export class ReviewThreads {
 								hidden ? "Show" : "Hide",
 								hidden ? "Show Diff" : "Hide Diff",
 								(_e, cx) => {
-									if (hidden) this.hiddenSnippets.delete(thread.id);
+									if (this.hiddenSnippets.has(thread.id)) this.hiddenSnippets.delete(thread.id);
 									else this.hiddenSnippets.add(thread.id);
 									cx.notify();
 								},

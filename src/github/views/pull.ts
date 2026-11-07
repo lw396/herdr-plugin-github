@@ -253,6 +253,8 @@ export class Pull {
 			],
 			[
 				postCard("pull-body", pull, "opened this pull request", onLink),
+				// Discussion metadata is fetched once per PR; report its progress/failure once, not per thread.
+				...(this.discussions?.loading || this.discussions?.failure ? [this.discussions.status()] : []),
 				...(pull.timeline ?? []).map((item) =>
 					timelineItem(item, this.discussions, onLink, (cx, path, comment) => this.select(cx, path, comment)),
 				),

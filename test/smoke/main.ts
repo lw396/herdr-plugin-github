@@ -196,7 +196,16 @@ export default class Smoke extends View {
 			.children(
 				pullTimeline(
 					[],
-					events,
+					[
+						...events,
+						{
+							id: 90000001,
+							event: "committed",
+							sha: "abcdef1",
+							message: "Fix #29 — [details](https://example.com/review)",
+							author: { name: "smoke", date: "2026-11-07T00:00:00Z" },
+						},
+					],
 					review36.flat(),
 					inline36.flat(),
 					"https://github.com/lw396/herdr-plugin-github/pull/36",

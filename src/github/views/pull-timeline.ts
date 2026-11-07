@@ -1,5 +1,5 @@
 // PR activity is compact; reviews own their code context and actionable conversations.
-import { h_flex, v_flex } from "gpui-base";
+import { h_flex, TextView, v_flex } from "gpui-base";
 import { type Context, div, type Element } from "gpui-kit";
 import type { PullTimelineItem } from "../core/pull-timeline.ts";
 import { relativeTime } from "../core/time.ts";
@@ -20,6 +20,7 @@ export function timelineItem(
 			.id(`pull-activity-${item.id}`)
 			.min_w(0)
 			.gap(8)
+			.px(16)
 			.py(6)
 			.items_center()
 			.flex_wrap()
@@ -27,8 +28,20 @@ export function timelineItem(
 			.child(div().text_color(t.dim).child("◇"))
 			.child(div().font_semibold().child(item.author))
 			.child(div().text_color(t.dim).child(item.verb))
-			.when(Boolean(item.body.trim()), (el) => el.child(div().child(item.body)))
-			.child(div().flex_1())
+			.when(Boolean(item.body.trim()), (el) =>
+				el.child(
+					div()
+						.min_w(0)
+						.flex_1()
+						.child(
+							TextView.markdown(`pull-activity-body-${item.id}`, item.markdown)
+								.selectable(true)
+								.scrollable(false)
+								.on_link_click(onLink),
+						),
+				),
+			)
+			.when(!item.body.trim(), (el) => el.child(div().flex_1()))
 			.child(div().text_color(t.dim).tooltip(item.createdAt).child(relativeTime(item.createdAt, Date.now())));
 	}
 	if (item.kind === "comment") return postCard(`pull-comment-${item.id}`, item, item.verb, onLink);
@@ -77,8 +90,7 @@ export function timelineItem(
 										.map((reply) =>
 											postCard(`inline-${reply.comment.id}`, reply.comment, "commented", onLink, { embedded: true }),
 										),
-								)
-								.when(Boolean(discussions), (el) => el.child(discussions!.status()));
+								);
 						}),
 					),
 			),

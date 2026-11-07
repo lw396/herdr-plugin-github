@@ -12290,7 +12290,7 @@ var ReviewThreads = class {
             hidden ? "Show" : "Hide",
             hidden ? "Show Diff" : "Hide Diff",
             (_e, cx) => {
-              if (hidden) this.hiddenSnippets.delete(thread.id);
+              if (this.hiddenSnippets.has(thread.id)) this.hiddenSnippets.delete(thread.id);
               else this.hiddenSnippets.add(thread.id);
               cx.notify();
             }
@@ -12506,12 +12506,19 @@ var FileDiff = class {
 };
 
 // src/github/views/pull-timeline.ts
-import { h_flex as h_flex11, v_flex as v_flex10 } from "gpui-base";
+import { h_flex as h_flex11, TextView as TextView2, v_flex as v_flex10 } from "gpui-base";
 import { div as div14 } from "gpui-kit";
 function timelineItem(item, discussions, onLink, open) {
   const t = colors();
   if (item.kind === "event") {
-    return h_flex11().id(`pull-activity-${item.id}`).min_w(0).gap(8).py(6).items_center().flex_wrap().text_size(12).child(div14().text_color(t.dim).child("\u25C7")).child(div14().font_semibold().child(item.author)).child(div14().text_color(t.dim).child(item.verb)).when(Boolean(item.body.trim()), (el) => el.child(div14().child(item.body))).child(div14().flex_1()).child(div14().text_color(t.dim).tooltip(item.createdAt).child(relativeTime(item.createdAt, Date.now())));
+    return h_flex11().id(`pull-activity-${item.id}`).min_w(0).gap(8).px(16).py(6).items_center().flex_wrap().text_size(12).child(div14().text_color(t.dim).child("\u25C7")).child(div14().font_semibold().child(item.author)).child(div14().text_color(t.dim).child(item.verb)).when(
+      Boolean(item.body.trim()),
+      (el) => el.child(
+        div14().min_w(0).flex_1().child(
+          TextView2.markdown(`pull-activity-body-${item.id}`, item.markdown).selectable(true).scrollable(false).on_link_click(onLink)
+        )
+      )
+    ).when(!item.body.trim(), (el) => el.child(div14().flex_1())).child(div14().text_color(t.dim).tooltip(item.createdAt).child(relativeTime(item.createdAt, Date.now())));
   }
   if (item.kind === "comment") return postCard(`pull-comment-${item.id}`, item, item.verb, onLink);
   const roots = item.discussion.filter((d) => d.root === d.comment.id);
@@ -12539,7 +12546,7 @@ function timelineItem(item, discussions, onLink, open) {
             item.discussion.filter((reply) => reply.root === d.root).map(
               (reply) => postCard(`inline-${reply.comment.id}`, reply.comment, "commented", onLink, { embedded: true })
             )
-          ).when(Boolean(discussions), (el2) => el2.child(discussions.status()));
+          );
         })
       )
     )
@@ -12712,6 +12719,8 @@ var Pull = class {
       ],
       [
         postCard("pull-body", pull, "opened this pull request", onLink),
+        // Discussion metadata is fetched once per PR; report its progress/failure once, not per thread.
+        ...this.discussions?.loading || this.discussions?.failure ? [this.discussions.status()] : [],
         ...(pull.timeline ?? []).map(
           (item) => timelineItem(item, this.discussions, onLink, (cx, path, comment) => this.select(cx, path, comment))
         ),
