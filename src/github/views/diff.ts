@@ -24,7 +24,7 @@ export class FileDiff {
 		this.scroll?.scroll_to_item(0);
 	}
 
-	render(file: ChangedFile, discussions?: ReviewThreads): Element {
+	render(file: ChangedFile, discussions?: ReviewThreads, commit?: string): Element {
 		const t = colors();
 		if (this.file !== file) {
 			this.file = file;
@@ -34,7 +34,14 @@ export class FileDiff {
 		}
 		const rows = this.rows;
 		// Build interactive cards now: native deferred renderers cannot register handlers.
-		const items: { key: string; height: number; element?: Element; line?: DiffLine; commentIds?: number[] }[] = [];
+		const items: {
+			key: string;
+			height: number;
+			element?: Element;
+			line?: DiffLine;
+			gutters?: { left?: Element; right?: Element };
+			commentIds?: number[];
+		}[] = [];
 		const threads = (discussions?.threads ?? []).filter((thread) => thread.path === file.path);
 		const anchors = new Map<number | null, ReviewThread[]>();
 		for (const thread of threads) {
@@ -54,7 +61,10 @@ export class FileDiff {
 			}
 		};
 		rows.forEach((row, index) => {
-			items.push({ key: `line-${index}`, height: ROW_HEIGHT, line: row });
+			const comment = commit ? discussions?.newComment(file.path, commit, row, this.viewportWidth) : undefined;
+			items.push({ key: `line-${index}`, height: ROW_HEIGHT, line: row, gutters: comment?.gutters });
+			for (const [side, editor] of (comment?.editors ?? []).entries())
+				items.push({ key: `editor-${index}-${side}`, height: 220, element: editor });
 			appendThreads(index);
 		});
 		// Native layout measures a representative row twice; keep it non-interactive even without a patch.
@@ -111,7 +121,10 @@ export class FileDiff {
 										items.length,
 										items.map((item) => item.height),
 										(index) => items[index]!.key,
-										(range) => items.slice(range.start, range.end).map((item) => item.element ?? diffRow(item.line!)),
+										(range) =>
+											items
+												.slice(range.start, range.end)
+												.map((item) => item.element ?? diffRow(item.line!, item.gutters)),
 									)
 										.with_item_to_measure_index(0)
 										.when(this.scroll !== null, (el) => el.track_scroll(this.scroll!))

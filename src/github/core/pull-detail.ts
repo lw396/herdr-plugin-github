@@ -20,6 +20,7 @@ export interface PullDetail {
 	createdAt: string;
 	url: string;
 	head: string;
+	headSha: string;
 	base: string;
 	labels: Label[];
 	assignees: string[];
@@ -42,7 +43,7 @@ interface RestPull {
 	user: { login: string } | null;
 	created_at: string;
 	html_url: string;
-	head: { label: string; ref: string };
+	head: { label: string; ref: string; sha: string };
 	base: { label: string; ref: string };
 	labels: (string | { name: string; color?: string })[];
 	assignees: { login: string }[];
@@ -90,6 +91,7 @@ export function parsePullDetail(pull: unknown, issue: unknown, comments: unknown
 		createdAt: p.created_at,
 		url: p.html_url,
 		head: crossOwner ? p.head.label || p.head.ref : p.head.ref,
+		headSha: p.head.sha,
 		base: crossOwner ? p.base.label || p.base.ref : p.base.ref,
 		labels: p.labels.map(parseLabel),
 		assignees: p.assignees.map((a) => a.login),

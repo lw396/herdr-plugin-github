@@ -10389,6 +10389,7 @@ function parsePullDetail(pull, issue, comments, reviews) {
     createdAt: p.created_at,
     url: p.html_url,
     head: crossOwner ? p.head.label || p.head.ref : p.head.ref,
+    headSha: p.head.sha,
     base: crossOwner ? p.base.label || p.base.ref : p.base.ref,
     labels: p.labels.map(parseLabel),
     assignees: p.assignees.map((a) => a.login),
@@ -10603,6 +10604,17 @@ async function setPullFileViewed(repo, number, path, viewed, on) {
     throw e;
   }
   announce({ repo, number, files: { on } });
+}
+async function addPullComment(repo, number, target, body, on) {
+  const raw = await api(`repos/${repo}/pulls/${number}/comments`, {
+    on,
+    method: "POST",
+    fields: { line: target.line },
+    rawFields: { body, commit_id: target.commit, path: target.path, side: target.side }
+  });
+  const comment = parseComment(raw, `https://github.com/${repo}/pull/${number}`);
+  announce({ repo, number, threads: { on } });
+  return comment;
 }
 async function replyPullThread(repo, number, root, body, on) {
   const raw = await api(`repos/${repo}/pulls/${number}/comments/${root}/replies`, {
@@ -12050,6 +12062,11 @@ import { h_flex as h_flex10, Scrollbar, VirtualListScrollHandle, v_flex as v_fle
 import { div as div13 } from "gpui-kit";
 
 // src/github/core/diff.ts
+function commentTarget(row, side) {
+  if (!row.comment) return null;
+  const line = side === "LEFT" ? row.oldLine : row.newLine;
+  return line === null ? null : { side, line };
+}
 function parsePatch(patch) {
   const rows = [];
   let oldLine = 0, newLine = 0, oldLeft = 0, newLeft = 0;
@@ -12105,15 +12122,15 @@ import { h_flex as h_flex8, v_flex as v_flex7 } from "gpui-base";
 import { div as div11 } from "gpui-kit";
 var ROW_HEIGHT = 22;
 function diffSnippet(id, patch) {
-  return v_flex7().id(id).min_w(0).w_full().overflow_x_scrollbar().children(parsePatch(patch).map(diffRow));
+  return v_flex7().id(id).min_w(0).w_full().overflow_x_scrollbar().children(parsePatch(patch).map((row) => diffRow(row)));
 }
-function diffRow(row) {
+function diffRow(row, gutters) {
   const t = colors();
   const added = row.kind === "add", deleted = row.kind === "delete";
   return h_flex8().h(ROW_HEIGHT).w_full().flex_none().items_center().font_family("monospace").text_size(13).when(added, (el) => el.bg(`${t.done}20`)).when(deleted, (el) => el.bg(`${t.blocked}20`)).when(row.kind === "hunk", (el) => el.bg(`${t.accent}18`).text_color(t.accent)).when(row.kind === "notice", (el) => el.text_color(t.dim)).child(
-    div11().w(54).flex_none().pr(8).text_right().text_color(t.dim).child(row.oldLine ?? "")
+    div11().w(54).flex_none().pr(8).text_right().text_color(t.dim).child(gutters?.left ?? row.oldLine ?? "")
   ).child(
-    div11().w(54).flex_none().pr(8).text_right().text_color(t.dim).child(row.newLine ?? "")
+    div11().w(54).flex_none().pr(8).text_right().text_color(t.dim).child(gutters?.right ?? row.newLine ?? "")
   ).child(
     div11().w(20).flex_none().text_color(added ? t.done : deleted ? t.blocked : t.dim).child(added ? "+" : deleted ? "\u2212" : "")
   ).child(div11().flex_none().whitespace_nowrap().child(row.text));
@@ -12134,6 +12151,7 @@ var ReviewThreads = class {
   boxes = /* @__PURE__ */ new Map();
   dirty = false;
   hiddenSnippets = /* @__PURE__ */ new Set();
+  drafts = /* @__PURE__ */ new Map();
   constructor(ref, on, host) {
     this.ref = ref;
     this.on = on;
@@ -12174,6 +12192,82 @@ var ReviewThreads = class {
   }
   status() {
     return div12().text_size(12).text_color(this.failure ? colors().blocked : colors().dim).child(this.failure ?? (this.loading ? "Loading discussions\u2026" : ""));
+  }
+  /** Register gutter handlers and editors before native deferred row rendering. */
+  newComment(path, commit, row, width) {
+    const gutters = {};
+    const editors = [];
+    for (const side of ["LEFT", "RIGHT"]) {
+      const anchor = commentTarget(row, side);
+      if (!anchor) continue;
+      const key = JSON.stringify([path, side, anchor.line]);
+      const draft = this.drafts.get(key);
+      const busy = this.writing.has(key);
+      gutters[side === "LEFT" ? "left" : "right"] = button(
+        `add-inline-${key}`,
+        `${anchor.line} +`,
+        `Add Comment on ${side} line ${anchor.line}`,
+        (_e, cx) => {
+          if (!this.drafts.has(key)) {
+            const box = TextareaState2.new({ placeholder: "Leave a comment" });
+            box.on("change", (_e2, cx2) => cx2.notify());
+            this.drafts.set(key, { target: { path, commit, ...anchor }, box });
+          }
+          cx.notify();
+        }
+      ).p(0).text_size(12);
+      if (!draft) continue;
+      const t = colors();
+      editors.push(
+        v_flex8().w(width).h(220).p(12).gap(8).bg(t.surface).border_1().border_color(t.border).child(div12().text_size(12).text_color(t.dim).child(`${side} ${anchor.line}`)).child(div12().h(90).on_mouse_down("left", stop).child(Textarea2.new(draft.box).w_full())).child(
+          div12().text_size(12).text_color(t.blocked).child(this.failures.get(key) ?? "")
+        ).child(
+          h_flex9().gap(8).child(
+            button(`post-inline-${key}`, busy ? "Saving\u2026" : "Add Comment", "Add Comment", (_e, cx) => {
+              if (busy || !draft.box.value().trim()) return;
+              const body = draft.box.value();
+              this.latest++;
+              this.loading = false;
+              this.writing.add(key);
+              this.failures.delete(key);
+              cx.notify();
+              cx.spawn(async (cx2) => {
+                try {
+                  const comment = await addPullComment(this.ref.repo, this.ref.number, draft.target, body, this.on);
+                  this.threads.push({
+                    id: `comment-${comment.id}`,
+                    root: comment.id,
+                    path,
+                    side,
+                    line: anchor.line,
+                    outdated: draft.target.commit !== commit,
+                    resolved: false,
+                    canResolve: false,
+                    canUnresolve: false,
+                    comments: [comment]
+                  });
+                  if (draft.box.value() === body) this.drafts.delete(key);
+                } catch (e) {
+                  this.failures.set(key, failureOf(e).message);
+                } finally {
+                  this.writing.delete(key);
+                  this.dirty = true;
+                  cx2.notify();
+                }
+              });
+            })
+          ).child(
+            button(`cancel-inline-${key}`, "Cancel", "Cancel", (_e, cx) => {
+              if (busy) return;
+              this.drafts.delete(key);
+              this.failures.delete(key);
+              cx.notify();
+            })
+          )
+        )
+      );
+    }
+    return { gutters, editors };
   }
   /** Built during render, NOT in the virtual list's deferred row callback. */
   card(thread, unavailable, width) {
@@ -12329,7 +12423,7 @@ var FileDiff = class {
     this.target = comment;
     this.scroll?.scroll_to_item(0);
   }
-  render(file, discussions) {
+  render(file, discussions, commit) {
     const t = colors();
     if (this.file !== file) {
       this.file = file;
@@ -12357,7 +12451,10 @@ var FileDiff = class {
       }
     };
     rows.forEach((row, index2) => {
-      items.push({ key: `line-${index2}`, height: ROW_HEIGHT, line: row });
+      const comment = commit ? discussions?.newComment(file.path, commit, row, this.viewportWidth) : void 0;
+      items.push({ key: `line-${index2}`, height: ROW_HEIGHT, line: row, gutters: comment?.gutters });
+      for (const [side, editor] of (comment?.editors ?? []).entries())
+        items.push({ key: `editor-${index2}-${side}`, height: 220, element: editor });
       appendThreads(index2);
     });
     if (!rows.length && threads.length)
@@ -12388,7 +12485,7 @@ var FileDiff = class {
           items.length,
           items.map((item) => item.height),
           (index2) => items[index2].key,
-          (range) => items.slice(range.start, range.end).map((item) => item.element ?? diffRow(item.line))
+          (range) => items.slice(range.start, range.end).map((item) => item.element ?? diffRow(item.line, item.gutters))
         ).with_item_to_measure_index(0).when(this.scroll !== null, (el) => el.track_scroll(this.scroll)).h_full().w_full().min_w(this.width)
       )
     ).child(Scrollbar.vertical(id).absolute().inset_0()) : div13().p(20).text_color(t.dim).child(
@@ -12573,7 +12670,7 @@ var Pull = class {
             div15().text_color(colors().blocked).child(this.files?.failure ?? "")
           )
         )
-      ).child(this.diff.render(file, this.discussions ?? void 0));
+      ).child(this.diff.render(file, this.discussions ?? void 0, this.entry?.pull?.headSha));
     if (this.selected && this.files?.files && this.discussions?.threads.some((thread) => thread.path === this.selected)) {
       if (this.missingFile?.path !== this.selected)
         this.missingFile = {

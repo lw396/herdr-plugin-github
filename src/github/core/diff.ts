@@ -8,6 +8,13 @@ export interface DiffLine {
 	comment: { side: "LEFT" | "RIGHT"; line: number } | null;
 }
 
+/** A context line can be commented on either side using that side's line number. */
+export function commentTarget(row: DiffLine, side: "LEFT" | "RIGHT"): DiffLine["comment"] {
+	if (!row.comment) return null;
+	const line = side === "LEFT" ? row.oldLine : row.newLine;
+	return line === null ? null : { side, line };
+}
+
 /** Only lines inside a declared hunk have line numbers or review targets. */
 export function parsePatch(patch: string): DiffLine[] {
 	const rows: DiffLine[] = [];

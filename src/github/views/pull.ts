@@ -191,7 +191,7 @@ export class Pull {
 							),
 						),
 				)
-				.child(this.diff.render(file, this.discussions ?? undefined));
+				.child(this.diff.render(file, this.discussions ?? undefined, this.entry?.pull?.headSha));
 		if (
 			this.selected &&
 			this.files?.files &&

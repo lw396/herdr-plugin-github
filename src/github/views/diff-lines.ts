@@ -8,11 +8,16 @@ export const ROW_HEIGHT = 22;
 
 /** A review's code context stays in its timeline discussion; the full file still uses the virtual list. */
 export function diffSnippet(id: string, patch: string): Element {
-	return v_flex().id(id).min_w(0).w_full().overflow_x_scrollbar().children(parsePatch(patch).map(diffRow));
+	return v_flex()
+		.id(id)
+		.min_w(0)
+		.w_full()
+		.overflow_x_scrollbar()
+		.children(parsePatch(patch).map((row) => diffRow(row)));
 }
 
 /** No event handlers here: deferred virtual-list renderers run during native layout. */
-export function diffRow(row: DiffLine): Element {
+export function diffRow(row: DiffLine, gutters?: { left?: Element; right?: Element }): Element {
 	const t = colors();
 	const added = row.kind === "add",
 		deleted = row.kind === "delete";
@@ -34,7 +39,7 @@ export function diffRow(row: DiffLine): Element {
 				.pr(8)
 				.text_right()
 				.text_color(t.dim)
-				.child(row.oldLine ?? ""),
+				.child(gutters?.left ?? row.oldLine ?? ""),
 		)
 		.child(
 			div()
@@ -43,7 +48,7 @@ export function diffRow(row: DiffLine): Element {
 				.pr(8)
 				.text_right()
 				.text_color(t.dim)
-				.child(row.newLine ?? ""),
+				.child(gutters?.right ?? row.newLine ?? ""),
 		)
 		.child(
 			div()

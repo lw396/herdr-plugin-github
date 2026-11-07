@@ -1,6 +1,16 @@
 import { expect, test } from "bun:test";
-import { parsePatch } from "../../src/github/core/diff.ts";
+import { commentTarget, parsePatch } from "../../src/github/core/diff.ts";
 import pages from "../fixtures/pull-plugin-35-files.json";
+
+test("either context gutter targets its own side; headers and notices cannot open a composer", () => {
+	const rows = parsePatch("@@ -4,2 +9,2 @@\n same\n-old\n+new\n\\ No newline at end of file");
+	expect(commentTarget(rows[1]!, "LEFT")).toEqual({ side: "LEFT", line: 4 });
+	expect(commentTarget(rows[1]!, "RIGHT")).toEqual({ side: "RIGHT", line: 9 });
+	expect(commentTarget(rows[2]!, "RIGHT")).toBeNull();
+	expect(commentTarget(rows[3]!, "LEFT")).toBeNull();
+	expect(commentTarget(rows[0]!, "LEFT")).toBeNull();
+	expect(commentTarget(rows[4]!, "RIGHT")).toBeNull();
+});
 
 function patch(path: string): string {
 	const file = pages.flat().find((f) => f.filename === path);

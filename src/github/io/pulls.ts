@@ -141,6 +141,32 @@ export async function setPullFileViewed(
 	announce({ repo, number, files: { on } });
 }
 
+export interface PullCommentTarget {
+	commit: string;
+	path: string;
+	side: "LEFT" | "RIGHT";
+	line: number;
+}
+
+/** REST publishes a standalone comment, without creating or submitting a pending review. */
+export async function addPullComment(
+	repo: string,
+	number: number,
+	target: PullCommentTarget,
+	body: string,
+	on: string | null,
+): Promise<Comment> {
+	const raw = await api(`repos/${repo}/pulls/${number}/comments`, {
+		on,
+		method: "POST",
+		fields: { line: target.line },
+		rawFields: { body, commit_id: target.commit, path: target.path, side: target.side },
+	});
+	const comment = parseComment(raw, `https://github.com/${repo}/pull/${number}`);
+	announce({ repo, number, threads: { on } });
+	return comment;
+}
+
 /** Replies are published once, never retried after a dropped response. */
 export async function replyPullThread(
 	repo: string,

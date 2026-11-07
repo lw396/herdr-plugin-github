@@ -183,6 +183,7 @@ export default class Smoke extends View {
 				this.threadDiff.render(
 					this.files!.files!.find((file) => file.path === "docs/pr-fixture.md")!,
 					this.discussions ?? undefined,
+					"63f52f1dddd87eecbe02a9013523124921ee4345",
 				),
 			)
 			.child(

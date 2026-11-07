@@ -2,10 +2,17 @@
 import { h_flex, Textarea, TextareaState, v_flex } from "gpui-base";
 import { type Context, div, type Element } from "gpui-kit";
 import type { DetailRef } from "../core/detail.ts";
+import { commentTarget, type DiffLine } from "../core/diff.ts";
 import type { ReviewThread } from "../core/review-threads.ts";
 import { Notices } from "../io/changes.ts";
 import { failureOf } from "../io/gh.ts";
-import { readPullThreads, replyPullThread, resolvePullThread } from "../io/pulls.ts";
+import {
+	addPullComment,
+	type PullCommentTarget,
+	readPullThreads,
+	replyPullThread,
+	resolvePullThread,
+} from "../io/pulls.ts";
 import { type DetailHost, openLink, postCard } from "./detail.ts";
 import { diffSnippet } from "./diff-lines.ts";
 import { button, colors, link, stop } from "./ui.ts";
@@ -23,6 +30,7 @@ export class ReviewThreads {
 	private boxes = new Map<string, TextareaState>();
 	private dirty = false;
 	private hiddenSnippets = new Set<string>();
+	private drafts = new Map<string, { target: PullCommentTarget; box: TextareaState }>();
 	constructor(ref: DetailRef, on: string | null, host: DetailHost) {
 		this.ref = ref;
 		this.on = on;
@@ -73,6 +81,111 @@ export class ReviewThreads {
 			.text_size(12)
 			.text_color(this.failure ? colors().blocked : colors().dim)
 			.child(this.failure ?? (this.loading ? "Loading discussions…" : ""));
+	}
+
+	/** Register gutter handlers and editors before native deferred row rendering. */
+	newComment(
+		path: string,
+		commit: string,
+		row: DiffLine,
+		width: number,
+	): {
+		gutters: { left?: Element; right?: Element };
+		editors: Element[];
+	} {
+		const gutters: { left?: Element; right?: Element } = {};
+		const editors: Element[] = [];
+		for (const side of ["LEFT", "RIGHT"] as const) {
+			const anchor = commentTarget(row, side);
+			if (!anchor) continue;
+			const key = JSON.stringify([path, side, anchor.line]);
+			const draft = this.drafts.get(key);
+			const busy = this.writing.has(key);
+			gutters[side === "LEFT" ? "left" : "right"] = button(
+				`add-inline-${key}`,
+				`${anchor.line} +`,
+				`Add Comment on ${side} line ${anchor.line}`,
+				(_e, cx) => {
+					if (!this.drafts.has(key)) {
+						const box = TextareaState.new({ placeholder: "Leave a comment" });
+						box.on("change", (_e, cx) => cx.notify());
+						this.drafts.set(key, { target: { path, commit, ...anchor }, box });
+					}
+					cx.notify();
+				},
+			)
+				.p(0)
+				.text_size(12);
+			if (!draft) continue;
+			const t = colors();
+			editors.push(
+				v_flex()
+					.w(width)
+					.h(220)
+					.p(12)
+					.gap(8)
+					.bg(t.surface)
+					.border_1()
+					.border_color(t.border)
+					.child(div().text_size(12).text_color(t.dim).child(`${side} ${anchor.line}`))
+					.child(div().h(90).on_mouse_down("left", stop).child(Textarea.new(draft.box).w_full()))
+					.child(
+						div()
+							.text_size(12)
+							.text_color(t.blocked)
+							.child(this.failures.get(key) ?? ""),
+					)
+					.child(
+						h_flex()
+							.gap(8)
+							.child(
+								button(`post-inline-${key}`, busy ? "Saving…" : "Add Comment", "Add Comment", (_e, cx) => {
+									if (busy || !draft.box.value().trim()) return;
+									const body = draft.box.value();
+									this.latest++;
+									this.loading = false;
+									this.writing.add(key);
+									this.failures.delete(key);
+									cx.notify();
+									cx.spawn(async (cx) => {
+										try {
+											const comment = await addPullComment(this.ref.repo, this.ref.number, draft.target, body, this.on);
+											// Show the acknowledged comment while GitHub's thread identity is reloaded.
+											this.threads.push({
+												id: `comment-${comment.id}`,
+												root: comment.id,
+												path,
+												side,
+												line: anchor.line,
+												outdated: draft.target.commit !== commit,
+												resolved: false,
+												canResolve: false,
+												canUnresolve: false,
+												comments: [comment],
+											});
+											if (draft.box.value() === body) this.drafts.delete(key);
+										} catch (e) {
+											this.failures.set(key, failureOf(e).message);
+										} finally {
+											this.writing.delete(key);
+											this.dirty = true;
+											cx.notify();
+										}
+									});
+								}),
+							)
+							.child(
+								button(`cancel-inline-${key}`, "Cancel", "Cancel", (_e, cx) => {
+									if (busy) return;
+									this.drafts.delete(key);
+									this.failures.delete(key);
+									cx.notify();
+								}),
+							),
+					),
+			);
+		}
+		return { gutters, editors };
 	}
 
 	/** Built during render, NOT in the virtual list's deferred row callback. */
