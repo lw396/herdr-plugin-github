@@ -10459,6 +10459,18 @@ import { closeOverlay, props as props3 } from "herdr";
 // src/github/io/context.ts
 import { focused as focused2, panes as panes3, spaces as spaces2 } from "herdr";
 
+// src/github/core/branch.ts
+function folderBranch(herdr, where) {
+  if (!where.cwd) return null;
+  const matching = herdr.panes.filter((p) => {
+    if (!p.terminal || p.cwd !== where.cwd) return false;
+    const on = p.terminal.includes("/") ? p.terminal.split("/")[0] : null;
+    return on === where.on;
+  });
+  const pane = matching.find((p) => p.pane === herdr.focused?.pane || p.terminal === herdr.focused?.terminal) ?? matching[0];
+  return pane?.branch || null;
+}
+
 // src/github/core/location.ts
 function focusedFolder(herdr, previous3) {
   const space = herdr.spaces.find((s) => s.active), f = herdr.focused, id = space?.id ?? null;
@@ -10477,6 +10489,9 @@ var previous2 = null;
 function location() {
   previous2 = focusedFolder({ spaces: spaces2(), panes: panes3(), focused: focused2() }, previous2);
   return previous2;
+}
+function currentBranch() {
+  return folderBranch({ panes: panes3(), focused: focused2() }, location());
 }
 var locationKey = () => JSON.stringify(location());
 
@@ -10834,19 +10849,24 @@ var Panel = class {
     const overlay = props3()?.overlay;
     const noRemote = this.remote === null && !(this.account && !this.account.status.ok);
     const ghLine = this.account ? describeAccount(this.account) : null;
-    return v_flex2().id("github").size_full().min_h(0).overflow_hidden().bg(t.background).text_color(t.foreground).text_size(13).when(!overlay, (el) => el.rounded(10).border_1().border_color(t.border)).child(this.header(overlay)).when(noRemote, (el) => el.child(this.noRemote(where.cwd))).when(!noRemote, (el) => el.child(this.tabs()).child(this.list())).child(
-      div4().flex_none().px(14).py(8).border_t(1).border_color(t.border).text_size(11).text_color(t.dim).truncate().child(`${ghLine?.text ?? "checking gh\u2026"} \xB7 ${where.cwd ?? "no folder"}`)
-    );
+    const context = `${ghLine?.text ?? "checking gh\u2026"} \xB7 ${where.cwd ?? "no folder"}`;
+    const branch = currentBranch();
+    return v_flex2().id("github").size_full().min_h(0).overflow_hidden().bg(t.background).text_color(t.foreground).text_size(13).when(!overlay, (el) => el.rounded(10).border_1().border_color(t.border)).child(this.header(overlay, context)).when(noRemote, (el) => el.child(this.noRemote(where.cwd))).when(!noRemote, (el) => el.child(this.tabs()).child(this.list())).children(branch ? [this.branchCard(branch)] : []);
   }
   /** The repository, then ↻ (Herdr's own spinner while anything loads, as its tab bar shows a working agent). */
-  header(overlay) {
+  header(overlay, context) {
     const t = colors();
     const busy = this.loading || GROUPS.some(({ kind }) => this.groups[kind].loading || this.groups[kind].loadingMore);
     const refresh = button("gh-refresh", "\u21BB", "Refresh", (_e, cx) => {
       this.refresh(cx, true);
       cx.notify();
     });
-    return h_flex3().h(42).flex_none().px(14).gap(8).items_center().border_b(1).border_color(t.border).child(div4().font_semibold().child("GitHub")).child(div4().flex_1().min_w(0).truncate().text_right().text_size(12).text_color(t.dim).child(this.repo())).child(busy ? div4().size(24).flex_none().flex().items_center().justify_center().child(spinner()) : refresh).when(overlay, (el) => el.child(button("gh-close", "\xD7", "Close", () => closeOverlay(overlay))));
+    return h_flex3().h(42).flex_none().px(14).gap(8).items_center().border_b(1).border_color(t.border).child(div4().font_semibold().tooltip(context).child("GitHub")).child(div4().flex_1().min_w(0).truncate().text_right().text_size(12).text_color(t.dim).child(this.repo())).child(busy ? div4().size(24).flex_none().flex().items_center().justify_center().child(spinner()) : refresh).when(overlay, (el) => el.child(button("gh-close", "\xD7", "Close", () => closeOverlay(overlay))));
+  }
+  /** Only Herdr's current branch for now; linked PRs and runs join this card later. */
+  branchCard(branch) {
+    const t = colors();
+    return h_flex3().id("gh-current-branch").flex_none().min_h(44).px(14).py(10).gap(8).items_center().border_t(1).border_color(t.border).bg(t.surface).text_size(12).tooltip(branch).accessibility_label(`Current branch: ${branch}`).child(div4().flex_none().text_color(t.dim).child("\u2387")).child(div4().flex_1().min_w(0).truncate().font_medium().child(branch));
   }
   repo() {
     return this.remote ? `${this.remote.owner}/${this.remote.repo}` : "";

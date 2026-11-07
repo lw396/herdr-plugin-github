@@ -15,7 +15,7 @@ import {
 import type { RemoteRepo } from "../core/remote.ts";
 import { relativeTime } from "../core/time.ts";
 import { Notices } from "../io/changes.ts";
-import { location, locationKey } from "../io/context.ts";
+import { currentBranch, location, locationKey } from "../io/context.ts";
 import { DetailTabs } from "../io/detail-tabs.ts";
 import * as gh from "../io/gh.ts";
 import { listChanges } from "../io/issues.ts";
@@ -266,6 +266,8 @@ export class Panel implements Role {
 		const noRemote = this.remote === null && !(this.account && !this.account.status.ok);
 		// What the sidebar says about gh: who is signed in where, or what to do on which machine.
 		const ghLine = this.account ? describeAccount(this.account) : null;
+		const context = `${ghLine?.text ?? "checking gh…"} · ${where.cwd ?? "no folder"}`;
+		const branch = currentBranch();
 		// A card like Herdr's Files and Changes panels; a window overlay gets Herdr's own frame instead.
 		return (
 			v_flex()
@@ -277,27 +279,16 @@ export class Panel implements Role {
 				.text_color(t.foreground)
 				.text_size(13)
 				.when(!overlay, (el) => el.rounded(10).border_1().border_color(t.border))
-				.child(this.header(overlay))
+				.child(this.header(overlay, context))
 				.when(noRemote, (el) => el.child(this.noRemote(where.cwd)))
 				.when(!noRemote, (el) => el.child(this.tabs()).child(this.list()))
-				// Which gh and folder this is (ADR 0003), until the branch card (#18) takes the bottom.
-				.child(
-					div()
-						.flex_none()
-						.px(14)
-						.py(8)
-						.border_t(1)
-						.border_color(t.border)
-						.text_size(11)
-						.text_color(t.dim)
-						.truncate()
-						.child(`${ghLine?.text ?? "checking gh…"} · ${where.cwd ?? "no folder"}`),
-				)
+				// A fixed sibling of the scrolling list, independent of GitHub access or remote detection.
+				.children(branch ? [this.branchCard(branch)] : [])
 		);
 	}
 
 	/** The repository, then ↻ (Herdr's own spinner while anything loads, as its tab bar shows a working agent). */
-	private header(overlay: string | undefined): Element {
+	private header(overlay: string | undefined, context: string): Element {
 		const t = colors();
 		const busy = this.loading || GROUPS.some(({ kind }) => this.groups[kind].loading || this.groups[kind].loadingMore);
 		const refresh = button("gh-refresh", "↻", "Refresh", (_e, cx) => {
@@ -312,10 +303,31 @@ export class Panel implements Role {
 			.items_center()
 			.border_b(1)
 			.border_color(t.border)
-			.child(div().font_semibold().child("GitHub"))
+			.child(div().font_semibold().tooltip(context).child("GitHub"))
 			.child(div().flex_1().min_w(0).truncate().text_right().text_size(12).text_color(t.dim).child(this.repo()))
 			.child(busy ? div().size(24).flex_none().flex().items_center().justify_center().child(spinner()) : refresh)
 			.when(overlay, (el) => el.child(button("gh-close", "×", "Close", () => closeOverlay(overlay!))));
+	}
+
+	/** Only Herdr's current branch for now; linked PRs and runs join this card later. */
+	private branchCard(branch: string): Element {
+		const t = colors();
+		return h_flex()
+			.id("gh-current-branch")
+			.flex_none()
+			.min_h(44)
+			.px(14)
+			.py(10)
+			.gap(8)
+			.items_center()
+			.border_t(1)
+			.border_color(t.border)
+			.bg(t.surface)
+			.text_size(12)
+			.tooltip(branch)
+			.accessibility_label(`Current branch: ${branch}`)
+			.child(div().flex_none().text_color(t.dim).child("⎇"))
+			.child(div().flex_1().min_w(0).truncate().font_medium().child(branch));
 	}
 
 	private repo(): string {

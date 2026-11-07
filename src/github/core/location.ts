@@ -10,7 +10,7 @@ export interface Location {
 /** The parts of Herdr's spaces(), panes() and focused() the rule reads. */
 export interface Herdr {
 	spaces: { id: string; active: boolean; folder: string; machine: string | null }[];
-	panes: { pane: string; terminal: string | null; mod?: string; cwd: string | null }[];
+	panes: { pane: string; terminal: string | null; mod?: string; cwd: string | null; branch?: string | null }[];
 	focused: { pane: string | null; terminal: string | null; cwd: string | null } | null;
 }
 

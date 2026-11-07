@@ -8,6 +8,7 @@ The mod uses GitHub CLI (`gh`) on the machine hosting the repository, so local a
 
 - **Repository detection** — identify the GitHub repository from the focused folder's git remotes.
 - **Issue sidebar** — browse issues assigned to you, all open issues, and closed issues, with pagination.
+- **Current branch** — a fixed sidebar footer shows the focused folder’s branch from Herdr’s live pane metadata, without extra git commands. The issue list scrolls independently.
 - **Automatic list refresh** — while the GitHub sidebar is visible, check for changes every 60 seconds using ETags; refresh expanded groups only when changed. Showing it again refreshes immediately.
 - **Native issue tabs** — open different issues in separate tabs; selecting an already-open issue reuses its tab.
 - **Discussion reader** — read Markdown descriptions, comments, and reaction counts in individual cards.
