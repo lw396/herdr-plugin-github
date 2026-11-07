@@ -4,20 +4,33 @@ import { setShared, shared } from "herdr";
 import type { Comment } from "../core/issue-detail.ts";
 import type { IssueChange } from "../core/issues.ts";
 
-/** One write to an issue: a new comment, or its new state. */
+/** One write to an issue: a new comment, or its new state. Notices from before PRs have no kind. */
 export interface IssueNotice {
+	kind?: "issue";
 	repo: string;
 	number: number;
 	comment?: Comment;
 	state?: IssueChange;
 }
 
+/** One write to a PR; what it carries arrives with the PR writes. */
+export interface PullNotice {
+	kind: "pr";
+	repo: string;
+	number: number;
+}
+
+export type Notice = IssueNotice | PullNotice;
+
+/** Notices written before PRs have no kind: they are about issues. */
+export const isIssueNotice = (n: Notice): n is IssueNotice => n.kind !== "pr";
+
 /**
  * Each notice has its own id, not a shared counter: a mod instance announcing from an older copy
  * of the log must not reuse a number another view has already taken.
  */
 interface Log {
-	notices: { id: string; notice: IssueNotice }[];
+	notices: { id: string; notice: Notice }[];
 }
 
 const CHANGES = "github.changes";
@@ -25,7 +38,7 @@ const CHANGES = "github.changes";
 const KEPT = 20;
 const log = (): Log["notices"] => (shared(CHANGES) as Log | null)?.notices ?? [];
 
-export function announce(notice: IssueNotice): void {
+export function announce(notice: Notice): void {
 	const id = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
 	setShared(CHANGES, { notices: [...log(), { id, notice }].slice(-KEPT) });
 }
@@ -35,7 +48,7 @@ export class Notices {
 	private taken = new Set(log().map((n) => n.id));
 
 	/** Notices announced since the last take, oldest first. */
-	take(): IssueNotice[] {
+	take(): Notice[] {
 		const notices = log(),
 			fresh = notices.filter((n) => !this.taken.has(n.id));
 		// Only ids still in the log can come again.

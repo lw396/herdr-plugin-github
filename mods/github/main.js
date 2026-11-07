@@ -6,7 +6,7 @@ var __export = (target, all2) => {
 
 // src/github/main.ts
 import { View } from "gpui-kit";
-import { props as props4 } from "herdr";
+import { props as props5 } from "herdr";
 
 // src/github/views/issue.ts
 import { h_flex, Textarea, TextareaState, TextView, v_flex } from "gpui-base";
@@ -119,6 +119,10 @@ function parseActivity(data) {
     return [];
   });
 }
+
+// src/github/core/detail.ts
+var detailKey = (ref) => `${ref.repo.toLowerCase()}${ref.kind === "pr" ? "/pull/" : "#"}${ref.number}`;
+var detailTabName = (ref) => `#${ref.number} \xB7 ${ref.repo.split("/").at(-1)}`;
 
 // node_modules/entities/dist/decode-codepoint.js
 var c1 = [
@@ -9517,8 +9521,7 @@ function links(markdown, issueUrl) {
 }
 
 // src/github/core/issue-detail.ts
-var issueKey = (ref) => `${ref.repo.toLowerCase()}#${ref.number}`;
-var issueTabName = (ref) => `#${ref.number} \xB7 ${ref.repo.split("/").at(-1)}`;
+var issueKey = (ref) => detailKey({ kind: "issue", ...ref });
 var EMOJI = [
   ["+1", "\u{1F44D}"],
   ["-1", "\u{1F44E}"],
@@ -9627,6 +9630,7 @@ function relativeTime(iso, now) {
 
 // src/github/io/changes.ts
 import { setShared, shared } from "herdr";
+var isIssueNotice = (n) => n.kind !== "pr";
 var CHANGES = "github.changes";
 var KEPT = 20;
 var log = () => shared(CHANGES)?.notices ?? [];
@@ -9647,6 +9651,7 @@ var Notices = class {
 // src/github/io/detail-tabs.ts
 import { exec, focused, panes, run, setShared as setShared2, shared as shared2, spaces } from "herdr";
 var READERS = "github.readers";
+var COMMAND = "detail:";
 var readers = () => shared2(READERS) ?? {};
 var reader = (id) => readers()[id];
 function remember(id, value) {
@@ -9662,11 +9667,12 @@ var DetailTabs = class {
   opened = /* @__PURE__ */ new Map();
   pending = /* @__PURE__ */ new Map();
   creating = /* @__PURE__ */ new Map();
-  async open(issue) {
+  async open(ref) {
     const space = focused()?.space, owner = spaces().find((s) => s.id === space);
-    if (!space || !owner) throw new Error("Select a Herdr space before opening an issue.");
-    const identity = `${space}:${issueKey(issue)}`;
-    const oldName = `#${issue.number} \xB7 ${issue.repo}`.toLowerCase();
+    if (!space || !owner)
+      throw new Error(`Select a Herdr space before opening ${ref.kind === "pr" ? "a pull request" : "an issue"}.`);
+    const identity = `${space}:${detailKey(ref)}`;
+    const oldName = ref.kind === "issue" ? `#${ref.number} \xB7 ${ref.repo}`.toLowerCase() : null;
     const openedId = this.opened.get(identity);
     const existingId = (openedId && reader(openedId)?.identity === identity ? openedId : void 0) ?? Object.entries(readers()).find(
       ([, r]) => r.identity === identity || !r.identity && owner.tabs.some((t) => t.id === r.tab && t.name.toLowerCase() === oldName)
@@ -9679,7 +9685,7 @@ var DetailTabs = class {
       if (existingId) this.pending.delete(existingId);
       let opening = this.creating.get(identity);
       if (!opening) {
-        opening = this.create(space, issue);
+        opening = this.create(space, ref);
         this.creating.set(identity, opening);
       }
       try {
@@ -9689,20 +9695,19 @@ var DetailTabs = class {
       }
       this.opened.set(identity, target.id);
     }
-    this.pending.set(target.id, issue);
+    this.pending.set(target.id, ref);
     remember(target.id, { ...target.reader, identity, request: `${Date.now()}-${Math.random()}`, ready: null });
     const tabName = owner.tabs.find((t) => t.id === target.reader.tab)?.name;
-    if (tabName?.toLowerCase() === oldName && tabName !== issueTabName(issue)) {
-      run("tab.rename", { id: target.reader.tab, name: issueTabName(issue) });
+    if (oldName && tabName?.toLowerCase() === oldName && tabName !== detailTabName(ref)) {
+      run("tab.rename", { id: target.reader.tab, name: detailTabName(ref) });
     }
     if (focused()?.space === space) run("tab.select", { id: target.reader.tab });
   }
-  async create(space, issue) {
-    const id = `issue-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-    const args = { space, name: issueTabName(issue), mod: "github", props: { role: "issue", reader: id } };
+  async create(space, ref) {
+    const id = `detail-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    const args = { space, name: detailTabName(ref), mod: "github", props: { role: ref.kind, reader: id } };
     const result = await exec("herdr-app", ["do", "tab.new", JSON.stringify(args)]);
-    if (result.code !== 0)
-      throw new Error(result.stderr.trim() || result.stdout.trim() || "Could not open the issue tab.");
+    if (result.code !== 0) throw new Error(result.stderr.trim() || result.stdout.trim() || "Could not open the tab.");
     let reply;
     try {
       reply = JSON.parse(result.stdout);
@@ -9712,11 +9717,11 @@ var DetailTabs = class {
     if (!reply.tab || reply.error) throw new Error(reply.error ?? "Herdr did not return a new tab.");
     return { id, reader: { tab: reply.tab, pane: reply.pane, request: "", ready: null } };
   }
-  /** Live shared metadata re-renders the sidebar: no polling and no persisted issue mailbox. */
+  /** Live shared metadata re-renders the sidebar: no polling and no persisted mailbox. */
   deliver() {
     const tab = focused()?.tab;
     if (!tab) return;
-    for (const [id, issue] of this.pending) {
+    for (const [id, ref] of this.pending) {
       const r = reader(id);
       if (!r) {
         this.pending.delete(id);
@@ -9724,15 +9729,15 @@ var DetailTabs = class {
       }
       if (r.tab !== tab || r.ready !== r.request) continue;
       this.pending.delete(id);
-      run(`github.issue:${JSON.stringify({ reader: id, ...issue })}`);
+      run(`github.${COMMAND}${JSON.stringify({ reader: id, ...ref })}`);
     }
   }
 };
-function navigatedDetail(id, issue) {
+function navigatedDetail(id, ref) {
   const r = reader(id), space = spaces().find((s) => s.tabs.some((t) => t.id === r?.tab));
   if (!r || !space) return;
-  remember(id, { ...r, identity: `${space.id}:${issueKey(issue)}` });
-  const name = issueTabName(issue);
+  remember(id, { ...r, identity: `${space.id}:${detailKey(ref)}` });
+  const name = detailTabName(ref);
   if (space.tabs.find((t) => t.id === r.tab)?.name !== name) run("tab.rename", { id: r.tab, name });
 }
 function detailLocation(id) {
@@ -9749,13 +9754,13 @@ function detailLocation(id) {
     visible: Boolean(space.active && tab.active && !all2.some((p) => p.zoomed && p.pane !== pane.pane))
   };
 }
-function issueCommand(command, id) {
-  if (!command.startsWith("issue:")) return null;
+function detailCommand(command, id) {
+  if (!command.startsWith(COMMAND)) return null;
   try {
-    const value = JSON.parse(command.slice(6));
-    if (value?.reader !== id || typeof value.repo !== "string" || !/^[\w.-]+\/[\w.-]+$/.test(value.repo) || typeof value.number !== "number" || !Number.isSafeInteger(value.number) || value.number <= 0)
+    const value = JSON.parse(command.slice(COMMAND.length));
+    if (value?.reader !== id || value.kind !== "issue" && value.kind !== "pr" || typeof value.repo !== "string" || !/^[\w.-]+\/[\w.-]+$/.test(value.repo) || typeof value.number !== "number" || !Number.isSafeInteger(value.number) || value.number <= 0)
       return null;
-    return { repo: value.repo, number: value.number };
+    return { kind: value.kind, repo: value.repo, number: value.number };
   } catch {
     return null;
   }
@@ -10049,8 +10054,9 @@ var Issue = class {
     });
     cx.spawn(async (cx2) => {
       for (; ; ) {
-        const ref = issueCommand(await nextCommand(), this.reader);
-        if (!ref) continue;
+        const opened = detailCommand(await nextCommand(), this.reader);
+        if (opened?.kind !== "issue") continue;
+        const ref = { repo: opened.repo, number: opened.number };
         if (!this.ref || issueKey(this.ref) !== issueKey(ref)) {
           this.history = [];
           this.ref = ref;
@@ -10077,7 +10083,7 @@ var Issue = class {
     this.box?.set_value(this.draft);
     this.ref = ref;
     this.writeFailure = null;
-    navigatedDetail(this.reader, ref);
+    navigatedDetail(this.reader, { kind: "issue", ...ref });
     this.load(cx);
     cx.notify();
   }
@@ -10200,6 +10206,7 @@ ${issueKey(this.ref)}` : null;
   /** A write to the shown issue: a new comment joins the timeline (once), a new state shows. */
   apply(notice) {
     const issue = this.entry?.issue;
+    if (!isIssueNotice(notice)) return;
     const comment = notice.comment;
     if (!issue || !this.ref || issueKey(notice) !== issueKey(this.ref)) return;
     this.polling.invalidate();
@@ -10657,6 +10664,10 @@ var GROUPS = [
   { kind: "open", title: "Open", empty: "No open issues." },
   { kind: "closed", title: "Closed", empty: "No closed issues." }
 ];
+var TABS = [
+  { id: "issues", label: "Issues" },
+  { id: "prs", label: "Pull Requests" }
+];
 var Panel = class {
   /** The place shown (locationKey()), and which refresh is the latest: older ones drop their results. */
   context = null;
@@ -10672,6 +10683,8 @@ var Panel = class {
     open: { expanded: false, page: void 0, loading: false, loadingMore: false, failure: void 0 },
     closed: { expanded: false, page: void 0, loading: false, loadingMore: false, failure: void 0 }
   };
+  /** The tab shown; each keeps its own state (Issues' folded groups and pages) while the other is shown. */
+  tab = "issues";
   /** The row under the pointer ("<kind>#<number>"): it shows its actions. */
   hovered = null;
   details = new DetailTabs();
@@ -10831,7 +10844,7 @@ var Panel = class {
    * then the shown expanded groups ask GitHub again (the change made them stale).
    */
   receive(cx) {
-    const changes2 = this.notices.take().flatMap((n) => n.state ? [n.state] : []);
+    const changes2 = this.notices.take().filter(isIssueNotice).flatMap((n) => n.state ? [n.state] : []);
     if (changes2.length === 0) return;
     changes2.forEach(issueChanged);
     for (const { kind } of GROUPS) {
@@ -10850,7 +10863,7 @@ var Panel = class {
     const where = location();
     const overlay = props3()?.overlay;
     const noRemote = this.remote === null && !(this.account && !this.account.status.ok);
-    return v_flex2().id("github").size_full().min_h(0).overflow_hidden().bg(t.background).text_color(t.foreground).text_size(13).when(!overlay, (el) => el.rounded(10).border_1().border_color(t.border)).child(this.header(overlay, where.cwd ?? "no folder")).when(noRemote, (el) => el.child(this.noRemote(where.cwd))).when(!noRemote, (el) => el.child(this.tabs()).child(this.list())).child(this.statusCard(where.on, where.cwd));
+    return v_flex2().id("github").size_full().min_h(0).overflow_hidden().bg(t.background).text_color(t.foreground).text_size(13).when(!overlay, (el) => el.rounded(10).border_1().border_color(t.border)).child(this.header(overlay, where.cwd ?? "no folder")).when(noRemote, (el) => el.child(this.noRemote(where.cwd))).when(!noRemote, (el) => el.child(this.tabs()).child(this.tab === "issues" ? this.list() : this.pulls())).child(this.statusCard(where.on, where.cwd));
   }
   /** The repository, then ↻ (Herdr's own spinner while anything loads, as its tab bar shows a working agent). */
   header(overlay, context) {
@@ -10895,10 +10908,22 @@ var Panel = class {
     const empty = noRepository(cwd);
     return v_flex2().flex_1().min_h(0).px(28).gap(8).items_center().justify_center().child(svg4("mods/github/assets/github.svg").size(28).text_color(t.dim)).child(div4().pt(4).font_medium().text_color(t.muted).child(empty.title)).child(div4().text_size(12).text_center().text_color(t.dim).child(empty.detail));
   }
-  /** Only Issues in this version; PRs, Actions and notifications join it later. */
+  /** Issues and Pull Requests; Actions and notifications join them later. */
   tabs() {
     const t = colors();
-    return h_flex3().h(34).flex_none().px(10).gap(4).items_center().border_b(1).border_color(t.border).child(div4().px(8).py(3).rounded(6).bg(t.hover).text_size(12).font_medium().child("Issues"));
+    return h_flex3().h(34).flex_none().px(10).gap(4).items_center().border_b(1).border_color(t.border).children(
+      TABS.map(
+        ({ id, label }) => div4().id(`gh-tab-${id}`).px(8).py(3).rounded(6).text_size(12).font_medium().cursor_pointer().text_color(this.tab === id ? t.foreground : t.muted).when(this.tab === id, (el) => el.bg(t.hover)).when(this.tab !== id, (el) => el.hover((s) => s.bg(t.hover))).accessibility_label(label).on_mouse_down("left", stop).on_click((_e, cx) => {
+          this.tab = id;
+          cx.notify();
+        }).child(label)
+      )
+    );
+  }
+  /** The Pull Requests tab: its groups arrive with the next tickets of #4. */
+  pulls() {
+    const t = colors();
+    return v_flex2().id("gh-pulls").flex_1().min_h(0).p(14).child(div4().text_size(12).text_color(t.dim).child("Pull requests are not available yet."));
   }
   /**
    * The groups, or what stands in their place. A missing repository (404) or Issues turned off is the same for
@@ -10955,7 +10980,7 @@ var Panel = class {
       this.openFailure = null;
       cx.spawn(async (cx2) => {
         try {
-          await this.details.open({ repo, number: issue.number });
+          await this.details.open({ kind: "issue", repo, number: issue.number });
         } catch (e) {
           this.openFailure = e instanceof Error ? e.message : String(e);
         }
@@ -10986,17 +11011,48 @@ var Panel = class {
   }
 };
 
+// src/github/views/pull.ts
+import { v_flex as v_flex3 } from "gpui-base";
+import { div as div5 } from "gpui-kit";
+import { nextCommand as nextCommand2, props as props4 } from "herdr";
+var Pull = class {
+  reader = "";
+  ref = null;
+  init(cx) {
+    this.reader = String(props4()?.reader ?? "");
+    cx.spawn(async (cx2) => {
+      for (; ; ) {
+        const opened = detailCommand(await nextCommand2(), this.reader);
+        if (opened?.kind !== "pr") continue;
+        this.ref = opened;
+        cx2.notify();
+      }
+    });
+  }
+  render(_cx) {
+    if (this.reader) readyDetail(this.reader);
+    const t = colors();
+    return v_flex3().id("pull-reader").size_full().p(24).gap(8).bg(t.background).text_color(t.foreground).child(
+      div5().text_size(16).font_semibold().child(this.ref ? `#${this.ref.number} \xB7 ${this.ref.repo}` : "")
+    ).child(
+      div5().text_size(13).text_color(t.dim).child(
+        this.ref ? "Pull request descriptions are not available yet." : "Select a pull request in the sidebar."
+      )
+    );
+  }
+};
+
 // src/github/main.ts
-var ROLES = { panel: Panel, issue: Issue, pane: Pane };
+var ROLES = { panel: Panel, issue: Issue, pr: Pull, pane: Pane };
 var GitHub = class extends View {
   role = null;
   init(p, cx) {
-    const Role = ROLES[(props4() ?? p)?.role ?? "panel"];
+    const Role = ROLES[(props5() ?? p)?.role ?? "panel"];
     this.role = Role ? new Role() : null;
     this.role?.init(cx);
   }
   render(cx) {
-    return this.role ? this.role.render(cx) : `github: unknown role ${JSON.stringify(props4()?.role)}`;
+    return this.role ? this.role.render(cx) : `github: unknown role ${JSON.stringify(props5()?.role)}`;
   }
 };
 export {

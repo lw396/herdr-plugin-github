@@ -1,9 +1,9 @@
 import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
 import {
 	DetailTabs,
+	detailCommand,
 	detailLocation,
 	detailMachine,
-	issueCommand,
 	navigatedDetail,
 	readyDetail,
 } from "../../src/github/io/detail-tabs.ts";
@@ -20,7 +20,7 @@ beforeEach(() => {
 	spyOn(Math, "random").mockReturnValue(0.5);
 	spyOn(Date, "now").mockReturnValue(1700000000000);
 });
-const reader = "issue-1700000000000-i";
+const reader = "detail-1700000000000-i";
 const source = { pane: "center/p1", tab: "center/tb1", terminal: "center/t19" };
 const detail = { pane: "center/p2", tab: "center/tb2", terminal: null, mod: "github" };
 const space = { id: "center/s1", machine: "center", tabs: [{ id: source.tab }, { id: detail.tab }] };
@@ -41,7 +41,7 @@ const atDetail = () =>
 test("the reader knows its own pane and shown tab even when keyboard focus is elsewhere", async () => {
 	atSource();
 	machine(null, { [create]: { stdout: '{"tab":"center/tb2","pane":"center/p2"}' } });
-	await new DetailTabs().open({ repo: "cli/cli", number: 9789 });
+	await new DetailTabs().open({ kind: "issue", repo: "cli/cli", number: 9789 });
 	screen({
 		spaces: [{ ...space, active: true, tabs: [{ id: detail.tab, active: true }] }],
 		panes: [source, detail],
@@ -76,17 +76,21 @@ test("open a native Herdr tab, then select that tab on a repeated click without 
 	// Only tab is needed; terminal tab replies have a different shape.
 	machine(null, { [create]: { stdout: '{"space":"center/s1","tab":"center/tb2","pane":"center/p2"}' } });
 	const tabs = new DetailTabs();
-	await tabs.open({ repo: "cli/cli", number: 9789 });
+	await tabs.open({ kind: "issue", repo: "cli/cli", number: 9789 });
 	atDetail();
 	tabs.deliver();
-	expect(commands().filter((c) => c.name.startsWith("github.issue:"))).toEqual([]);
+	expect(commands().filter((c) => c.name.startsWith("github.detail:"))).toEqual([]);
 	readyDetail(reader);
 	tabs.deliver();
-	expect(issueCommand(commands().at(-1)!.name.slice(7), reader)).toEqual({ repo: "cli/cli", number: 9789 });
+	expect(detailCommand(commands().at(-1)!.name.slice(7), reader)).toEqual({
+		kind: "issue",
+		repo: "cli/cli",
+		number: 9789,
+	});
 
 	machine(null, {}); // Creating another native tab would fail.
 	atSource(true);
-	await tabs.open({ repo: "CLI/cli", number: 9789 });
+	await tabs.open({ kind: "issue", repo: "CLI/cli", number: 9789 });
 	expect(commands()).toContainEqual({ name: "tab.select", args: { id: "center/tb2" } });
 	expect(execCalls().filter((c) => c.command === "herdr-app")).toHaveLength(1);
 	expect(commands().some((c) => c.name.startsWith("pane."))).toBe(false);
@@ -96,16 +100,16 @@ test("different issues get separate native tabs and their machines do not follow
 	atSource();
 	machine(null, { [create]: { stdout: '{"tab":"center/tb2","pane":"center/p2"}' } });
 	const tabs = new DetailTabs();
-	await tabs.open({ repo: "cli/cli", number: 9789 });
+	await tabs.open({ kind: "issue", repo: "cli/cli", number: 9789 });
 	atDetail();
 	readyDetail(reader);
 	tabs.deliver();
 
 	spyOn(Math, "random").mockReturnValue(0.25);
 	const next =
-		'~$ herdr-app do tab.new {"space":"center/s1","name":"#13 · herdr-plugin-github","mod":"github","props":{"role":"issue","reader":"issue-1700000000000-9"}}';
+		'~$ herdr-app do tab.new {"space":"center/s1","name":"#13 · herdr-plugin-github","mod":"github","props":{"role":"issue","reader":"detail-1700000000000-9"}}';
 	machine(null, { [next]: { stdout: '{"tab":"center/tb3","pane":"center/p3"}' } });
-	await tabs.open({ repo: "lw396/herdr-plugin-github", number: 13 });
+	await tabs.open({ kind: "issue", repo: "lw396/herdr-plugin-github", number: 13 });
 	screen({
 		spaces: [space, { id: "s-local", machine: null, tabs: [{ id: "tb-local" }] }],
 		focused: { space: "s-local", tab: "tb-local" },
@@ -120,25 +124,25 @@ test("a tab that followed a link belongs to the linked issue; its first issue ge
 	atSource();
 	machine(null, { [create]: { stdout: '{"tab":"center/tb2","pane":"center/p2"}' } });
 	const tabs = new DetailTabs();
-	await tabs.open({ repo: "cli/cli", number: 9789 });
+	await tabs.open({ kind: "issue", repo: "cli/cli", number: 9789 });
 	atDetail();
 	readyDetail(reader);
 	tabs.deliver();
 
-	navigatedDetail(reader, { repo: "cli/cli", number: 1 });
+	navigatedDetail(reader, { kind: "issue", repo: "cli/cli", number: 1 });
 	expect(commands()).toContainEqual({ name: "tab.rename", args: { id: detail.tab, name: "#1 · cli" } });
 	expect(detailMachine(reader)).toEqual({ on: "center" });
 
 	machine(null, {}); // The linked issue reuses its tab.
 	atSource(true);
-	await tabs.open({ repo: "cli/cli", number: 1 });
+	await tabs.open({ kind: "issue", repo: "cli/cli", number: 1 });
 	expect(commands().at(-1)).toEqual({ name: "tab.select", args: { id: detail.tab } });
 	expect(execCalls().filter((c) => c.command === "herdr-app")).toHaveLength(1);
 
 	spyOn(Math, "random").mockReturnValue(0.25);
-	const next = create.replace(reader, "issue-1700000000000-9");
+	const next = create.replace(reader, "detail-1700000000000-9");
 	machine(null, { [next]: { stdout: '{"tab":"center/tb3","pane":"center/p3"}' } });
-	await tabs.open({ repo: "cli/cli", number: 9789 });
+	await tabs.open({ kind: "issue", repo: "cli/cli", number: 9789 });
 	expect(execCalls().filter((c) => c.command === "herdr-app")).toHaveLength(2);
 	expect(commands().at(-1)).toEqual({ name: "tab.select", args: { id: "center/tb3" } });
 });
@@ -152,8 +156,8 @@ test("rapid repeated clicks while creating a native tab do not create duplicates
 		}),
 	});
 	const tabs = new DetailTabs();
-	const first = tabs.open({ repo: "cli/cli", number: 9789 });
-	const second = tabs.open({ repo: "cli/cli", number: 9789 });
+	const first = tabs.open({ kind: "issue", repo: "cli/cli", number: 9789 });
+	const second = tabs.open({ kind: "issue", repo: "cli/cli", number: 9789 });
 	finish({ stdout: '{"tab":"center/tb2","pane":"center/p2"}' });
 	await Promise.all([first, second]);
 	expect(execCalls().filter((c) => c.command === "herdr-app")).toHaveLength(1);
@@ -163,13 +167,13 @@ test("closing an unvisited issue tab allows the same issue to be opened again", 
 	atSource();
 	machine(null, { [create]: { stdout: '{"tab":"center/tb2","pane":"center/p2"}' } });
 	const tabs = new DetailTabs();
-	await tabs.open({ repo: "cli/cli", number: 9789 });
+	await tabs.open({ kind: "issue", repo: "cli/cli", number: 9789 });
 	// The first tab closes before its queued issue has been delivered.
 	atSource();
 	spyOn(Math, "random").mockReturnValue(0.25);
-	const next = create.replace(reader, "issue-1700000000000-9");
+	const next = create.replace(reader, "detail-1700000000000-9");
 	machine(null, { [next]: { stdout: '{"tab":"center/tb3","pane":"center/p3"}' } });
-	await tabs.open({ repo: "cli/cli", number: 9789 });
+	await tabs.open({ kind: "issue", repo: "cli/cli", number: 9789 });
 	expect(execCalls().filter((c) => c.command === "herdr-app")).toHaveLength(2);
 	expect(commands()).toContainEqual({ name: "tab.select", args: { id: "center/tb3" } });
 });
@@ -178,7 +182,7 @@ test("a fresh sidebar session does not replay previously opened issue contents",
 	atSource();
 	machine(null, { [create]: { stdout: '{"tab":"center/tb2","pane":"center/p2"}' } });
 	const tabs = new DetailTabs();
-	await tabs.open({ repo: "cli/cli", number: 9789 });
+	await tabs.open({ kind: "issue", repo: "cli/cli", number: 9789 });
 	atDetail();
 	readyDetail(reader);
 	tabs.deliver();
@@ -188,10 +192,12 @@ test("a fresh sidebar session does not replay previously opened issue contents",
 	expect(commands()).toHaveLength(sent);
 	atSource(true);
 	machine(null, {});
-	await restarted.open({ repo: "cli/cli", number: 9789 });
+	await restarted.open({ kind: "issue", repo: "cli/cli", number: 9789 });
 	expect(execCalls().filter((c) => c.command === "herdr-app")).toHaveLength(1);
 	expect(commands()).toContainEqual({ name: "tab.select", args: { id: "center/tb2" } });
-	expect(issueCommand('issue:{"reader":"someone-else","repo":"cli/cli","number":9789}', reader)).toBeNull();
+	expect(
+		detailCommand('detail:{"reader":"someone-else","kind":"issue","repo":"cli/cli","number":9789}', reader),
+	).toBeNull();
 });
 
 test("existing long tab names are shortened and reused after upgrading the mod", async () => {
@@ -202,7 +208,7 @@ test("existing long tab names are shortened and reused after upgrading the mod",
 		focused: { space: space.id, tab: source.tab, pane: source.pane },
 	});
 	machine(null, {});
-	await new DetailTabs().open({ repo: "cli/cli", number: 9789 });
+	await new DetailTabs().open({ kind: "issue", repo: "cli/cli", number: 9789 });
 	expect(execCalls()).toEqual([]);
 	expect(commands()).toContainEqual({ name: "tab.rename", args: { id: detail.tab, name: "#9789 · cli" } });
 	expect(commands()).toContainEqual({ name: "tab.select", args: { id: detail.tab } });
@@ -212,11 +218,64 @@ test("a failed native tab creation can be retried, without selecting a nonexiste
 	atSource();
 	machine(null, { [create]: { code: 1, stderr: "layout on center is unavailable" } });
 	const tabs = new DetailTabs();
-	expect(await tabs.open({ repo: "cli/cli", number: 9789 }).catch((e) => e)).toMatchObject({
+	expect(await tabs.open({ kind: "issue", repo: "cli/cli", number: 9789 }).catch((e) => e)).toMatchObject({
 		message: "layout on center is unavailable",
 	});
 	expect(commands()).toEqual([]);
 	machine(null, { [create]: { stdout: '{"tab":"center/tb2","pane":"center/p2"}' } });
-	await tabs.open({ repo: "cli/cli", number: 9789 });
+	await tabs.open({ kind: "issue", repo: "cli/cli", number: 9789 });
 	expect(commands()).toContainEqual({ name: "tab.select", args: { id: "center/tb2" } });
+});
+
+test("a PR opens its own native tab in the PR role, and a repeated click selects it", async () => {
+	atSource();
+	const pr = `~$ herdr-app do tab.new {"space":"center/s1","name":"#42 · cli","mod":"github","props":{"role":"pr","reader":"${reader}"}}`;
+	machine(null, { [pr]: { stdout: '{"tab":"center/tb2","pane":"center/p2"}' } });
+	const tabs = new DetailTabs();
+	await tabs.open({ kind: "pr", repo: "cli/cli", number: 42 });
+	atDetail();
+	readyDetail(reader);
+	tabs.deliver();
+	expect(detailCommand(commands().at(-1)!.name.slice(7), reader)).toEqual({ kind: "pr", repo: "cli/cli", number: 42 });
+
+	machine(null, {});
+	atSource(true);
+	await tabs.open({ kind: "pr", repo: "CLI/cli", number: 42 });
+	expect(commands().at(-1)).toEqual({ name: "tab.select", args: { id: detail.tab } });
+	expect(execCalls().filter((c) => c.command === "herdr-app")).toHaveLength(1);
+});
+
+test("an issue and a PR with the same number do not share a tab", async () => {
+	atSource();
+	machine(null, { [create.replace("#9789", "#7")]: { stdout: '{"tab":"center/tb2","pane":"center/p2"}' } });
+	const tabs = new DetailTabs();
+	await tabs.open({ kind: "issue", repo: "cli/cli", number: 7 });
+	atDetail();
+	readyDetail(reader);
+	tabs.deliver();
+
+	spyOn(Math, "random").mockReturnValue(0.25);
+	const pr = `~$ herdr-app do tab.new {"space":"center/s1","name":"#7 · cli","mod":"github","props":{"role":"pr","reader":"detail-1700000000000-9"}}`;
+	machine(null, { [pr]: { stdout: '{"tab":"center/tb3","pane":"center/p3"}' } });
+	atSource(true);
+	await tabs.open({ kind: "pr", repo: "cli/cli", number: 7 });
+	expect(execCalls().filter((c) => c.command === "herdr-app")).toHaveLength(2);
+	expect(commands().at(-1)).toEqual({ name: "tab.select", args: { id: "center/tb3" } });
+});
+
+test("an issue tab that followed a link to a PR belongs to that PR", async () => {
+	atSource();
+	machine(null, { [create]: { stdout: '{"tab":"center/tb2","pane":"center/p2"}' } });
+	const tabs = new DetailTabs();
+	await tabs.open({ kind: "issue", repo: "cli/cli", number: 9789 });
+	atDetail();
+	readyDetail(reader);
+	tabs.deliver();
+
+	navigatedDetail(reader, { kind: "pr", repo: "cli/cli", number: 42 });
+	machine(null, {});
+	atSource(true);
+	await tabs.open({ kind: "pr", repo: "cli/cli", number: 42 });
+	expect(commands().at(-1)).toEqual({ name: "tab.select", args: { id: detail.tab } });
+	expect(execCalls().filter((c) => c.command === "herdr-app")).toHaveLength(1);
 });

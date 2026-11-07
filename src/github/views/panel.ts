@@ -15,7 +15,7 @@ import {
 import type { RemoteRepo } from "../core/remote.ts";
 import { footerStatus, POLL_SECONDS } from "../core/status.ts";
 import { relativeTime } from "../core/time.ts";
-import { Notices } from "../io/changes.ts";
+import { isIssueNotice, Notices } from "../io/changes.ts";
 import { location, locationKey } from "../io/context.ts";
 import { DetailTabs } from "../io/detail-tabs.ts";
 import * as gh from "../io/gh.ts";
@@ -30,6 +30,13 @@ const GROUPS: { kind: GroupKind; title: string; empty: string }[] = [
 	{ kind: "assigned", title: "Assigned", empty: "No open issues assigned to you." },
 	{ kind: "open", title: "Open", empty: "No open issues." },
 	{ kind: "closed", title: "Closed", empty: "No closed issues." },
+];
+
+/** The sidebar's tabs, in order: id and label (the VS Code extension's view name for PRs). */
+type SidebarTab = "issues" | "prs";
+const TABS: { id: SidebarTab; label: string }[] = [
+	{ id: "issues", label: "Issues" },
+	{ id: "prs", label: "Pull Requests" },
 ];
 
 /** One group as the sidebar shows it: folded or not, and this place's loaded pages. */
@@ -56,6 +63,8 @@ export class Panel implements Role {
 		open: { expanded: false, page: undefined, loading: false, loadingMore: false, failure: undefined },
 		closed: { expanded: false, page: undefined, loading: false, loadingMore: false, failure: undefined },
 	};
+	/** The tab shown; each keeps its own state (Issues' folded groups and pages) while the other is shown. */
+	tab: SidebarTab = "issues";
 	/** The row under the pointer ("<kind>#<number>"): it shows its actions. */
 	hovered: string | null = null;
 	details = new DetailTabs();
@@ -245,7 +254,10 @@ export class Panel implements Role {
 	 * then the shown expanded groups ask GitHub again (the change made them stale).
 	 */
 	receive(cx: Context): void {
-		const changes = this.notices.take().flatMap((n) => (n.state ? [n.state] : []));
+		const changes = this.notices
+			.take()
+			.filter(isIssueNotice)
+			.flatMap((n) => (n.state ? [n.state] : []));
 		if (changes.length === 0) return;
 		changes.forEach(known.issueChanged);
 		for (const { kind } of GROUPS) {
@@ -281,7 +293,7 @@ export class Panel implements Role {
 				.when(!overlay, (el) => el.rounded(10).border_1().border_color(t.border))
 				.child(this.header(overlay, where.cwd ?? "no folder"))
 				.when(noRemote, (el) => el.child(this.noRemote(where.cwd)))
-				.when(!noRemote, (el) => el.child(this.tabs()).child(this.list()))
+				.when(!noRemote, (el) => el.child(this.tabs()).child(this.tab === "issues" ? this.list() : this.pulls()))
 				// A fixed sibling of the scrolling list: Herdr already shows the branch, so this says who gh is and how fresh.
 				.child(this.statusCard(where.on, where.cwd))
 		);
@@ -382,7 +394,7 @@ export class Panel implements Role {
 			.child(div().text_size(12).text_center().text_color(t.dim).child(empty.detail));
 	}
 
-	/** Only Issues in this version; PRs, Actions and notifications join it later. */
+	/** Issues and Pull Requests; Actions and notifications join them later. */
 	private tabs(): Element {
 		const t = colors();
 		return h_flex()
@@ -393,7 +405,39 @@ export class Panel implements Role {
 			.items_center()
 			.border_b(1)
 			.border_color(t.border)
-			.child(div().px(8).py(3).rounded(6).bg(t.hover).text_size(12).font_medium().child("Issues"));
+			.children(
+				TABS.map(({ id, label }) =>
+					div()
+						.id(`gh-tab-${id}`)
+						.px(8)
+						.py(3)
+						.rounded(6)
+						.text_size(12)
+						.font_medium()
+						.cursor_pointer()
+						.text_color(this.tab === id ? t.foreground : t.muted)
+						.when(this.tab === id, (el) => el.bg(t.hover))
+						.when(this.tab !== id, (el) => el.hover((s) => s.bg(t.hover)))
+						.accessibility_label(label)
+						.on_mouse_down("left", stop)
+						.on_click((_e, cx) => {
+							this.tab = id;
+							cx.notify();
+						})
+						.child(label),
+				),
+			);
+	}
+
+	/** The Pull Requests tab: its groups arrive with the next tickets of #4. */
+	private pulls(): Element {
+		const t = colors();
+		return v_flex()
+			.id("gh-pulls")
+			.flex_1()
+			.min_h(0)
+			.p(14)
+			.child(div().text_size(12).text_color(t.dim).child("Pull requests are not available yet."));
 	}
 
 	/**
@@ -528,7 +572,7 @@ export class Panel implements Role {
 				this.openFailure = null;
 				cx.spawn(async (cx) => {
 					try {
-						await this.details.open({ repo, number: issue.number });
+						await this.details.open({ kind: "issue", repo, number: issue.number });
 					} catch (e) {
 						this.openFailure = e instanceof Error ? e.message : String(e);
 					}

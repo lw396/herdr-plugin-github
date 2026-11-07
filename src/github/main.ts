@@ -4,9 +4,10 @@ import { props } from "herdr";
 import { Issue } from "./views/issue.ts";
 import { Pane } from "./views/pane.ts";
 import { Panel } from "./views/panel.ts";
+import { Pull } from "./views/pull.ts";
 import type { Role } from "./views/ui.ts";
 
-const ROLES: Record<string, new () => Role> = { panel: Panel, issue: Issue, pane: Pane };
+const ROLES: Record<string, new () => Role> = { panel: Panel, issue: Issue, pr: Pull, pane: Pane };
 
 export default class GitHub extends View {
 	role: Role | null = null;

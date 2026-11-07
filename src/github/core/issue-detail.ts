@@ -1,4 +1,5 @@
 import { type Activity, parseActivity } from "./activity.ts";
+import { detailKey } from "./detail.ts";
 import { type Label, parseLabel } from "./labels.ts";
 import { readerMarkdown } from "./markdown.ts";
 
@@ -7,10 +8,7 @@ export interface IssueRef {
 	repo: string;
 	number: number;
 }
-export const issueKey = (ref: IssueRef): string => `${ref.repo.toLowerCase()}#${ref.number}`;
-
-/** Keep native tabs compact; the full repository remains visible in the reader's link tooltip. */
-export const issueTabName = (ref: IssueRef): string => `#${ref.number} · ${ref.repo.split("/").at(-1)}`;
+export const issueKey = (ref: IssueRef): string => detailKey({ kind: "issue", ...ref });
 
 export interface Reaction {
 	emoji: string;

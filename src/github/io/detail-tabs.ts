@@ -1,6 +1,6 @@
-// Issue readers are native Herdr tabs, not split panes or a second tab bar inside the mod.
+// Detail panes (issues and PRs) are native Herdr tabs, not split panes or a second tab bar inside the mod.
 import { exec, focused, panes, run, setShared, shared, spaces } from "herdr";
-import { type IssueRef, issueKey, issueTabName } from "../core/issue-detail.ts";
+import { type DetailRef, detailKey, detailTabName } from "../core/detail.ts";
 
 interface Reader {
 	tab: string;
@@ -14,6 +14,8 @@ interface OpenReader {
 	reader: Reader;
 }
 const READERS = "github.readers";
+/** The mod command that hands a reader its issue or PR (Herdr prefixes it with the mod's name). */
+const COMMAND = "detail:";
 const readers = (): Record<string, Reader> => (shared(READERS) as Record<string, Reader> | null) ?? {};
 const reader = (id: string) => readers()[id];
 
@@ -24,25 +26,27 @@ function remember(id: string, value: Reader): void {
 	setShared(READERS, { ...kept, [id]: value });
 }
 
-/** Called after init installed the listener. Saved identities never load an issue by themselves. */
+/** Called after init installed the listener. Saved identities never load an issue or PR by themselves. */
 export function readyDetail(id: string): void {
 	const r = reader(id);
 	if (r && r.ready !== r.request) remember(id, { ...r, ready: r.request });
 }
 
-/** Explicit clicks can reuse native tab frames; issue contents and pending opens are session-only. */
+/** Explicit clicks can reuse native tab frames; contents and pending opens are session-only. */
 export class DetailTabs {
 	opened = new Map<string, string>();
-	pending = new Map<string, IssueRef>();
+	pending = new Map<string, DetailRef>();
 	creating = new Map<string, Promise<OpenReader>>();
 
-	async open(issue: IssueRef): Promise<void> {
+	async open(ref: DetailRef): Promise<void> {
 		const space = focused()?.space,
 			owner = spaces().find((s) => s.id === space);
-		if (!space || !owner) throw new Error("Select a Herdr space before opening an issue.");
-		const identity = `${space}:${issueKey(issue)}`;
-		const oldName = `#${issue.number} · ${issue.repo}`.toLowerCase();
-		// A tab that followed a link to another issue no longer belongs to this one.
+		if (!space || !owner)
+			throw new Error(`Select a Herdr space before opening ${ref.kind === "pr" ? "a pull request" : "an issue"}.`);
+		const identity = `${space}:${detailKey(ref)}`;
+		// Issue tabs from before short names; PR tabs never had them.
+		const oldName = ref.kind === "issue" ? `#${ref.number} · ${ref.repo}`.toLowerCase() : null;
+		// A tab that followed a link to another issue or PR no longer belongs to this one.
 		const openedId = this.opened.get(identity);
 		const existingId =
 			(openedId && reader(openedId)?.identity === identity ? openedId : undefined) ??
@@ -59,7 +63,7 @@ export class DetailTabs {
 			if (existingId) this.pending.delete(existingId);
 			let opening = this.creating.get(identity);
 			if (!opening) {
-				opening = this.create(space, issue);
+				opening = this.create(space, ref);
 				this.creating.set(identity, opening);
 			}
 			try {
@@ -69,23 +73,22 @@ export class DetailTabs {
 			}
 			this.opened.set(identity, target.id);
 		}
-		this.pending.set(target.id, issue);
-		// A fresh handshake prevents persisted readiness from accepting an issue before init.
+		this.pending.set(target.id, ref);
+		// A fresh handshake prevents persisted readiness from accepting an issue or PR before init.
 		remember(target.id, { ...target.reader, identity, request: `${Date.now()}-${Math.random()}`, ready: null });
 		const tabName = owner.tabs.find((t) => t.id === target.reader.tab)?.name;
-		if (tabName?.toLowerCase() === oldName && tabName !== issueTabName(issue)) {
-			run("tab.rename", { id: target.reader.tab, name: issueTabName(issue) });
+		if (oldName && tabName?.toLowerCase() === oldName && tabName !== detailTabName(ref)) {
+			run("tab.rename", { id: target.reader.tab, name: detailTabName(ref) });
 		}
 		if (focused()?.space === space) run("tab.select", { id: target.reader.tab });
 	}
 
-	private async create(space: string, issue: IssueRef): Promise<OpenReader> {
-		const id = `issue-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-		const args = { space, name: issueTabName(issue), mod: "github", props: { role: "issue", reader: id } };
+	private async create(space: string, ref: DetailRef): Promise<OpenReader> {
+		const id = `detail-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+		const args = { space, name: detailTabName(ref), mod: "github", props: { role: ref.kind, reader: id } };
 		// Local IPC creates a tab on the selected space's machine. gh itself still runs there.
 		const result = await exec("herdr-app", ["do", "tab.new", JSON.stringify(args)]);
-		if (result.code !== 0)
-			throw new Error(result.stderr.trim() || result.stdout.trim() || "Could not open the issue tab.");
+		if (result.code !== 0) throw new Error(result.stderr.trim() || result.stdout.trim() || "Could not open the tab.");
 		let reply: { tab?: string; pane?: string; error?: string };
 		try {
 			reply = JSON.parse(result.stdout) as typeof reply;
@@ -96,11 +99,11 @@ export class DetailTabs {
 		return { id, reader: { tab: reply.tab, pane: reply.pane, request: "", ready: null } };
 	}
 
-	/** Live shared metadata re-renders the sidebar: no polling and no persisted issue mailbox. */
+	/** Live shared metadata re-renders the sidebar: no polling and no persisted mailbox. */
 	deliver(): void {
 		const tab = focused()?.tab;
 		if (!tab) return;
-		for (const [id, issue] of this.pending) {
+		for (const [id, ref] of this.pending) {
 			const r = reader(id);
 			if (!r) {
 				this.pending.delete(id);
@@ -108,18 +111,18 @@ export class DetailTabs {
 			}
 			if (r.tab !== tab || r.ready !== r.request) continue;
 			this.pending.delete(id);
-			run(`github.issue:${JSON.stringify({ reader: id, ...issue })}`);
+			run(`github.${COMMAND}${JSON.stringify({ reader: id, ...ref })}`);
 		}
 	}
 }
 
-/** A reader that followed a link now belongs to that issue: the sidebar finds its tab for it, and the tab is named after it. */
-export function navigatedDetail(id: string, issue: IssueRef): void {
+/** A reader that followed a link now belongs to that issue or PR: the sidebar finds its tab for it, and the tab is named after it. */
+export function navigatedDetail(id: string, ref: DetailRef): void {
 	const r = reader(id),
 		space = spaces().find((s) => s.tabs.some((t) => t.id === r?.tab));
 	if (!r || !space) return;
-	remember(id, { ...r, identity: `${space.id}:${issueKey(issue)}` });
-	const name = issueTabName(issue);
+	remember(id, { ...r, identity: `${space.id}:${detailKey(ref)}` });
+	const name = detailTabName(ref);
 	if (space.tabs.find((t) => t.id === r.tab)?.name !== name) run("tab.rename", { id: r.tab, name });
 }
 
@@ -146,13 +149,19 @@ export function detailLocation(id: string): { pane: string; on: string | null; v
 	};
 }
 
-/** Mod commands are broadcast: only the intended reader may accept this issue. */
-export function issueCommand(command: string, id: string): IssueRef | null {
-	if (!command.startsWith("issue:")) return null;
+/** Mod commands are broadcast: only the intended reader may accept this issue or PR. */
+export function detailCommand(command: string, id: string): DetailRef | null {
+	if (!command.startsWith(COMMAND)) return null;
 	try {
-		const value = JSON.parse(command.slice(6)) as { reader?: string; repo?: string; number?: number } | null;
+		const value = JSON.parse(command.slice(COMMAND.length)) as {
+			reader?: string;
+			kind?: string;
+			repo?: string;
+			number?: number;
+		} | null;
 		if (
 			value?.reader !== id ||
+			(value.kind !== "issue" && value.kind !== "pr") ||
 			typeof value.repo !== "string" ||
 			!/^[\w.-]+\/[\w.-]+$/.test(value.repo) ||
 			typeof value.number !== "number" ||
@@ -160,7 +169,7 @@ export function issueCommand(command: string, id: string): IssueRef | null {
 			value.number <= 0
 		)
 			return null;
-		return { repo: value.repo, number: value.number };
+		return { kind: value.kind, repo: value.repo, number: value.number };
 	} catch {
 		return null;
 	}

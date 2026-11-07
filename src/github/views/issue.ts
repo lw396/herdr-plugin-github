@@ -14,8 +14,8 @@ import { IssuePolling } from "../core/issue-polling.ts";
 import { browserUrl, issueLink } from "../core/markdown.ts";
 import type { Projects } from "../core/projects.ts";
 import { relativeTime } from "../core/time.ts";
-import { announce, type IssueNotice, Notices } from "../io/changes.ts";
-import { detailLocation, issueCommand, navigatedDetail, readyDetail } from "../io/detail-tabs.ts";
+import { announce, type IssueNotice, isIssueNotice, type Notice, Notices } from "../io/changes.ts";
+import { detailCommand, detailLocation, navigatedDetail, readyDetail } from "../io/detail-tabs.ts";
 import * as gh from "../io/gh.ts";
 import { addComment, issueChanges, readIssue, readIssueProjects, setIssueState } from "../io/issues.ts";
 import { button, chip, colors, link, type Role, spinner, square, stop } from "./ui.ts";
@@ -80,8 +80,10 @@ export class Issue implements Role {
 		// Waiting is a read: init neither opens tabs nor writes shared state.
 		cx.spawn(async (cx) => {
 			for (;;) {
-				const ref = issueCommand(await nextCommand(), this.reader);
-				if (!ref) continue;
+				const opened = detailCommand(await nextCommand(), this.reader);
+				// This role reads issues; a PR is opened in the PR role's own tab.
+				if (opened?.kind !== "issue") continue;
+				const ref = { repo: opened.repo, number: opened.number };
 				if (!this.ref || issueKey(this.ref) !== issueKey(ref)) {
 					// The sidebar opens an issue afresh: Back belongs to links followed in this tab.
 					this.history = [];
@@ -113,7 +115,7 @@ export class Issue implements Role {
 		this.box?.set_value(this.draft);
 		this.ref = ref;
 		this.writeFailure = null;
-		navigatedDetail(this.reader, ref);
+		navigatedDetail(this.reader, { kind: "issue", ...ref });
 		this.load(cx);
 		cx.notify();
 	}
@@ -254,8 +256,9 @@ export class Issue implements Role {
 	}
 
 	/** A write to the shown issue: a new comment joins the timeline (once), a new state shows. */
-	private apply(notice: IssueNotice): void {
+	private apply(notice: Notice): void {
 		const issue = this.entry?.issue;
+		if (!isIssueNotice(notice)) return;
 		const comment = notice.comment;
 		if (!issue || !this.ref || issueKey(notice) !== issueKey(this.ref)) return;
 		this.polling.invalidate();
