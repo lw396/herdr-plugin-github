@@ -12,7 +12,7 @@ import type { RemoteRepo } from "../core/remote.ts";
 import * as gh from "./gh.ts";
 import { githubRemote } from "./git.ts";
 import { issuePage } from "./issues.ts";
-import { pullPage } from "./pulls.ts";
+import { localPulls, pullPage } from "./pulls.ts";
 
 /**
  * One kind of fact: kept answers, fresh for `fresh` ms (stale ones still show while asked
@@ -66,6 +66,9 @@ const accounts = facts<Account>(16, 60 * 60_000, (a) => a.status.ok);
 const remotes = facts<RemoteRepo | null>(64, 5 * 60_000, (r) => r !== null);
 const groups = facts<IssueGroup>(64, 60_000, () => true);
 const pullGroups = facts<PullGroup>(64, 60_000, () => true);
+// Local matches also depend on the focused checkout, not just the GitHub repository.
+const localGroups = facts<PullGroup>(64, 60_000, () => true);
+const localPages = new WeakMap<PullGroup, PullGroup>();
 
 const machineKey = (on: string | null | undefined): string => on ?? "";
 const folderKey = (where: gh.Where): string => `${where.on ?? ""}\n${where.cwd ?? ""}`;
@@ -159,10 +162,37 @@ export async function morePulls(
 	return both;
 }
 
+const localKey = (r: RemoteRepo, login: string, where: gh.Where): string =>
+	`${pullKey("all", r, login, where.on ?? null)}\n${where.cwd ?? ""}`;
+
+function localPage(full: PullGroup, count: number): PullGroup {
+	const more = count < full.total;
+	const page = { total: full.total, pulls: full.pulls.slice(0, count), more, cursor: more ? String(count) : null };
+	localPages.set(full, page);
+	return page;
+}
+
+/** Local matches: one batch per refresh, with Load more paging the kept result without another request. */
+export async function localGroup(r: RemoteRepo, login: string, where: gh.Where, force = false): Promise<PullGroup> {
+	const full = await localGroups.look(localKey(r, login, where), force, () => localPulls(r, where));
+	return localPages.get(full) ?? localPage(full, 30);
+}
+
+export function peekLocalGroup(r: RemoteRepo, login: string, where: gh.Where): PullGroup | undefined {
+	const full = localGroups.peek(localKey(r, login, where));
+	return full ? localPages.get(full) : undefined;
+}
+
+export function moreLocalPulls(r: RemoteRepo, login: string, where: gh.Where, loaded: PullGroup): Promise<PullGroup> {
+	const full = localGroups.peek(localKey(r, login, where));
+	return Promise.resolve(full && localPages.get(full) === loaded ? localPage(full, loaded.pulls.length + 30) : loaded);
+}
+
 /** Forgets everything (tests). */
 export function clear(): void {
 	accounts.clear();
 	remotes.clear();
 	groups.clear();
 	pullGroups.clear();
+	localGroups.clear();
 }

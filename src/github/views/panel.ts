@@ -98,7 +98,11 @@ export class Panel implements Role {
 				this.visible = false;
 				return;
 			}
-			if (!this.loading) this.check(cx);
+			if (!this.loading) {
+				this.check(cx);
+				// Local git branches can change without changing GitHub's list validator.
+				if (this.tab === "prs" && !this.pulls.busy) this.pulls.load(cx, false, ["local"]);
+			}
 		});
 	}
 
@@ -146,7 +150,7 @@ export class Panel implements Role {
 	ready(): Ready | null {
 		const status = this.account?.status;
 		return this.remote && status?.ok && this.account
-			? { remote: this.remote, login: status.user, on: this.account.on }
+			? { remote: this.remote, login: status.user, on: this.account.on, cwd: location().cwd }
 			: null;
 	}
 

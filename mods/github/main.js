@@ -10565,6 +10565,44 @@ function pullRequest(kind, remote2, login, after) {
   if (kind === "all") return { query: ALL_OPEN_QUERY, variables: { owner: remote2.owner, name: remote2.repo, after } };
   return { query: SEARCH_QUERY, variables: { q: pullSearch(kind, remote2, login), after } };
 }
+function localPullRequest(remote2, branches) {
+  const declarations = branches.map((_, i) => `$branch${i}: String!`).join(", ");
+  const fields = branches.map(
+    (_, i) => `    branch${i}: pullRequests(first: 100, headRefName: $branch${i}, orderBy: {field: UPDATED_AT, direction: DESC}) {
+      pageInfo { hasNextPage }
+      nodes { ${ROW} headRepository { nameWithOwner } }
+    }`
+  ).join("\n");
+  return {
+    query: `query($owner: String!, $name: String!, ${declarations}) {
+  repository(owner: $owner, name: $name) {
+${fields}
+  }
+}`,
+    variables: {
+      owner: remote2.owner,
+      name: remote2.repo,
+      ...Object.fromEntries(branches.map((b, i) => [`branch${i}`, b]))
+    }
+  };
+}
+function parseLocalPulls(data, head) {
+  const { repository } = data;
+  const name = `${head.owner}/${head.repo}`.toLowerCase();
+  const rows = /* @__PURE__ */ new Map();
+  for (const list2 of Object.values(repository)) {
+    const match = list2.nodes.find((n) => n.headRepository?.nameWithOwner.toLowerCase() === name);
+    if (match) rows.set(match.number, match);
+    else if (list2.pageInfo.hasNextPage)
+      throw new Error("Too many pull requests for a local branch to identify its head repository.");
+  }
+  const nodes = [...rows.values()].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+  return parsePullGroup({
+    repository: {
+      pullRequests: { totalCount: nodes.length, pageInfo: { hasNextPage: false, endCursor: null }, nodes }
+    }
+  });
+}
 function stateOf(n) {
   if (n.state === "MERGED") return "merged";
   if (n.state === "CLOSED") return "closed";
@@ -10625,9 +10663,24 @@ async function githubRemote(where) {
 }
 
 // src/github/io/pulls.ts
+import { exec as exec4 } from "herdr";
 async function pullPage(kind, remote2, login, on, after) {
   const { query, variables } = pullRequest(kind, remote2, login, after);
   return parsePullGroup(await graphql(query, variables, { on }));
+}
+async function localPulls(remote2, where) {
+  if (!where.cwd) throw new Error("No focused folder for local pull request branches.");
+  const options = { cwd: where.cwd, on: where.on ?? null };
+  const result = await exec4("git", ["for-each-ref", "--format=%(refname:short)", "refs/heads"], options);
+  if (result.code !== 0) throw new Error(result.stderr.trim() || "Could not read local branches.");
+  const branches = result.stdout.split("\n").map((b) => b.trim()).filter(Boolean);
+  if (branches.length === 0) return { total: 0, more: false, cursor: null, pulls: [] };
+  const remotes2 = await exec4("git", ["remote", "-v"], options);
+  if (remotes2.code !== 0) throw new Error(remotes2.stderr.trim() || "Could not read git remotes.");
+  const origin = remotes2.stdout.split("\n").filter((line) => /^origin\s/.test(line)).join("\n");
+  const head = pickRemote(origin) ?? remote2;
+  const { query, variables } = localPullRequest(remote2, branches);
+  return parseLocalPulls(await graphql(query, variables, { on: options.on }), head);
 }
 
 // src/github/io/known.ts
@@ -10670,6 +10723,8 @@ var accounts = facts(16, 60 * 6e4, (a) => a.status.ok);
 var remotes = facts(64, 5 * 6e4, (r) => r !== null);
 var groups = facts(64, 6e4, () => true);
 var pullGroups = facts(64, 6e4, () => true);
+var localGroups = facts(64, 6e4, () => true);
+var localPages = /* @__PURE__ */ new WeakMap();
 var machineKey = (on) => on ?? "";
 var folderKey = (where) => `${where.on ?? ""}
 ${where.cwd ?? ""}`;
@@ -10710,6 +10765,26 @@ async function morePulls(kind, r, login, on, loaded) {
   const both = appendPullPage(loaded, await pullPage(kind, r, login, on, loaded.cursor));
   if (pullGroups.peek(key) === loaded) pullGroups.put(key, both);
   return both;
+}
+var localKey = (r, login, where) => `${pullKey("all", r, login, where.on ?? null)}
+${where.cwd ?? ""}`;
+function localPage(full, count) {
+  const more2 = count < full.total;
+  const page = { total: full.total, pulls: full.pulls.slice(0, count), more: more2, cursor: more2 ? String(count) : null };
+  localPages.set(full, page);
+  return page;
+}
+async function localGroup(r, login, where, force = false) {
+  const full = await localGroups.look(localKey(r, login, where), force, () => localPulls(r, where));
+  return localPages.get(full) ?? localPage(full, 30);
+}
+function peekLocalGroup(r, login, where) {
+  const full = localGroups.peek(localKey(r, login, where));
+  return full ? localPages.get(full) : void 0;
+}
+function moreLocalPulls(r, login, where, loaded) {
+  const full = localGroups.peek(localKey(r, login, where));
+  return Promise.resolve(full && localPages.get(full) === loaded ? localPage(full, loaded.pulls.length + 30) : loaded);
 }
 
 // src/github/io/visibility.ts
@@ -10775,8 +10850,10 @@ var GroupList = class {
     }
   }
   /** Asks for every expanded group's first page (fresh kept pages are reused unless `force`). */
-  load(cx, force = false) {
-    for (const { kind } of this.source.groups) this.loadGroup(cx, kind, force);
+  load(cx, force = false, kinds) {
+    for (const { kind } of this.source.groups) {
+      if (!kinds || kinds.includes(kind)) this.loadGroup(cx, kind, force);
+    }
   }
   loadGroup(cx, kind, force) {
     const g = this.groups[kind], r = this.source.ready(), run3 = this.source.run();
@@ -10913,6 +10990,7 @@ function pullList(host) {
   return new GroupList({
     id: "pr",
     groups: [
+      { kind: "local", title: "Local Pull Request Branches", empty: EMPTY },
       { kind: "review", title: "Waiting For My Review", empty: EMPTY },
       { kind: "mine", title: "Created By Me", empty: EMPTY },
       { kind: "all", title: "All Open", empty: EMPTY }
@@ -10922,9 +11000,9 @@ function pullList(host) {
     ready: () => host.ready(),
     run: () => host.run(),
     asking: () => host.asking(),
-    peek: (kind, r) => peekPullGroup(kind, r.remote, r.login, r.on),
-    ask: (kind, r, force) => pullGroup(kind, r.remote, r.login, r.on, force),
-    more: (kind, r, loaded) => morePulls(kind, r.remote, r.login, r.on, loaded),
+    peek: (kind, r) => kind === "local" ? peekLocalGroup(r.remote, r.login, { cwd: r.cwd, on: r.on }) : peekPullGroup(kind, r.remote, r.login, r.on),
+    ask: (kind, r, force) => kind === "local" ? localGroup(r.remote, r.login, { cwd: r.cwd, on: r.on }, force) : pullGroup(kind, r.remote, r.login, r.on, force),
+    more: (kind, r, loaded) => kind === "local" ? moreLocalPulls(r.remote, r.login, { cwd: r.cwd, on: r.on }, loaded) : morePulls(kind, r.remote, r.login, r.on, loaded),
     rows: (page) => page.pulls,
     key: (pull) => pull.number,
     open: (cx, pull) => {
@@ -11010,7 +11088,10 @@ var Panel = class {
         this.visible = false;
         return;
       }
-      if (!this.loading) this.check(cx2);
+      if (!this.loading) {
+        this.check(cx2);
+        if (this.tab === "prs" && !this.pulls.busy) this.pulls.load(cx2, false, ["local"]);
+      }
     });
   }
   isVisible() {
@@ -11049,7 +11130,7 @@ var Panel = class {
   /** The gh account's login on the folder's machine and the remote, once both are known and usable. */
   ready() {
     const status2 = this.account?.status;
-    return this.remote && status2?.ok && this.account ? { remote: this.remote, login: status2.user, on: this.account.on } : null;
+    return this.remote && status2?.ok && this.account ? { remote: this.remote, login: status2.user, on: this.account.on, cwd: location().cwd } : null;
   }
   /** Shows what is known about the focused place at once, then asks for what is stale (all of it when `force`, ↻). */
   refresh(cx, force = false, asked = false) {

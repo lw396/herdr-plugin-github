@@ -1,7 +1,7 @@
 // The sidebar's Pull Requests tab: the VS Code extension's categories as foldable groups (views/groups.ts).
 
 import { type Color, type Context, div, type Element, svg } from "gpui-kit";
-import type { Pull, PullGroup, PullGroupKind, PullState } from "../core/pulls.ts";
+import type { Pull, PullCategory, PullGroup, PullState } from "../core/pulls.ts";
 import type { DetailTabs } from "../io/detail-tabs.ts";
 import * as known from "../io/known.ts";
 import { GroupList, type Ready } from "./groups.ts";
@@ -10,7 +10,7 @@ import { button, colors } from "./ui.ts";
 /** What the extension says in an empty category. */
 const EMPTY = "0 pull requests in this category";
 
-/** The state icons (Octicons) and the theme color each takes. Merged and closed rows come with Local Pull Request Branches (#24). */
+/** The state icons (Octicons) and the theme color each takes. */
 const ICONS: Record<PullState, { svg: string; color: (t: Record<string, Color>) => Color; label: string }> = {
 	open: { svg: "git-pull-request", color: (t) => t.done, label: "Open" },
 	draft: { svg: "git-pull-request-draft", color: (t) => t.dim, label: "Draft" },
@@ -29,7 +29,7 @@ export interface PullHost {
 }
 
 /** The extension's row: state icon, `#number title` (a draft in italics), `by @author`; hover offers Copy and Open in browser. */
-function cells(kind: PullGroupKind, pull: Pull, hovered: boolean): Element[] {
+function cells(kind: PullCategory, pull: Pull, hovered: boolean): Element[] {
 	const t = colors();
 	const icon = ICONS[pull.state];
 	const title = div()
@@ -65,11 +65,12 @@ function cells(kind: PullGroupKind, pull: Pull, hovered: boolean): Element[] {
 	];
 }
 
-/** The tab's groups, in the extension's order (Local Pull Request Branches joins first with #24). */
-export function pullList(host: PullHost): GroupList<PullGroupKind, PullGroup, Pull> {
-	return new GroupList<PullGroupKind, PullGroup, Pull>({
+/** The tab's groups, in the extension's order. */
+export function pullList(host: PullHost): GroupList<PullCategory, PullGroup, Pull> {
+	return new GroupList<PullCategory, PullGroup, Pull>({
 		id: "pr",
 		groups: [
+			{ kind: "local", title: "Local Pull Request Branches", empty: EMPTY },
 			{ kind: "review", title: "Waiting For My Review", empty: EMPTY },
 			{ kind: "mine", title: "Created By Me", empty: EMPTY },
 			{ kind: "all", title: "All Open", empty: EMPTY },
@@ -79,9 +80,18 @@ export function pullList(host: PullHost): GroupList<PullGroupKind, PullGroup, Pu
 		ready: () => host.ready(),
 		run: () => host.run(),
 		asking: () => host.asking(),
-		peek: (kind, r) => known.peekPullGroup(kind, r.remote, r.login, r.on),
-		ask: (kind, r, force) => known.pullGroup(kind, r.remote, r.login, r.on, force),
-		more: (kind, r, loaded) => known.morePulls(kind, r.remote, r.login, r.on, loaded),
+		peek: (kind, r) =>
+			kind === "local"
+				? known.peekLocalGroup(r.remote, r.login, { cwd: r.cwd, on: r.on })
+				: known.peekPullGroup(kind, r.remote, r.login, r.on),
+		ask: (kind, r, force) =>
+			kind === "local"
+				? known.localGroup(r.remote, r.login, { cwd: r.cwd, on: r.on }, force)
+				: known.pullGroup(kind, r.remote, r.login, r.on, force),
+		more: (kind, r, loaded) =>
+			kind === "local"
+				? known.moreLocalPulls(r.remote, r.login, { cwd: r.cwd, on: r.on }, loaded)
+				: known.morePulls(kind, r.remote, r.login, r.on, loaded),
 		rows: (page) => page.pulls,
 		key: (pull) => pull.number,
 		open: (cx: Context, pull) => {

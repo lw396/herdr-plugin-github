@@ -14,6 +14,7 @@ export interface Ready {
 	remote: RemoteRepo;
 	login: string;
 	on: string | null;
+	cwd: string | null;
 }
 
 /** What every group's pages have: how many rows in all, and whether another page follows. */
@@ -110,8 +111,10 @@ export class GroupList<K extends string, P extends Paged, R> {
 	}
 
 	/** Asks for every expanded group's first page (fresh kept pages are reused unless `force`). */
-	load(cx: Context, force = false): void {
-		for (const { kind } of this.source.groups) this.loadGroup(cx, kind, force);
+	load(cx: Context, force = false, kinds?: readonly K[]): void {
+		for (const { kind } of this.source.groups) {
+			if (!kinds || kinds.includes(kind)) this.loadGroup(cx, kind, force);
+		}
 	}
 
 	private loadGroup(cx: Context, kind: K, force: boolean): void {

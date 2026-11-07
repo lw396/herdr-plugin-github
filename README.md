@@ -8,7 +8,7 @@ The mod uses GitHub CLI (`gh`) on the machine hosting the repository, so local a
 
 - **Repository detection** — identify the GitHub repository from the focused folder's git remotes.
 - **Issue sidebar** — browse issues assigned to you, all open issues, and closed issues, with pagination.
-- **Pull Requests tab** — **Waiting For My Review**, **Created By Me** and **All Open**, as in the VS Code extension, list the repository's open pull requests with a state icon, `#number title` (drafts in italics) and `by @author`, with pagination; hover a row to copy its number or open it in your browser. Local pull request branches, the description and the diff follow.
+- **Pull Requests tab** — **Local Pull Request Branches**, **Waiting For My Review**, **Created By Me** and **All Open**, as in the VS Code extension, list the repository's open pull requests with a state icon, `#number title` (drafts in italics) and `by @author`, with pagination; hover a row to copy its number or open it in your browser. The local group batch-matches the focused folder's branches to their latest PRs, including closed and merged PRs, and checks head repositories to avoid fork-name collisions. The description and diff follow.
 - **Status footer** — a fixed sidebar footer shows which gh account is used on which machine, and says when a check for list changes fails. It adds no requests; the issue list scrolls independently. The branch is left to Herdr's own display.
 - **Automatic list refresh** — while the GitHub sidebar is visible, check for changes every 60 seconds using ETags; refresh expanded groups only when changed. Showing it again refreshes immediately.
 - **Native issue tabs** — open different issues in separate tabs; selecting an already-open issue reuses its tab.

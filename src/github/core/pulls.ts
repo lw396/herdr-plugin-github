@@ -15,8 +15,9 @@ export interface Pull {
 	url: string;
 }
 
-/** The groups: Waiting For My Review, Created By Me, All Open (Local Pull Request Branches joins with #24). */
+/** The repository groups fetched a page at a time. */
 export type PullGroupKind = "review" | "mine" | "all";
+export type PullCategory = "local" | PullGroupKind;
 
 /** A group's loaded pages, and where the next page starts. */
 export interface PullGroup {
@@ -66,6 +67,58 @@ export function pullRequest(
 ): { query: string; variables: Record<string, string | null> } {
 	if (kind === "all") return { query: ALL_OPEN_QUERY, variables: { owner: remote.owner, name: remote.repo, after } };
 	return { query: SEARCH_QUERY, variables: { q: pullSearch(kind, remote, login), after } };
+}
+
+/** A single batch: one connection for every local branch, including closed and merged PRs. */
+export function localPullRequest(remote: RemoteRepo, branches: string[]): ReturnType<typeof pullRequest> {
+	const declarations = branches.map((_, i) => `$branch${i}: String!`).join(", ");
+	const fields = branches
+		.map(
+			(
+				_,
+				i,
+			) => `    branch${i}: pullRequests(first: 100, headRefName: $branch${i}, orderBy: {field: UPDATED_AT, direction: DESC}) {
+      pageInfo { hasNextPage }
+      nodes { ${ROW} headRepository { nameWithOwner } }
+    }`,
+		)
+		.join("\n");
+	return {
+		query: `query($owner: String!, $name: String!, ${declarations}) {
+  repository(owner: $owner, name: $name) {
+${fields}
+  }
+}`,
+		variables: {
+			owner: remote.owner,
+			name: remote.repo,
+			...Object.fromEntries(branches.map((b, i) => [`branch${i}`, b])),
+		},
+	};
+}
+
+/** The newest matching head per branch, then the group's rows by most recent update. */
+export function parseLocalPulls(data: unknown, head: RemoteRepo): PullGroup {
+	const { repository } = data as {
+		repository: Record<
+			string,
+			{ pageInfo: { hasNextPage: boolean }; nodes: (PullNode & { headRepository: { nameWithOwner: string } | null })[] }
+		>;
+	};
+	const name = `${head.owner}/${head.repo}`.toLowerCase();
+	const rows = new Map<number, PullNode>();
+	for (const list of Object.values(repository)) {
+		const match = list.nodes.find((n) => n.headRepository?.nameWithOwner.toLowerCase() === name);
+		if (match) rows.set(match.number, match);
+		else if (list.pageInfo.hasNextPage)
+			throw new Error("Too many pull requests for a local branch to identify its head repository.");
+	}
+	const nodes = [...rows.values()].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+	return parsePullGroup({
+		repository: {
+			pullRequests: { totalCount: nodes.length, pageInfo: { hasNextPage: false, endCursor: null }, nodes },
+		},
+	});
 }
 
 interface PullNode {
