@@ -1,9 +1,9 @@
 #!/bin/sh
-# Bundle test/smoke/main.ts like the mod and let Herdr load it: parser and reader code run in QuickJS.
+# Bundle test/smoke/main.ts with the mod's own esbuild options (scripts/bundle.mjs) and let Herdr load it:
+# parser and reader code run in QuickJS.
 set -eu
 cd "$(dirname "$0")/.."
 out=$(mktemp -d)
 trap 'rm -rf "$out"' EXIT
-bunx esbuild test/smoke/main.ts --bundle --format=esm --platform=neutral --target=es2022 \
-  --external:herdr --external:gpui-kit --external:gpui-base --log-level=warning --outfile="$out/main.js"
+bun scripts/bundle.mjs test/smoke/main.ts "$out/main.js"
 herdr-app check "$out"
