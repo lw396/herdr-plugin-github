@@ -1,4 +1,4 @@
-// The PR description page: published timeline and checks. Writes, files and polling follow.
+// A PR reader switches between its published discussion and a changed file's read-only unified diff.
 import { h_flex, v_flex } from "gpui-base";
 import { type Context, div, type Element } from "gpui-kit";
 import { type DetailRef, notVisible } from "../core/detail.ts";
@@ -25,7 +25,9 @@ import {
 	quiet,
 	stateBadge,
 } from "./detail.ts";
-import { colors, link, PULL_STATES } from "./ui.ts";
+import { FileDiff } from "./diff.ts";
+import { ChangedFiles } from "./files.ts";
+import { button, colors, link, PULL_STATES } from "./ui.ts";
 
 interface Loaded {
 	pull?: PullDetail;
@@ -46,6 +48,10 @@ const REVIEWS: Record<ReviewState, { label: string; icon: string; color: string 
 export class Pull {
 	ref: DetailRef | null = null;
 	entry: Loaded | null = null;
+	files: ChangedFiles | null = null;
+	private selected: string | null = null;
+	private filesExpanded = false;
+	private diff = new FileDiff();
 	private readonly host: DetailHost;
 	private metadata = new DetailMetadata();
 
@@ -57,13 +63,24 @@ export class Pull {
 		this.metadata.expanded = false;
 		this.ref = ref;
 		this.entry = null;
+		this.files = null;
+		this.selected = null;
+		this.filesExpanded = false;
 		this.load(cx);
+	}
+
+	/** A sidebar file command changes this view even when the PR identity did not change. */
+	select(cx: Context, path: string | null): void {
+		this.selected = path;
+		cx.notify();
 	}
 
 	private load(cx: Context): void {
 		const ref = this.ref;
 		const place = detailLocation(this.host.reader);
 		if (!ref || !place || !this.host.active("pr")) return;
+		this.files ??= new ChangedFiles(`reader-${this.host.reader}`, ref, place.on, (cx, path) => this.select(cx, path));
+		this.files.load(cx, true);
 		const entry: Loaded = { pull: this.entry?.pull, loading: true, projectsLoading: false };
 		this.entry = entry;
 		cx.spawn(async (cx) => {
@@ -105,8 +122,79 @@ export class Pull {
 			detailHeader(this.host, ref, { title: pull?.title, url: pull?.url, loading: Boolean(entry?.loading) }, (cx) =>
 				this.load(cx),
 			),
-			detailBody(ref, Boolean(entry?.loading), entry?.failure, pull ? this.document(pull, layout) : null),
+			this.navigation(),
+			this.selected !== null
+				? this.fileView()
+				: detailBody(ref, Boolean(entry?.loading), entry?.failure, pull ? this.document(pull, layout) : null),
 		];
+	}
+
+	private navigation(): Element {
+		const t = colors();
+		return v_flex()
+			.flex_none()
+			.min_w(0)
+			.px(24)
+			.pb(8)
+			.gap(6)
+			.child(
+				h_flex()
+					.gap(8)
+					.items_center()
+					.flex_wrap()
+					.child(
+						button("pull-description", "Description", "Show pull request description", (_e, cx) =>
+							this.select(cx, null),
+						).text_color(this.selected === null ? t.accent : t.dim),
+					)
+					.child(
+						button(
+							"pull-files",
+							`${this.filesExpanded ? "▾" : "▸"} Files changed${this.files?.files ? ` (${this.files.files.length})` : ""}`,
+							"Show changed files",
+							(_e, cx) => {
+								this.filesExpanded = !this.filesExpanded;
+								cx.notify();
+							},
+						),
+					),
+			)
+			.when(this.filesExpanded && this.files !== null, (el) =>
+				el.child(
+					div()
+						.id("pull-files-navigation")
+						.max_h(240)
+						.overflow_y_scroll()
+						.child(this.files?.render(this.selected) ?? div()),
+				),
+			);
+	}
+
+	private fileView(): Element {
+		const file = this.files?.files?.find((f) => f.path === this.selected);
+		if (file) return this.diff.render(file);
+		const failure = this.files?.failure;
+		const message =
+			failure ??
+			(this.files?.loading
+				? "Loading changed files…"
+				: "This file is not in the changed-files list. Choose another file or refresh.");
+		return v_flex()
+			.flex_1()
+			.min_h(0)
+			.p(24)
+			.gap(8)
+			.child(
+				div()
+					.text_color(failure ? colors().blocked : colors().dim)
+					.child(message),
+			)
+			.child(
+				button("pull-files-retry", "Retry", "Load changed files again", (_e, cx) => {
+					this.files?.load(cx, true);
+					cx.notify();
+				}),
+			);
 	}
 
 	private document(pull: PullDetail, layout: DetailLayout): Element {

@@ -51,7 +51,10 @@ export class Reader implements Role {
 		cx.spawn(async (cx) => {
 			for (;;) {
 				const ref = detailCommand(await nextCommand(), this.reader);
-				if (ref && this.navigation.open(ref)) this.show(cx, ref);
+				if (ref) {
+					if (this.navigation.open(ref)) this.show(cx, ref);
+					if (ref.kind === "pr") this.pull.select(cx, ref.file ?? null);
+				}
 			}
 		});
 	}

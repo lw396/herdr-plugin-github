@@ -19,7 +19,7 @@ export interface ListHost {
 	/** False stops asking (a hidden sidebar). */
 	asking(): boolean;
 	/** Opens (or selects) the row's reader tab. */
-	open(cx: Context, ref: DetailRef): void;
+	open(cx: Context, ref: DetailRef, file?: string): void;
 }
 
 export interface GroupSpec<K extends string> {
@@ -48,6 +48,9 @@ export interface GroupSource<K extends string, R extends Row, P extends Page<R>>
 	cells(row: R): Element[];
 	/** What follows, unless the pointer is over the row: then Copy and Open in browser do. */
 	idle(row: R): Element[];
+	/** Optional PR disclosure before the row, with its expanded changed-files navigator below. */
+	disclosure?(row: R, key: string): Element;
+	expandedRow?(row: R, key: string): Element | null;
 	/** A failed ask (Issues forget their list's validator, so the next check asks again). */
 	failed?(): void;
 }
@@ -286,7 +289,8 @@ export class GroupList<K extends string, R extends Row, P extends Page<R>> {
 			),
 			button(`${id}-open-${kind}-${row.number}`, "↗", "Open in browser", (_e, cx) => cx.open_url(row.url)),
 		];
-		return h_flex()
+		const disclosure = this.source.disclosure?.(row, key);
+		const frame = h_flex()
 			.id(`${id}-${kind}-${row.number}`)
 			.h(28)
 			.px(8)
@@ -306,6 +310,9 @@ export class GroupList<K extends string, R extends Row, P extends Page<R>> {
 				else if (this.hovered === key) this.hovered = null;
 				cx.notify();
 			})
+			.children(disclosure ? [disclosure] : [])
 			.children([...this.source.cells(row), ...(this.hovered === key ? actions : this.source.idle(row))]);
+		const expanded = this.source.expandedRow?.(row, key);
+		return expanded ? v_flex().child(frame).child(expanded) : frame;
 	}
 }

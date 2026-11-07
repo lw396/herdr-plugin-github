@@ -52,7 +52,7 @@ export class Panel implements Role {
 		ready: () => this.ready(),
 		run: () => this.latest,
 		asking: () => this.isVisible(),
-		open: (cx, ref) => this.open(cx, ref),
+		open: (cx, ref, file) => this.open(cx, ref, file),
 	};
 	/** Folded groups ask for nothing; which are expanded stays as the place changes. */
 	private issues = issueList(this.host, () => this.poll.invalidate());
@@ -173,11 +173,11 @@ export class Panel implements Role {
 	}
 
 	/** A click on a row opens (or selects) its reader tab. */
-	private open(cx: Context, ref: DetailRef): void {
+	private open(cx: Context, ref: DetailRef, file?: string): void {
 		this.openFailure = null;
 		cx.spawn(async (cx) => {
 			try {
-				await this.details.open(ref);
+				await this.details.open(ref, file);
 			} catch (e) {
 				this.openFailure = e instanceof Error ? e.message : String(e);
 			}

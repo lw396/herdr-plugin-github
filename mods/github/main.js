@@ -90,8 +90,8 @@ var Pane = class {
 };
 
 // src/github/views/panel.ts
-import { h_flex as h_flex3, v_flex as v_flex2 } from "gpui-base";
-import { div as div6, svg as svg4 } from "gpui-kit";
+import { h_flex as h_flex4, v_flex as v_flex3 } from "gpui-base";
+import { div as div7, svg as svg4 } from "gpui-kit";
 import { closeOverlay, props as props2 } from "herdr";
 
 // src/github/core/gh.ts
@@ -355,7 +355,7 @@ var DetailTabs = class {
   opened = /* @__PURE__ */ new Map();
   pending = /* @__PURE__ */ new Map();
   creating = /* @__PURE__ */ new Map();
-  async open(ref) {
+  async open(ref, file) {
     const space = focused2()?.space, owner = spaces2().find((s) => s.id === space);
     if (!space || !owner)
       throw new Error(`Select a Herdr space before opening ${ref.kind === "pr" ? "a pull request" : "an issue"}.`);
@@ -383,7 +383,7 @@ var DetailTabs = class {
       }
       this.opened.set(identity, target.id);
     }
-    this.pending.set(target.id, ref);
+    this.pending.set(target.id, file && ref.kind === "pr" ? { ...ref, file } : ref);
     remember(target.id, { ...target.reader, identity, request: `${Date.now()}-${Math.random()}`, ready: null });
     const tabName = owner.tabs.find((t) => t.id === target.reader.tab)?.name;
     if (oldName && tabName?.toLowerCase() === oldName && tabName !== detailTabName(ref)) {
@@ -448,7 +448,10 @@ function detailCommand(command, id) {
     const value = JSON.parse(command.slice(COMMAND.length));
     if (value?.reader !== id || value.kind !== "issue" && value.kind !== "pr" || typeof value.repo !== "string" || !/^[\w.-]+\/[\w.-]+$/.test(value.repo) || typeof value.number !== "number" || !Number.isSafeInteger(value.number) || value.number <= 0)
       return null;
-    return { kind: value.kind, repo: value.repo, number: value.number };
+    if (value.file !== void 0 && (value.kind !== "pr" || typeof value.file !== "string" || !value.file)) return null;
+    const ref = { kind: value.kind, repo: value.repo, number: value.number };
+    if (typeof value.file === "string") ref.file = value.file;
+    return ref;
   } catch {
     return null;
   }
@@ -10283,6 +10286,55 @@ async function localBranches(remote2, { cwd, on }) {
   return { branches, head: pickRemote(origin) ?? pickRemote(other) ?? remote2 };
 }
 
+// src/github/core/files.ts
+var byPath = (a, b) => a.path < b.path ? -1 : a.path > b.path ? 1 : 0;
+function flatFiles(files) {
+  return files.map((file) => ({ kind: "file", name: file.path, path: file.path, file })).sort(byPath);
+}
+function fileTree(files) {
+  const root = [];
+  for (const file of files) {
+    const parts = file.path.split("/");
+    let children = root;
+    let path = "";
+    for (const name of parts.slice(0, -1)) {
+      path = path ? `${path}/${name}` : name;
+      let folder2 = children.find((n) => n.kind === "directory" && n.path === path);
+      if (!folder2) {
+        folder2 = { kind: "directory", name, path, children: [] };
+        children.push(folder2);
+      }
+      children = folder2.children;
+    }
+    children.push({ kind: "file", name: parts.at(-1) ?? file.path, path: file.path, file });
+  }
+  return compact(root);
+}
+function compact(nodes) {
+  return nodes.map((node2) => {
+    if (node2.kind === "file") return node2;
+    let name = node2.name;
+    let folder2 = node2;
+    while (folder2.children.length === 1 && folder2.children[0]?.kind === "directory") {
+      folder2 = folder2.children[0];
+      name += `/${folder2.name}`;
+    }
+    return { ...folder2, name, children: compact(folder2.children) };
+  }).sort((a, b) => a.kind === b.kind ? byPath(a, b) : a.kind === "directory" ? -1 : 1);
+}
+function parseFiles(data) {
+  if (!Array.isArray(data)) throw new Error("GitHub returned an unreadable changed-files list.");
+  return data.map((f) => ({
+    path: f.filename,
+    previousPath: f.previous_filename ?? null,
+    status: f.status,
+    additions: f.additions,
+    deletions: f.deletions,
+    patch: f.patch ?? null,
+    url: f.blob_url
+  }));
+}
+
 // src/github/core/pull-detail.ts
 function reviewers(pull, reviews) {
   const byName = /* @__PURE__ */ new Map();
@@ -10429,6 +10481,9 @@ async function readPull(repo, number, on) {
   );
   detail.checks = parseChecks(Array.isArray(checks) ? checks : [checks], statuses);
   return detail;
+}
+async function readPullFiles(repo, number, on) {
+  return parseFiles(await api(`repos/${repo}/pulls/${number}/files?per_page=100`, { on, paginate: true }));
 }
 async function localPulls(remote2, { branches, head }, on) {
   if (branches.length === 0) return [];
@@ -10716,14 +10771,17 @@ var GroupList = class {
       ),
       button(`${id}-open-${kind}-${row.number}`, "\u2197", "Open in browser", (_e, cx) => cx.open_url(row.url))
     ];
-    return h_flex2().id(`${id}-${kind}-${row.number}`).h(28).px(8).pl(22).gap(8).items_center().rounded(6).cursor_pointer().hover((s) => s.bg(t.hover)).on_mouse_down("left", stop).on_click((_e, cx) => {
+    const disclosure = this.source.disclosure?.(row, key);
+    const frame = h_flex2().id(`${id}-${kind}-${row.number}`).h(28).px(8).pl(22).gap(8).items_center().rounded(6).cursor_pointer().hover((s) => s.bg(t.hover)).on_mouse_down("left", stop).on_click((_e, cx) => {
       const r = this.host.ready();
       if (r) this.host.open(cx, { kind: id, repo: `${r.remote.owner}/${r.remote.repo}`, number: row.number });
     }).on_hover((h, cx) => {
       if (h) this.hovered = key;
       else if (this.hovered === key) this.hovered = null;
       cx.notify();
-    }).children([...this.source.cells(row), ...this.hovered === key ? actions : this.source.idle(row)]);
+    }).children(disclosure ? [disclosure] : []).children([...this.source.cells(row), ...this.hovered === key ? actions : this.source.idle(row)]);
+    const expanded = this.source.expandedRow?.(row, key);
+    return expanded ? v_flex().child(frame).child(expanded) : frame;
   }
 };
 
@@ -10757,9 +10815,146 @@ function issueList(host, failed) {
 }
 
 // src/github/views/pulls.ts
-import { div as div5, svg as svg3 } from "gpui-kit";
+import { div as div6, svg as svg3 } from "gpui-kit";
+
+// src/github/views/files.ts
+import { h_flex as h_flex3, v_flex as v_flex2 } from "gpui-base";
+import { div as div5 } from "gpui-kit";
+var STATUS = {
+  added: { mark: "A", label: "Added", color: "done" },
+  removed: { mark: "D", label: "Deleted", color: "blocked" },
+  modified: { mark: "M", label: "Modified", color: "working" },
+  renamed: { mark: "R", label: "Renamed", color: "accent" },
+  copied: { mark: "C", label: "Copied", color: "accent" },
+  changed: { mark: "M", label: "Changed", color: "working" },
+  unchanged: { mark: "U", label: "Unchanged", color: "dim" }
+};
+var ChangedFiles = class {
+  files = null;
+  loading = false;
+  failure = null;
+  flat = false;
+  folded = /* @__PURE__ */ new Set();
+  latest = 0;
+  source = null;
+  tree = [];
+  list = [];
+  id;
+  ref;
+  on;
+  open;
+  constructor(id, ref, on, open) {
+    this.id = id;
+    this.ref = ref;
+    this.on = on;
+    this.open = open;
+  }
+  load(cx, force = false) {
+    if (!force && (this.files !== null || this.loading)) return;
+    const request = ++this.latest;
+    this.loading = true;
+    this.failure = null;
+    cx.spawn(async (cx2) => {
+      try {
+        const files = await readPullFiles(this.ref.repo, this.ref.number, this.on);
+        if (request === this.latest) this.files = files;
+      } catch (e) {
+        if (request === this.latest) this.failure = failureOf(e).message;
+      } finally {
+        if (request === this.latest) {
+          this.loading = false;
+          cx2.notify();
+        }
+      }
+    });
+  }
+  render(selected = null) {
+    const t = colors();
+    if (this.source !== this.files) {
+      this.source = this.files;
+      this.tree = fileTree(this.files ?? []);
+      this.list = flatFiles(this.files ?? []);
+    }
+    return v_flex2().min_w(0).gap(2).child(
+      h_flex3().gap(6).items_center().child(
+        div5().flex_1().text_size(12).text_color(t.dim).child(`Files changed${this.files ? ` (${this.files.length})` : ""}`)
+      ).child(
+        button(
+          `${this.id}-mode`,
+          this.flat ? "Tree" : "List",
+          this.flat ? "View as Tree" : "View as List",
+          (_e, cx) => {
+            this.flat = !this.flat;
+            cx.notify();
+          }
+        )
+      ).child(
+        button(`${this.id}-refresh`, "\u21BB", "Refresh changed files", (_e, cx) => {
+          this.load(cx, true);
+          cx.notify();
+        })
+      )
+    ).when(this.loading, (el) => el.child(h_flex3().gap(6).child(spinner()).child("Loading changed files\u2026"))).when(
+      this.failure !== null,
+      (el) => el.child(
+        v_flex2().gap(4).child(
+          div5().text_size(12).text_color(t.blocked).child(this.failure ?? "")
+        ).child(
+          button(`${this.id}-retry`, "Retry", "Load changed files again", (_e, cx) => {
+            this.load(cx, true);
+            cx.notify();
+          })
+        )
+      )
+    ).when(this.files?.length === 0, (el) => el.child(div5().text_color(t.dim).child("No changed files"))).children(this.nodes(this.flat ? this.list : this.tree, selected, 0));
+  }
+  nodes(nodes, selected, depth) {
+    const t = colors();
+    return nodes.map((node2) => {
+      const folder2 = node2.kind === "directory";
+      const folded = this.folded.has(node2.path);
+      const status2 = node2.kind === "file" ? STATUS[node2.file.status] ?? STATUS.changed : null;
+      const tip = node2.kind === "file" ? `${node2.path}${node2.file.previousPath ? ` \u2190 ${node2.file.previousPath}` : ""} \xB7 ${status2?.label} \xB7 +${node2.file.additions} \u2212${node2.file.deletions}` : node2.path;
+      const row = h_flex3().id(`${this.id}-${node2.kind}-${node2.path}`).h(26).min_w(0).pl(8 + depth * 12).pr(6).gap(6).items_center().cursor_pointer().hover((s) => s.bg(t.hover)).when(!folder2 && selected === node2.path, (el) => el.bg(t.selected)).tooltip(tip).accessibility_label(tip).on_mouse_down("left", stop).on_click((_e, cx) => {
+        cx.stop_propagation();
+        if (folder2) {
+          if (folded) this.folded.delete(node2.path);
+          else this.folded.add(node2.path);
+          cx.notify();
+        } else this.open(cx, node2.path);
+      }).child(
+        div5().w(12).flex_none().text_color(t.dim).child(folder2 ? folded ? "\u25B8" : "\u25BE" : "")
+      ).child(div5().flex_1().min_w(0).truncate().text_size(12).child(node2.name)).when(
+        status2 !== null,
+        (el) => el.child(
+          div5().flex_none().text_size(12).text_color(t[status2?.color ?? "dim"]).child(status2?.mark ?? "")
+        )
+      );
+      return node2.kind === "directory" && !folded ? v_flex2().child(row).children(this.nodes(node2.children, selected, depth + 1)) : row;
+    });
+  }
+};
+
+// src/github/views/pulls.ts
 var EMPTY = "0 pull requests in this category";
 function pullList(host) {
+  const disclosures = /* @__PURE__ */ new Map();
+  const disclosure = (pull, row) => {
+    const r = host.ready();
+    if (!r) return null;
+    const repo = `${r.remote.owner}/${r.remote.repo}`;
+    const key = JSON.stringify([r.on, repo, r.login, row]);
+    let state = disclosures.get(key);
+    if (!state) {
+      const ref = { kind: "pr", repo, number: pull.number };
+      state = {
+        expanded: false,
+        files: new ChangedFiles(`sidebar-${row}`, ref, r.on, (cx, path) => host.open(cx, ref, path))
+      };
+      disclosures.set(key, state);
+    }
+    return state;
+  };
   return new GroupList(host, {
     kind: "pr",
     groups: [
@@ -10773,15 +10968,33 @@ function pullList(host) {
     peek: peekPullGroup,
     ask: pullGroup,
     more: morePulls,
+    disclosure: (pull, key) => {
+      const state = disclosure(pull, key);
+      return button(
+        `pr-files-${key}`,
+        state?.expanded ? "\u25BE" : "\u25B8",
+        `${state?.expanded ? "Collapse" : "Expand"} changed files`,
+        (_e, cx) => {
+          if (!state) return;
+          state.expanded = !state.expanded;
+          if (state.expanded) state.files.load(cx);
+          cx.notify();
+        }
+      ).flex_none();
+    },
+    expandedRow: (pull, key) => {
+      const state = disclosure(pull, key);
+      return state?.expanded ? div6().pl(24).child(state.files.render()) : null;
+    },
     cells: (pull) => {
       const state = PULL_STATES[pull.state];
       return [
         svg3(state.icon).size(14).flex_none().text_color(state.color(colors())).accessibility_label(state.label),
-        div5().flex_1().min_w(0).truncate().child(`#${pull.number} ${pull.title}`).when(pull.state === "draft", (el) => el.italic())
+        div6().flex_1().min_w(0).truncate().child(`#${pull.number} ${pull.title}`).when(pull.state === "draft", (el) => el.italic())
       ];
     },
     idle: (pull) => [
-      div5().flex_none().max_w(110).truncate().text_size(12).text_color(colors().dim).child(pull.author ? `by @${pull.author}` : "by ghost")
+      div6().flex_none().max_w(110).truncate().text_size(12).text_color(colors().dim).child(pull.author ? `by @${pull.author}` : "by ghost")
     ]
   });
 }
@@ -10813,7 +11026,7 @@ var Panel = class {
     ready: () => this.ready(),
     run: () => this.latest,
     asking: () => this.isVisible(),
-    open: (cx, ref) => this.open(cx, ref)
+    open: (cx, ref, file) => this.open(cx, ref, file)
   };
   /** Folded groups ask for nothing; which are expanded stays as the place changes. */
   issues = issueList(this.host, () => this.poll.invalidate());
@@ -10912,11 +11125,11 @@ var Panel = class {
     this.issues.load(cx);
   }
   /** A click on a row opens (or selects) its reader tab. */
-  open(cx, ref) {
+  open(cx, ref, file) {
     this.openFailure = null;
     cx.spawn(async (cx2) => {
       try {
-        await this.details.open(ref);
+        await this.details.open(ref, file);
       } catch (e) {
         this.openFailure = e instanceof Error ? e.message : String(e);
       }
@@ -10934,7 +11147,7 @@ var Panel = class {
     const t = colors();
     const overlay = props2()?.overlay;
     const noRemote = this.remote === null && !(this.account && !this.account.status.ok);
-    return v_flex2().id("github").size_full().min_h(0).overflow_hidden().bg(t.background).text_color(t.foreground).text_size(13).when(!overlay, (el) => el.rounded(10).border_1().border_color(t.border)).child(this.header(overlay, where.cwd ?? "no folder")).when(noRemote, (el) => el.child(this.noRemote(where.cwd))).when(!noRemote, (el) => el.child(this.tabs()).child(this.list())).child(this.statusCard(where.on, where.cwd));
+    return v_flex3().id("github").size_full().min_h(0).overflow_hidden().bg(t.background).text_color(t.foreground).text_size(13).when(!overlay, (el) => el.rounded(10).border_1().border_color(t.border)).child(this.header(overlay, where.cwd ?? "no folder")).when(noRemote, (el) => el.child(this.noRemote(where.cwd))).when(!noRemote, (el) => el.child(this.tabs()).child(this.list())).child(this.statusCard(where.on, where.cwd));
   }
   /** The repository, then ↻ (Herdr's own spinner while anything loads, as its tab bar shows a working agent). */
   header(overlay, context) {
@@ -10945,7 +11158,7 @@ var Panel = class {
       cx.notify();
     });
     const repo = this.remote ? `${this.remote.owner}/${this.remote.repo}` : "";
-    return h_flex3().h(42).flex_none().px(14).gap(8).items_center().border_b(1).border_color(t.border).child(div6().font_semibold().tooltip(context).child("GitHub")).child(div6().flex_1().min_w(0).truncate().text_right().text_size(12).text_color(t.dim).child(repo)).child(busy ? div6().size(24).flex_none().flex().items_center().justify_center().child(spinner()) : refresh).when(overlay !== void 0, (el) => el.child(button("gh-close", "\xD7", "Close", () => closeOverlay(overlay))));
+    return h_flex4().h(42).flex_none().px(14).gap(8).items_center().border_b(1).border_color(t.border).child(div7().font_semibold().tooltip(context).child("GitHub")).child(div7().flex_1().min_w(0).truncate().text_right().text_size(12).text_color(t.dim).child(repo)).child(busy ? div7().size(24).flex_none().flex().items_center().justify_center().child(spinner()) : refresh).when(overlay !== void 0, (el) => el.child(button("gh-close", "\xD7", "Close", () => closeOverlay(overlay))));
   }
   /** The gh account on the folder's machine, then how fresh the lists are. What to do about a problem is said in the list. */
   statusCard(on, cwd) {
@@ -10961,13 +11174,13 @@ var Panel = class {
       Date.now()
     );
     const tip = `${this.account ? describeAccount(this.account).text : "checking gh\u2026"} \xB7 ${cwd ?? "no folder"}`;
-    const dot = s.tone === "pending" ? spinner(10) : div6().size(8).rounded(4).bg(s.tone === "ok" ? t.done : t.blocked);
-    return v_flex2().id("gh-status").flex_none().px(14).py(8).gap(2).border_t(1).border_color(t.border).bg(t.surface).text_size(12).tooltip(tip).accessibility_label(`${s.account} on ${s.machine}${s.sync ? `. ${s.sync}` : ""}`).child(
-      h_flex3().gap(8).items_center().child(div6().w(10).flex_none().flex().items_center().justify_center().child(dot)).child(div6().flex_none().max_w(160).truncate().font_medium().child(s.account)).child(div6().flex_none().text_color(t.dim).child("\xB7")).child(div6().flex_1().min_w(0).truncate().text_color(t.dim).child(s.machine))
+    const dot = s.tone === "pending" ? spinner(10) : div7().size(8).rounded(4).bg(s.tone === "ok" ? t.done : t.blocked);
+    return v_flex3().id("gh-status").flex_none().px(14).py(8).gap(2).border_t(1).border_color(t.border).bg(t.surface).text_size(12).tooltip(tip).accessibility_label(`${s.account} on ${s.machine}${s.sync ? `. ${s.sync}` : ""}`).child(
+      h_flex4().gap(8).items_center().child(div7().w(10).flex_none().flex().items_center().justify_center().child(dot)).child(div7().flex_none().max_w(160).truncate().font_medium().child(s.account)).child(div7().flex_none().text_color(t.dim).child("\xB7")).child(div7().flex_1().min_w(0).truncate().text_color(t.dim).child(s.machine))
     ).when(
       s.sync !== null,
       (el) => el.child(
-        div6().pl(18).truncate().text_color(s.tone === "problem" ? t.blocked : t.dim).child(s.sync ?? "")
+        div7().pl(18).truncate().text_color(s.tone === "problem" ? t.blocked : t.dim).child(s.sync ?? "")
       )
     );
   }
@@ -10975,14 +11188,14 @@ var Panel = class {
   noRemote(cwd) {
     const t = colors();
     const empty = noRepository(cwd);
-    return v_flex2().flex_1().min_h(0).px(28).gap(8).items_center().justify_center().child(svg4("mods/github/assets/github.svg").size(28).text_color(t.dim)).child(div6().pt(4).font_medium().text_color(t.muted).child(empty.title)).child(div6().text_size(12).text_center().text_color(t.dim).child(empty.detail));
+    return v_flex3().flex_1().min_h(0).px(28).gap(8).items_center().justify_center().child(svg4("mods/github/assets/github.svg").size(28).text_color(t.dim)).child(div7().pt(4).font_medium().text_color(t.muted).child(empty.title)).child(div7().text_size(12).text_center().text_color(t.dim).child(empty.detail));
   }
   /** Issues and Pull Requests; Actions and notifications join them later. */
   tabs() {
     const t = colors();
-    return h_flex3().h(34).flex_none().px(10).gap(4).items_center().border_b(1).border_color(t.border).children(
+    return h_flex4().h(34).flex_none().px(10).gap(4).items_center().border_b(1).border_color(t.border).children(
       TABS.map(
-        ({ id, label }) => div6().id(`gh-tab-${id}`).px(8).py(3).rounded(6).text_size(12).font_medium().cursor_pointer().text_color(this.tab === id ? t.foreground : t.muted).when(this.tab === id, (el) => el.bg(t.hover)).when(this.tab !== id, (el) => el.hover((s) => s.bg(t.hover))).accessibility_label(label).on_mouse_down("left", stop).on_click((_e, cx) => {
+        ({ id, label }) => div7().id(`gh-tab-${id}`).px(8).py(3).rounded(6).text_size(12).font_medium().cursor_pointer().text_color(this.tab === id ? t.foreground : t.muted).when(this.tab === id, (el) => el.bg(t.hover)).when(this.tab !== id, (el) => el.hover((s) => s.bg(t.hover))).accessibility_label(label).on_mouse_down("left", stop).on_click((_e, cx) => {
           this.tab = id;
           this.openFailure = null;
           if (id === "prs") this.pulls.load(cx);
@@ -11004,18 +11217,18 @@ var Panel = class {
       issuesEnabled: this.tab === "issues" ? this.issues.anyPage?.issuesEnabled : void 0,
       failure: this.failure ?? list2.notFound
     });
-    const problem = (text3) => div6().p(8).text_size(12).text_color(t.blocked).child(text3);
-    return v_flex2().id(`gh-list-${this.tab}`).flex_1().min_h(0).overflow_y_scroll().p(6).gap(4).when(this.openFailure !== null, (el) => el.child(problem(this.openFailure ?? ""))).when(notice !== null, (el) => el.child(problem(notice ?? ""))).when(!notice && this.ready() !== null, (el) => el.children(list2.render())).when(!notice && !this.ready() && this.loading, (el) => el.child(div6().p(8).text_color(t.dim).child("\u2026")));
+    const problem = (text3) => div7().p(8).text_size(12).text_color(t.blocked).child(text3);
+    return v_flex3().id(`gh-list-${this.tab}`).flex_1().min_h(0).overflow_y_scroll().p(6).gap(4).when(this.openFailure !== null, (el) => el.child(problem(this.openFailure ?? ""))).when(notice !== null, (el) => el.child(problem(notice ?? ""))).when(!notice && this.ready() !== null, (el) => el.children(list2.render())).when(!notice && !this.ready() && this.loading, (el) => el.child(div7().p(8).text_color(t.dim).child("\u2026")));
   }
 };
 
 // src/github/views/reader.ts
-import { v_flex as v_flex6 } from "gpui-base";
+import { v_flex as v_flex8 } from "gpui-base";
 import { nextCommand, props as props3 } from "herdr";
 
 // src/github/views/issue.ts
-import { h_flex as h_flex5, Textarea, TextareaState, v_flex as v_flex4 } from "gpui-base";
-import { div as div8 } from "gpui-kit";
+import { h_flex as h_flex6, Textarea, TextareaState, v_flex as v_flex5 } from "gpui-base";
+import { div as div9 } from "gpui-kit";
 
 // src/github/core/projects.ts
 var FIELD = { issue: "issue", pr: "pullRequest" };
@@ -11071,8 +11284,8 @@ async function readProjects(ref, on) {
 }
 
 // src/github/views/detail.ts
-import { h_flex as h_flex4, TextView, v_flex as v_flex3 } from "gpui-base";
-import { div as div7, svg as svg5 } from "gpui-kit";
+import { h_flex as h_flex5, TextView, v_flex as v_flex4 } from "gpui-base";
+import { div as div8, svg as svg5 } from "gpui-kit";
 var NOUN = { issue: "issue", pr: "pull request" };
 var Noun = (kind) => NOUN[kind].charAt(0).toUpperCase() + NOUN[kind].slice(1);
 function openLink(cx, host, url, page) {
@@ -11086,9 +11299,9 @@ function openLink(cx, host, url, page) {
 function detailEmpty(kind) {
   const t = colors();
   const hint = `Choose ${kind === "pr" ? "a" : "an"} ${NOUN[kind]} in the GitHub sidebar. ${Noun(kind)} details are not restored after restarting Herdr.`;
-  return v_flex3().flex_1().gap(8).items_center().justify_center().p(24).child(
-    div7().font_semibold().child(`${Noun(kind)} details`)
-  ).child(div7().text_size(13).text_color(t.dim).text_center().child(hint));
+  return v_flex4().flex_1().gap(8).items_center().justify_center().p(24).child(
+    div8().font_semibold().child(`${Noun(kind)} details`)
+  ).child(div8().text_size(13).text_color(t.dim).text_center().child(hint));
 }
 function detailHeader(host, ref, shown, refresh) {
   const t = colors();
@@ -11101,7 +11314,7 @@ function detailHeader(host, ref, shown, refresh) {
     `Copy ${NOUN[ref.kind]} link`,
     (_e, cx) => cx.write_to_clipboard(url)
   );
-  return h_flex4().flex_none().px(24).pt(18).pb(12).gap(12).items_start().when(
+  return h_flex5().flex_none().px(24).pt(18).pb(12).gap(12).items_start().when(
     previous3 !== null,
     (el) => el.child(
       square(button(`${ref.kind}-back`, "\u2190", `Back to #${previous3?.number}`, (_e, cx) => host.back(cx))).text_size(
@@ -11109,11 +11322,11 @@ function detailHeader(host, ref, shown, refresh) {
       )
     )
   ).child(
-    h_flex4().flex_1().min_w(0).gap(8).items_center().flex_wrap().text_size(22).child(
-      div7().min_w(0).font_semibold().child(shown.title ?? `${Noun(ref.kind)} details`)
-    ).child(h_flex4().gap(2).items_center().flex_none().child(number).child(copy))
+    h_flex5().flex_1().min_w(0).gap(8).items_center().flex_wrap().text_size(22).child(
+      div8().min_w(0).font_semibold().child(shown.title ?? `${Noun(ref.kind)} details`)
+    ).child(h_flex5().gap(2).items_center().flex_none().child(number).child(copy))
   ).child(
-    shown.loading ? square(div7()).child(spinner(18)) : square(
+    shown.loading ? square(div8()).child(spinner(18)) : square(
       button(`${ref.kind}-refresh`, "\u21BB", `Refresh ${NOUN[ref.kind]}`, (_e, cx) => {
         refresh(cx);
         cx.notify();
@@ -11123,12 +11336,12 @@ function detailHeader(host, ref, shown, refresh) {
 }
 function detailBody(ref, loading, failure, document3) {
   const t = colors();
-  return v_flex3().id(`${ref.kind}-scroll-${detailKey(ref)}`).flex_1().min_h(0).overflow_y_scroll().px(24).pb(18).gap(12).when(loading, (el) => el.child(div7().text_size(12).text_color(t.dim).child(`Loading ${NOUN[ref.kind]}\u2026`))).when(
+  return v_flex4().id(`${ref.kind}-scroll-${detailKey(ref)}`).flex_1().min_h(0).overflow_y_scroll().px(24).pb(18).gap(12).when(loading, (el) => el.child(div8().text_size(12).text_color(t.dim).child(`Loading ${NOUN[ref.kind]}\u2026`))).when(
     failure !== void 0,
     (el) => el.child(
-      div7().text_color(t.blocked).child(failure ?? "")
+      div8().text_color(t.blocked).child(failure ?? "")
     )
-  ).when(document3 !== null, (el) => el.child(document3 ?? div7()));
+  ).when(document3 !== null, (el) => el.child(document3 ?? div8()));
 }
 var DetailMetadata = class {
   expanded = false;
@@ -11136,18 +11349,18 @@ var DetailMetadata = class {
     const t = colors();
     const wide = layout2 === "wide";
     const fields = () => sections.map(
-      ([title, value]) => v_flex3().min_w(0).gap(10).py(16).border_b(1).border_color(t.border).when(layout2 === "narrow", (el) => el.w(180).min_w(140).flex_grow(1)).when(layout2 === "compact", (el) => el.w_full().flex_none()).child(div7().text_size(13).font_semibold().child(title)).child(value)
+      ([title, value]) => v_flex4().min_w(0).gap(10).py(16).border_b(1).border_color(t.border).when(layout2 === "narrow", (el) => el.w(180).min_w(140).flex_grow(1)).when(layout2 === "compact", (el) => el.w_full().flex_none()).child(div8().text_size(13).font_semibold().child(title)).child(value)
     );
-    if (wide) return v_flex3().w(220).flex_none().children(fields());
+    if (wide) return v_flex4().w(220).flex_none().children(fields());
     const labels2 = sections.find(([title]) => title === "Labels");
-    const summary = () => h_flex4().min_w(0).gap(10).py(16).items_center().flex_wrap().child(div7().text_size(13).font_semibold().child("Labels")).child(layout2 === "compact" ? quiet(String(labels2?.[2] ?? 0)) : labels2?.[1] ?? quiet("None yet"));
+    const summary = () => h_flex5().min_w(0).gap(10).py(16).items_center().flex_wrap().child(div8().text_size(13).font_semibold().child("Labels")).child(layout2 === "compact" ? quiet(String(labels2?.[2] ?? 0)) : labels2?.[1] ?? quiet("None yet"));
     let content3;
     if (!this.expanded) content3 = summary();
-    else if (layout2 === "compact") content3 = v_flex3().children(fields());
-    else content3 = h_flex4().gap(20).items_start().flex_wrap().children(fields());
+    else if (layout2 === "compact") content3 = v_flex4().children(fields());
+    else content3 = h_flex5().gap(20).items_start().flex_wrap().children(fields());
     const label = this.expanded ? "See less" : "See more";
-    return v_flex3().min_w(0).gap(12).pb(16).border_b(1).border_color(t.border).child(content3).child(
-      h_flex4().child(
+    return v_flex4().min_w(0).gap(12).pb(16).border_b(1).border_color(t.border).child(content3).child(
+      h_flex5().child(
         button("detail-metadata-toggle", label, label, (_e, cx) => {
           this.expanded = !this.expanded;
           cx.notify();
@@ -11158,31 +11371,31 @@ var DetailMetadata = class {
 };
 function detailDocument(layout2, heading, timeline, sections, metadata) {
   const wide = layout2 === "wide";
-  const posts = v_flex3().min_w(0).gap(20).when(wide, (el) => el.flex_1()).when(!wide, (el) => el.w_full().flex_none()).children(timeline);
+  const posts = v_flex4().min_w(0).gap(20).when(wide, (el) => el.flex_1()).when(!wide, (el) => el.w_full().flex_none()).children(timeline);
   const side = metadata.render(layout2, sections);
-  return v_flex3().gap(18).child(h_flex4().gap(10).pb(4).items_center().flex_wrap().children(heading)).child(wide ? h_flex4().gap(24).items_start().child(posts).child(side) : v_flex3().gap(20).child(side).child(posts));
+  return v_flex4().gap(18).child(h_flex5().gap(10).pb(4).items_center().flex_wrap().children(heading)).child(wide ? h_flex5().gap(24).items_start().child(posts).child(side) : v_flex4().gap(20).child(side).child(posts));
 }
 function stateBadge(label, color, icon2) {
-  return h_flex4().gap(6).items_center().px(10).py(4).rounded(14).bg(`${color}26`).text_size(13).font_semibold().text_color(color).when(icon2 !== void 0, (el) => el.child(svg5(icon2 ?? "").size(14))).child(label);
+  return h_flex5().gap(6).items_center().px(10).py(4).rounded(14).bg(`${color}26`).text_size(13).font_semibold().text_color(color).when(icon2 !== void 0, (el) => el.child(svg5(icon2 ?? "").size(14))).child(label);
 }
 function postCard(id, post, verb, onLink) {
   const t = colors();
   const reactions = post.reactions ?? [];
-  const heading = h_flex4().px(16).py(10).gap(8).items_center().flex_wrap().bg(t.raised).border_b(1).border_color(t.border).text_size(12).child(div7().font_semibold().child(post.author)).child(div7().text_color(t.dim).child(verb)).child(div7().flex_1()).child(div7().text_color(t.dim).tooltip(post.createdAt).child(relativeTime(post.createdAt, Date.now())));
+  const heading = h_flex5().px(16).py(10).gap(8).items_center().flex_wrap().bg(t.raised).border_b(1).border_color(t.border).text_size(12).child(div8().font_semibold().child(post.author)).child(div8().text_color(t.dim).child(verb)).child(div8().flex_1()).child(div8().text_color(t.dim).tooltip(post.createdAt).child(relativeTime(post.createdAt, Date.now())));
   const text3 = TextView.markdown(id, post.markdown).selectable(true).scrollable(false).on_link_click(onLink);
-  return v_flex3().id(`${id}-card`).min_w(0).w_full().overflow_hidden().rounded(8).border_1().border_color(t.border).bg(t.background).child(heading).child(
-    v_flex3().min_w(0).px(16).py(16).gap(12).child(text3).when(
+  return v_flex4().id(`${id}-card`).min_w(0).w_full().overflow_hidden().rounded(8).border_1().border_color(t.border).bg(t.background).child(heading).child(
+    v_flex4().min_w(0).px(16).py(16).gap(12).child(text3).when(
       reactions.length > 0,
       (el) => el.child(
-        h_flex4().gap(6).flex_wrap().children(reactions.map((r) => chip(`${r.emoji} ${r.count}`, t.border, t.raised)))
+        h_flex5().gap(6).flex_wrap().children(reactions.map((r) => chip(`${r.emoji} ${r.count}`, t.border, t.raised)))
       )
     )
   );
 }
-var quiet = (text3) => div7().text_size(12).text_color(colors().dim).child(text3);
+var quiet = (text3) => div8().text_size(12).text_color(colors().dim).child(text3);
 function people(logins, none) {
   if (logins.length === 0) return quiet(none);
-  return v_flex3().gap(8).children(logins.map((login2) => div7().text_size(13).font_medium().child(login2)));
+  return v_flex4().gap(8).children(logins.map((login2) => div8().text_size(13).font_medium().child(login2)));
 }
 function labelChip(label) {
   const t = colors();
@@ -11190,15 +11403,15 @@ function labelChip(label) {
 }
 function labels(list2) {
   if (list2.length === 0) return quiet("None yet");
-  return h_flex4().gap(6).flex_wrap().children(list2.map(labelChip));
+  return h_flex5().gap(6).flex_wrap().children(list2.map(labelChip));
 }
-var milestone = (title) => title ? div7().text_size(13).child(title) : quiet("No milestone");
+var milestone = (title) => title ? div8().text_size(13).child(title) : quiet("No milestone");
 function projects(list2, loading) {
   const t = colors();
   if (!list2) return quiet(loading ? "Loading Projects\u2026" : "Projects not loaded.");
   if (!list2.ok) return quiet("None yet").tooltip(list2.message);
   if (list2.projects.length === 0) return quiet("None yet");
-  return v_flex3().gap(8).children(
+  return v_flex4().gap(8).children(
     list2.projects.map(
       (project) => link(`project-${project.url}`, project.url, project.title).text_size(13).text_color(t.accent).tooltip(project.url)
     )
@@ -11397,7 +11610,7 @@ ${detailKey(this.ref)}` : null;
       layout2,
       [
         stateBadge(open ? "\u25CB Open" : "\u25CF Closed", open ? t.done : t.accent),
-        div8().text_size(13).font_medium().child(issue.author)
+        div9().text_size(13).font_medium().child(issue.author)
       ],
       [
         postCard("issue-body", issue, "opened this issue", onLink),
@@ -11418,14 +11631,14 @@ ${detailKey(this.ref)}` : null;
   /** A label or assignment change between the comments. */
   activity(activity) {
     const t = colors();
-    const avatar = div8().size(22).flex_none().rounded(11).bg(t.raised).text_color(t.muted).font_semibold().flex().items_center().justify_center().child(activity.actor.slice(0, 1).toUpperCase());
+    const avatar = div9().size(22).flex_none().rounded(11).bg(t.raised).text_color(t.muted).font_semibold().flex().items_center().justify_center().child(activity.actor.slice(0, 1).toUpperCase());
     const changed = "labels" in activity ? activity.labels : null;
-    return h_flex5().id(`activity-${activity.id}`).px(16).py(4).gap(8).items_center().flex_wrap().text_size(12).child(avatar).child(div8().font_semibold().child(activity.actor)).child(div8().text_color(t.dim).child(activityText(activity))).when(
+    return h_flex6().id(`activity-${activity.id}`).px(16).py(4).gap(8).items_center().flex_wrap().text_size(12).child(avatar).child(div9().font_semibold().child(activity.actor)).child(div9().text_color(t.dim).child(activityText(activity))).when(
       changed !== null,
       (el) => el.children((changed ?? []).map(labelChip)).child(
-        div8().text_color(t.dim).child(changed?.length === 1 ? "label" : "labels")
+        div9().text_color(t.dim).child(changed?.length === 1 ? "label" : "labels")
       )
-    ).child(div8().flex_1()).child(div8().text_color(t.dim).tooltip(activity.createdAt).child(relativeTime(activity.createdAt, Date.now())));
+    ).child(div9().flex_1()).child(div9().text_color(t.dim).tooltip(activity.createdAt).child(relativeTime(activity.createdAt, Date.now())));
   }
   /** A new comment, and close / reopen: GitHub's own order of the two buttons. */
   composer(issue) {
@@ -11447,23 +11660,23 @@ ${detailKey(this.ref)}` : null;
       enabled: !busy && this.draft.trim() !== "",
       primary: true
     };
-    return v_flex4().id("issue-composer").min_w(0).w_full().gap(10).pt(4).when(
+    return v_flex5().id("issue-composer").min_w(0).w_full().gap(10).pt(4).when(
       box !== null,
       (el) => el.child(
-        div8().min_w(0).rounded(8).border_1().border_color(t.border).bg(t.background).p(8).on_mouse_down("left", stop).child(Textarea.new(box).w_full().text_size(13).text_color(t.foreground))
+        div9().min_w(0).rounded(8).border_1().border_color(t.border).bg(t.background).p(8).on_mouse_down("left", stop).child(Textarea.new(box).w_full().text_size(13).text_color(t.foreground))
       )
     ).when(
       this.writeFailure !== null,
       (el) => el.child(
-        div8().text_size(12).text_color(t.blocked).child(this.writeFailure ?? "")
+        div9().text_size(12).text_color(t.blocked).child(this.writeFailure ?? "")
       )
     ).child(
-      h_flex5().gap(8).items_center().justify_end().when(busy, (el) => el.child(spinner(14))).child(this.action(close, (cx) => this.setState(cx, open ? "closed" : "open"))).child(this.action(send, (cx) => this.comment(cx)))
+      h_flex6().gap(8).items_center().justify_end().when(busy, (el) => el.child(spinner(14))).child(this.action(close, (cx) => this.setState(cx, open ? "closed" : "open"))).child(this.action(send, (cx) => this.comment(cx)))
     );
   }
   action({ id, label, tip, enabled, primary }, act) {
     const t = colors();
-    return h_flex5().id(id).h(32).px(14).gap(6).items_center().rounded(6).border_1().text_size(13).font_medium().border_color(primary ? t.accent : t.border).bg(primary ? t.accent : t.raised).text_color(primary ? t.background : t.foreground).when(
+    return h_flex6().id(id).h(32).px(14).gap(6).items_center().rounded(6).border_1().text_size(13).font_medium().border_color(primary ? t.accent : t.border).bg(primary ? t.accent : t.raised).text_color(primary ? t.background : t.foreground).when(
       enabled,
       (el) => el.cursor_pointer().hover((s) => s.opacity(0.85)).on_click((_e, cx) => {
         cx.stop_propagation();
@@ -11474,8 +11687,114 @@ ${detailKey(this.ref)}` : null;
 };
 
 // src/github/views/pull.ts
-import { h_flex as h_flex6, v_flex as v_flex5 } from "gpui-base";
-import { div as div9 } from "gpui-kit";
+import { h_flex as h_flex8, v_flex as v_flex7 } from "gpui-base";
+import { div as div11 } from "gpui-kit";
+
+// src/github/views/diff.ts
+import { h_flex as h_flex7, Scrollbar, v_flex as v_flex6, v_virtual_list } from "gpui-base";
+import { div as div10 } from "gpui-kit";
+
+// src/github/core/diff.ts
+function parsePatch(patch) {
+  const rows = [];
+  let oldLine = 0, newLine = 0, oldLeft = 0, newLeft = 0;
+  for (const raw of patch.split("\n")) {
+    const text3 = raw.endsWith("\r") ? raw.slice(0, -1) : raw;
+    const hunk = /^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/.exec(text3);
+    if (hunk) {
+      oldLine = Number(hunk[1]);
+      oldLeft = Number(hunk[2] ?? 1);
+      newLine = Number(hunk[3]);
+      newLeft = Number(hunk[4] ?? 1);
+      rows.push({ kind: "hunk", text: text3, oldLine: null, newLine: null, comment: null });
+      continue;
+    }
+    if (text3 === "\\ No newline at end of file") {
+      rows.push({ kind: "notice", text: text3, oldLine: null, newLine: null, comment: null });
+      continue;
+    }
+    const prefix = text3[0];
+    if (prefix === "+" && newLeft > 0) {
+      rows.push({
+        kind: "add",
+        text: text3.slice(1),
+        oldLine: null,
+        newLine,
+        comment: { side: "RIGHT", line: newLine }
+      });
+      newLine++;
+      newLeft--;
+    } else if (prefix === "-" && oldLeft > 0) {
+      rows.push({
+        kind: "delete",
+        text: text3.slice(1),
+        oldLine,
+        newLine: null,
+        comment: { side: "LEFT", line: oldLine }
+      });
+      oldLine++;
+      oldLeft--;
+    } else if (prefix === " " && oldLeft > 0 && newLeft > 0) {
+      rows.push({ kind: "context", text: text3.slice(1), oldLine, newLine, comment: { side: "RIGHT", line: newLine } });
+      oldLine++;
+      newLine++;
+      oldLeft--;
+      newLeft--;
+    }
+  }
+  return rows;
+}
+
+// src/github/views/diff.ts
+var ROW_HEIGHT = 22;
+var FileDiff = class {
+  file = null;
+  rows = [];
+  width = 0;
+  render(file) {
+    const t = colors();
+    if (this.file !== file) {
+      this.file = file;
+      this.rows = parsePatch(file.patch ?? "");
+      this.width = this.rows.reduce((width, row) => Math.max(width, row.text.length * 16 + 152), 240);
+    }
+    const rows = this.rows;
+    const id = `pull-diff-${file.path}`;
+    const header = v_flex6().flex_none().px(16).py(8).gap(6).border_b(1).border_color(t.border).child(
+      h_flex7().gap(10).items_center().flex_wrap().child(div10().min_w(0).font_medium().child(file.path)).child(div10().text_color(t.done).child(`+${file.additions}`)).child(div10().text_color(t.blocked).child(`\u2212${file.deletions}`)).child(link(`${id}-browser`, file.url, "Open File on GitHub").text_size(12).text_color(t.accent))
+    ).when(
+      file.previousPath !== null,
+      (el) => el.child(div10().text_size(12).text_color(t.dim).child(`Renamed from ${file.previousPath}`))
+    );
+    const body = rows.length > 0 ? div10().flex_1().min_h(0).min_w(0).relative().child(
+      div10().id(`${id}-horizontal`).size_full().overflow_x_scroll().child(
+        v_virtual_list(
+          id,
+          rows.length,
+          ROW_HEIGHT,
+          (index2) => String(index2),
+          (range) => rows.slice(range.start, range.end).map(diffRow)
+        ).h_full().w_full().min_w(this.width)
+      )
+    ).child(Scrollbar.vertical(id).absolute().inset_0()) : div10().p(20).text_color(t.dim).child(
+      file.additions === 0 && file.deletions === 0 ? "No textual changes in this file. Open it on GitHub to view the full file." : "GitHub did not provide a patch for this file (it may be binary or too large). Open it on GitHub to view the changes."
+    );
+    return v_flex6().flex_1().min_h(0).min_w(0).overflow_hidden().child(header).child(body);
+  }
+};
+function diffRow(row) {
+  const t = colors();
+  const added = row.kind === "add", deleted = row.kind === "delete";
+  return h_flex7().h(ROW_HEIGHT).w_full().flex_none().items_center().font_family("monospace").text_size(13).when(added, (el) => el.bg(`${t.done}20`)).when(deleted, (el) => el.bg(`${t.blocked}20`)).when(row.kind === "hunk", (el) => el.bg(`${t.accent}18`).text_color(t.accent)).when(row.kind === "notice", (el) => el.text_color(t.dim)).child(
+    div10().w(54).flex_none().pr(8).text_right().text_color(t.dim).child(row.oldLine ?? "")
+  ).child(
+    div10().w(54).flex_none().pr(8).text_right().text_color(t.dim).child(row.newLine ?? "")
+  ).child(
+    div10().w(20).flex_none().text_color(added ? t.done : deleted ? t.blocked : t.dim).child(added ? "+" : deleted ? "\u2212" : "")
+  ).child(div10().flex_none().whitespace_nowrap().child(row.text));
+}
+
+// src/github/views/pull.ts
 var REVIEWS = {
   requested: { label: "Awaiting requested review", icon: "\u25CB", color: "dim" },
   approved: { label: "Approved these changes", icon: "\u2713", color: "done" },
@@ -11486,6 +11805,10 @@ var REVIEWS = {
 var Pull = class {
   ref = null;
   entry = null;
+  files = null;
+  selected = null;
+  filesExpanded = false;
+  diff = new FileDiff();
   host;
   metadata = new DetailMetadata();
   constructor(host) {
@@ -11495,12 +11818,22 @@ var Pull = class {
     this.metadata.expanded = false;
     this.ref = ref;
     this.entry = null;
+    this.files = null;
+    this.selected = null;
+    this.filesExpanded = false;
     this.load(cx);
+  }
+  /** A sidebar file command changes this view even when the PR identity did not change. */
+  select(cx, path) {
+    this.selected = path;
+    cx.notify();
   }
   load(cx) {
     const ref = this.ref;
     const place = detailLocation(this.host.reader);
     if (!ref || !place || !this.host.active("pr")) return;
+    this.files ??= new ChangedFiles(`reader-${this.host.reader}`, ref, place.on, (cx2, path) => this.select(cx2, path));
+    this.files.load(cx, true);
     const entry = { pull: this.entry?.pull, loading: true, projectsLoading: false };
     this.entry = entry;
     cx.spawn(async (cx2) => {
@@ -11544,8 +11877,51 @@ var Pull = class {
         { title: pull?.title, url: pull?.url, loading: Boolean(entry?.loading) },
         (cx) => this.load(cx)
       ),
-      detailBody(ref, Boolean(entry?.loading), entry?.failure, pull ? this.document(pull, layout2) : null)
+      this.navigation(),
+      this.selected !== null ? this.fileView() : detailBody(ref, Boolean(entry?.loading), entry?.failure, pull ? this.document(pull, layout2) : null)
     ];
+  }
+  navigation() {
+    const t = colors();
+    return v_flex7().flex_none().min_w(0).px(24).pb(8).gap(6).child(
+      h_flex8().gap(8).items_center().flex_wrap().child(
+        button(
+          "pull-description",
+          "Description",
+          "Show pull request description",
+          (_e, cx) => this.select(cx, null)
+        ).text_color(this.selected === null ? t.accent : t.dim)
+      ).child(
+        button(
+          "pull-files",
+          `${this.filesExpanded ? "\u25BE" : "\u25B8"} Files changed${this.files?.files ? ` (${this.files.files.length})` : ""}`,
+          "Show changed files",
+          (_e, cx) => {
+            this.filesExpanded = !this.filesExpanded;
+            cx.notify();
+          }
+        )
+      )
+    ).when(
+      this.filesExpanded && this.files !== null,
+      (el) => el.child(
+        div11().id("pull-files-navigation").max_h(240).overflow_y_scroll().child(this.files?.render(this.selected) ?? div11())
+      )
+    );
+  }
+  fileView() {
+    const file = this.files?.files?.find((f) => f.path === this.selected);
+    if (file) return this.diff.render(file);
+    const failure = this.files?.failure;
+    const message = failure ?? (this.files?.loading ? "Loading changed files\u2026" : "This file is not in the changed-files list. Choose another file or refresh.");
+    return v_flex7().flex_1().min_h(0).p(24).gap(8).child(
+      div11().text_color(failure ? colors().blocked : colors().dim).child(message)
+    ).child(
+      button("pull-files-retry", "Retry", "Load changed files again", (_e, cx) => {
+        this.files?.load(cx, true);
+        cx.notify();
+      })
+    );
   }
   document(pull, layout2) {
     const t = colors();
@@ -11556,18 +11932,18 @@ var Pull = class {
       layout2,
       [
         stateBadge(state.label, state.color(t), state.icon),
-        div9().text_size(13).child(`${pull.author} ${merged} into ${pull.base} from ${pull.head}`)
+        div11().text_size(13).child(`${pull.author} ${merged} into ${pull.base} from ${pull.head}`)
       ],
       [
         postCard("pull-body", pull, "opened this pull request", onLink),
         ...(pull.timeline ?? []).map(
-          (item, index2) => v_flex5().gap(8).child(postCard(`pull-event-${index2}`, item, item.verb, onLink)).children(
+          (item, index2) => v_flex7().gap(8).child(postCard(`pull-event-${index2}`, item, item.verb, onLink)).children(
             item.discussion.map(
-              (d) => v_flex5().gap(6).child(div9().text_size(12).child(d.path)).when(Boolean(d.snippet), (el) => el.child(div9().text_size(12).child(d.snippet))).child(postCard(`inline-${d.comment.id}`, d.comment, "commented", onLink))
+              (d) => v_flex7().gap(6).child(div11().text_size(12).child(d.path)).when(Boolean(d.snippet), (el) => el.child(div11().text_size(12).child(d.snippet))).child(postCard(`inline-${d.comment.id}`, d.comment, "commented", onLink))
             )
           )
         ),
-        v_flex5().gap(10).child(div9().font_semibold().child("Checks")).children(
+        v_flex7().gap(10).child(div11().font_semibold().child("Checks")).children(
           (pull.checks ?? []).map(
             (c) => c.url ? link(c.id, c.url, `${c.name} \xB7 ${c.status} \xB7 ${c.duration}`).text_color(t.accent) : quiet(`${c.name} \xB7 ${c.status} \xB7 ${c.duration}`)
           )
@@ -11586,12 +11962,12 @@ var Pull = class {
   reviewers(pull) {
     const t = colors();
     if (pull.reviewers.length === 0) return quiet("None yet");
-    return v_flex5().gap(8).children(
+    return v_flex7().gap(8).children(
       pull.reviewers.map((r) => {
         const state = REVIEWS[r.state];
-        return h_flex6().gap(8).items_center().tooltip(state.label).accessibility_label(`${r.name}: ${state.label}`).child(
-          div9().flex_1().min_w(0).text_size(13).child(`${r.name}${r.team ? " (team)" : ""}`)
-        ).child(div9().text_color(t[state.color]).child(state.icon));
+        return h_flex8().gap(8).items_center().tooltip(state.label).accessibility_label(`${r.name}: ${state.label}`).child(
+          div11().flex_1().min_w(0).text_size(13).child(`${r.name}${r.team ? " (team)" : ""}`)
+        ).child(div11().text_color(t[state.color]).child(state.icon));
       })
     );
   }
@@ -11633,7 +12009,10 @@ var Reader = class {
     cx.spawn(async (cx2) => {
       for (; ; ) {
         const ref = detailCommand(await nextCommand(), this.reader);
-        if (ref && this.navigation.open(ref)) this.show(cx2, ref);
+        if (ref) {
+          if (this.navigation.open(ref)) this.show(cx2, ref);
+          if (ref.kind === "pr") this.pull.select(cx2, ref.file ?? null);
+        }
       }
     });
   }
@@ -11648,7 +12027,7 @@ var Reader = class {
     if (this.reader) readyDetail(this.reader);
     const t = colors();
     const kind = this.navigation.ref?.kind ?? this.initial();
-    return v_flex6().id("reader").size_full().min_h(0).overflow_hidden().bg(t.background).text_color(t.foreground).text_size(14).on_size_change((size, cx2) => {
+    return v_flex8().id("reader").size_full().min_h(0).overflow_hidden().bg(t.background).text_color(t.foreground).text_size(14).on_size_change((size, cx2) => {
       const layout2 = size.width >= WIDE ? "wide" : size.width >= COMPACT ? "narrow" : "compact";
       if (layout2 !== this.layout) {
         this.layout = layout2;

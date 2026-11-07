@@ -245,6 +245,31 @@ test("a PR opens its own native tab in the PR role, and a repeated click selects
 	expect(execCalls().filter((c) => c.command === "herdr-app")).toHaveLength(1);
 });
 
+test("files and Description select the same PR tab, with only the last queued file delivered", async () => {
+	atSource();
+	const pr = `~$ herdr-app do tab.new {"space":"center/s1","name":"#42 · cli","mod":"github","props":{"role":"pr","reader":"${reader}"}}`;
+	machine(null, { [pr]: { stdout: '{"tab":"center/tb2","pane":"center/p2"}' } });
+	const tabs = new DetailTabs();
+	const ref = { kind: "pr", repo: "cli/cli", number: 42 } as const;
+	await tabs.open(ref, "src/a.ts");
+	atDetail();
+	readyDetail(reader);
+	tabs.deliver();
+	expect(detailCommand(commands().at(-1)!.name.slice(7), reader)).toEqual({ ...ref, file: "src/a.ts" });
+	machine(null, {});
+	await tabs.open(ref, "src/b.ts");
+	await tabs.open(ref, "src/c.ts");
+	readyDetail(reader);
+	tabs.deliver();
+	expect(detailCommand(commands().at(-1)!.name.slice(7), reader)).toEqual({ ...ref, file: "src/c.ts" });
+	await tabs.open(ref);
+	readyDetail(reader);
+	tabs.deliver();
+	expect(detailCommand(commands().at(-1)!.name.slice(7), reader)).toEqual(ref);
+	expect(execCalls().filter((c) => c.command === "herdr-app")).toHaveLength(1);
+	expect(detailCommand(`detail:${JSON.stringify({ reader, ...ref, file: 12 })}`, reader)).toBeNull();
+});
+
 test("an issue and a PR with the same number do not share a tab", async () => {
 	atSource();
 	machine(null, { [create.replace("#9789", "#7")]: { stdout: '{"tab":"center/tb2","pane":"center/p2"}' } });

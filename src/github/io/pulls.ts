@@ -1,4 +1,5 @@
 // Pull requests from GitHub, through gh on the folder's or reader tab's machine (ADR 0003).
+import { type ChangedFile, parseFiles } from "../core/files.ts";
 import { type PullDetail, parsePullDetail } from "../core/pull-detail.ts";
 import { parseChecks, pullTimeline } from "../core/pull-timeline.ts";
 import {
@@ -51,6 +52,11 @@ export async function readPull(repo: string, number: number, on: string | null):
 	);
 	detail.checks = parseChecks(Array.isArray(checks) ? checks : [checks], statuses as unknown[]);
 	return detail;
+}
+
+/** All changed-file pages; GitHub may omit a patch (binary, too large, or a pure rename). */
+export async function readPullFiles(repo: string, number: number, on: string | null): Promise<ChangedFile[]> {
+	return parseFiles(await api(`repos/${repo}/pulls/${number}/files?per_page=100`, { on, paginate: true }));
 }
 
 /** The local branches' latest PRs, in one batch. */

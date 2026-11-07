@@ -1,16 +1,19 @@
 // Herdr smoke mod: runs real parser and reader paths inside Herdr's QuickJS (scripts/smoke.sh).
 import { h_flex } from "gpui-base";
 import { type AsyncContext, type Context, div, View } from "gpui-kit";
+import { parseFiles } from "../../src/github/core/files.ts";
 import { parseIssueDetail } from "../../src/github/core/issue-detail.ts";
 import { browserUrl, detailLink, readerMarkdown } from "../../src/github/core/markdown.ts";
 import { parsePullDetail } from "../../src/github/core/pull-detail.ts";
 import { DetailMetadata, labels, people } from "../../src/github/views/detail.ts";
+import { ChangedFiles } from "../../src/github/views/files.ts";
 import { Reader } from "../../src/github/views/reader.ts";
 import issue from "../fixtures/issue-plugin-13.json";
 import pull from "../fixtures/pull-cli-14974.json";
 import pullComments from "../fixtures/pull-cli-14974-comments.json";
 import pullIssue from "../fixtures/pull-cli-14974-issue.json";
 import pullReviews from "../fixtures/pull-cli-14974-reviews.json";
+import filePages from "../fixtures/pull-plugin-35-files.json";
 import events from "../fixtures/timeline-plugin-13.json";
 
 function expectEqual(actual: string, expected: string, what: string): void {
@@ -23,6 +26,7 @@ const imageLinks = (markdown: string): string => readerMarkdown(markdown, "https
 
 export default class Smoke extends View {
 	readers: Reader[] = [];
+	files: ChangedFiles | null = null;
 
 	init(_props: unknown, cx: AsyncContext): void {
 		// The readers' own init: the issue page's comment box (TextareaState) must be creatable in QuickJS.
@@ -34,6 +38,22 @@ export default class Smoke extends View {
 			reader.layout = "wide";
 		}
 
+		const files = parseFiles(filePages.flat());
+		const fileRef = { kind: "pr", repo: "lw396/herdr-plugin-github", number: 35 } as const;
+		for (const path of ["src/github/core/time.ts", "docs/adr/0005-one-repository-renamed.md"]) {
+			const reader = new Reader();
+			reader.init(cx);
+			reader.navigation.open(fileRef);
+			reader.pull.ref = fileRef;
+			reader.pull.files = new ChangedFiles(`smoke-${path}`, fileRef, "center", (cx, selected) =>
+				reader.pull.select(cx, selected),
+			);
+			reader.pull.files.files = files;
+			reader.pull.select(cx, path);
+			this.readers.push(reader);
+		}
+		this.files = new ChangedFiles("smoke-file-tree", fileRef, "center", () => {});
+		this.files.files = files;
 		const ref = { kind: "pr", repo: "cli/cli", number: 14974 } as const;
 		pr.navigation.open(ref);
 		pr.pull.ref = ref;
@@ -121,6 +141,7 @@ export default class Smoke extends View {
 		return h_flex()
 			.size_full()
 			.children(this.readers.map((reader) => div().flex_1().child(reader.render(cx))))
-			.children(this.metadataSamples());
+			.children(this.metadataSamples())
+			.child(this.files?.render() ?? div());
 	}
 }

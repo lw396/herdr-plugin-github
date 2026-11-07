@@ -3,14 +3,32 @@
 import { div, svg } from "gpui-kit";
 import type { Pull, PullCategory, PullGroup } from "../core/pulls.ts";
 import * as known from "../io/known.ts";
+import { ChangedFiles } from "./files.ts";
 import { GroupList, type ListHost } from "./groups.ts";
-import { colors, PULL_STATES } from "./ui.ts";
+import { button, colors, PULL_STATES } from "./ui.ts";
 
 /** What the extension says in an empty category. */
 const EMPTY = "0 pull requests in this category";
 
 /** The extension's row: state icon, `#number title` (a draft in italics), then `by @author`. */
 export function pullList(host: ListHost): GroupList<PullCategory, Pull, PullGroup> {
+	const disclosures = new Map<string, { expanded: boolean; files: ChangedFiles }>();
+	const disclosure = (pull: Pull, row: string) => {
+		const r = host.ready();
+		if (!r) return null;
+		const repo = `${r.remote.owner}/${r.remote.repo}`;
+		const key = JSON.stringify([r.on, repo, r.login, row]);
+		let state = disclosures.get(key);
+		if (!state) {
+			const ref = { kind: "pr", repo, number: pull.number } as const;
+			state = {
+				expanded: false,
+				files: new ChangedFiles(`sidebar-${row}`, ref, r.on, (cx, path) => host.open(cx, ref, path)),
+			};
+			disclosures.set(key, state);
+		}
+		return state;
+	};
 	return new GroupList<PullCategory, Pull, PullGroup>(host, {
 		kind: "pr",
 		groups: [
@@ -24,6 +42,24 @@ export function pullList(host: ListHost): GroupList<PullCategory, Pull, PullGrou
 		peek: known.peekPullGroup,
 		ask: known.pullGroup,
 		more: known.morePulls,
+		disclosure: (pull, key) => {
+			const state = disclosure(pull, key);
+			return button(
+				`pr-files-${key}`,
+				state?.expanded ? "▾" : "▸",
+				`${state?.expanded ? "Collapse" : "Expand"} changed files`,
+				(_e, cx) => {
+					if (!state) return;
+					state.expanded = !state.expanded;
+					if (state.expanded) state.files.load(cx);
+					cx.notify();
+				},
+			).flex_none();
+		},
+		expandedRow: (pull, key) => {
+			const state = disclosure(pull, key);
+			return state?.expanded ? div().pl(24).child(state.files.render()) : null;
+		},
 		cells: (pull) => {
 			const state = PULL_STATES[pull.state];
 			return [
