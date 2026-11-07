@@ -1,4 +1,5 @@
 // Times as the sidebar shows them.
+// PR fixture: an added line near the top.
 
 const MINUTE = 60_000,
 	HOUR = 60 * MINUTE,
@@ -14,3 +15,5 @@ export function relativeTime(iso: string, now: number): string {
 	if (ago < 365 * DAY) return `${Math.floor(ago / (30 * DAY))}mo`;
 	return `${Math.floor(ago / (365 * DAY))}y`;
 }
+
+// PR fixture: a line added at the end.
