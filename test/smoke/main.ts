@@ -4,6 +4,7 @@ import { type AsyncContext, type Context, div, View } from "gpui-kit";
 import { parseIssueDetail } from "../../src/github/core/issue-detail.ts";
 import { browserUrl, detailLink, readerMarkdown } from "../../src/github/core/markdown.ts";
 import { parsePullDetail } from "../../src/github/core/pull-detail.ts";
+import { DetailMetadata, labels, people } from "../../src/github/views/detail.ts";
 import { Reader } from "../../src/github/views/reader.ts";
 import issue from "../fixtures/issue-plugin-13.json";
 import pull from "../fixtures/pull-cli-14974.json";
@@ -30,7 +31,7 @@ export default class Smoke extends View {
 		this.readers = [pr, issues];
 		for (const reader of this.readers) {
 			reader.init(cx);
-			reader.wide = true;
+			reader.layout = "wide";
 		}
 
 		const ref = { kind: "pr", repo: "cli/cli", number: 14974 } as const;
@@ -99,9 +100,27 @@ export default class Smoke extends View {
 		};
 	}
 
+	/** Exercise every metadata branch during a native snapshot, where callbacks may be registered. */
+	private metadataSamples() {
+		const detail = parseIssueDetail(issue, events);
+		const metadata = new DetailMetadata();
+		return [false, true].flatMap((expanded) => {
+			metadata.expanded = expanded;
+			return (["compact", "narrow", "wide"] as const).map((layout) => {
+				const sample = metadata.render(layout, [
+					["Assignees", people(detail.assignees, "None yet")],
+					["Labels", labels(detail.labels), detail.labels.length],
+				]);
+				expectEqual(String(metadata.expanded), String(expanded), "resize keeps metadata disclosure");
+				return sample;
+			});
+		});
+	}
+
 	render(cx: Context) {
 		return h_flex()
 			.size_full()
-			.children(this.readers.map((reader) => div().flex_1().child(reader.render(cx))));
+			.children(this.readers.map((reader) => div().flex_1().child(reader.render(cx))))
+			.children(this.metadataSamples());
 	}
 }

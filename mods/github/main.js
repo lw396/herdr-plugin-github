@@ -11130,13 +11130,36 @@ function detailBody(ref, loading, failure, document3) {
     )
   ).when(document3 !== null, (el) => el.child(document3 ?? div7()));
 }
-function detailDocument(wide, heading, timeline, sections) {
-  const t = colors();
+var DetailMetadata = class {
+  expanded = false;
+  render(layout2, sections) {
+    const t = colors();
+    const wide = layout2 === "wide";
+    const fields = () => sections.map(
+      ([title, value]) => v_flex3().min_w(0).gap(10).py(16).border_b(1).border_color(t.border).when(layout2 === "narrow", (el) => el.w(180).min_w(140).flex_grow(1)).when(layout2 === "compact", (el) => el.w_full().flex_none()).child(div7().text_size(13).font_semibold().child(title)).child(value)
+    );
+    if (wide) return v_flex3().w(220).flex_none().children(fields());
+    const labels2 = sections.find(([title]) => title === "Labels");
+    const summary = () => h_flex4().min_w(0).gap(10).py(16).items_center().flex_wrap().child(div7().text_size(13).font_semibold().child("Labels")).child(layout2 === "compact" ? quiet(String(labels2?.[2] ?? 0)) : labels2?.[1] ?? quiet("None yet"));
+    let content3;
+    if (!this.expanded) content3 = summary();
+    else if (layout2 === "compact") content3 = v_flex3().children(fields());
+    else content3 = h_flex4().gap(20).items_start().flex_wrap().children(fields());
+    const label = this.expanded ? "See less" : "See more";
+    return v_flex3().min_w(0).gap(12).pb(16).border_b(1).border_color(t.border).child(content3).child(
+      h_flex4().child(
+        button("detail-metadata-toggle", label, label, (_e, cx) => {
+          this.expanded = !this.expanded;
+          cx.notify();
+        }).text_color(t.accent)
+      )
+    );
+  }
+};
+function detailDocument(layout2, heading, timeline, sections, metadata) {
+  const wide = layout2 === "wide";
   const posts = v_flex3().min_w(0).gap(20).when(wide, (el) => el.flex_1()).when(!wide, (el) => el.w_full().flex_none()).children(timeline);
-  const metadata = sections.map(
-    ([title, value]) => v_flex3().gap(10).py(16).border_b(1).border_color(t.border).when(!wide, (el) => el.w(180).min_w(140).flex_1()).child(div7().text_size(13).font_semibold().child(title)).child(value)
-  );
-  const side = wide ? v_flex3().w(220).flex_none().children(metadata) : h_flex4().gap(20).flex_wrap().children(metadata);
+  const side = metadata.render(layout2, sections);
   return v_flex3().gap(18).child(h_flex4().gap(10).pb(4).items_center().flex_wrap().children(heading)).child(wide ? h_flex4().gap(24).items_start().child(posts).child(side) : v_flex3().gap(20).child(side).child(posts));
 }
 function stateBadge(label, color, icon2) {
@@ -11190,6 +11213,7 @@ var Issue = class {
   /** The new comment being written; kept when posting fails, and through refreshes. */
   draft = "";
   host;
+  metadata = new DetailMetadata();
   notices = new Notices();
   box = null;
   /** Unsent comments of the issues Back can return to. */
@@ -11221,6 +11245,7 @@ var Issue = class {
     this.draft = this.drafts.get(detailKey(ref)) ?? "";
     this.drafts.delete(detailKey(ref));
     this.box?.set_value(this.draft);
+    this.metadata.expanded = false;
     this.ref = ref;
     this.writeFailure = null;
     this.load(cx);
@@ -11347,7 +11372,7 @@ ${detailKey(this.ref)}` : null;
     if (comment && !issue.comments.some((c) => c.id === comment.id)) issue.comments = [...issue.comments, comment];
     if (notice.state) issue.state = notice.state.state;
   }
-  render(cx, wide) {
+  render(cx, layout2) {
     for (const notice of this.notices.take()) this.apply(notice);
     if (this.syncPolling()) this.load(cx);
     const ref = this.ref;
@@ -11361,15 +11386,15 @@ ${detailKey(this.ref)}` : null;
         { title: issue?.title, url: issue?.url, loading: Boolean(entry?.loading) },
         (cx2) => this.load(cx2)
       ),
-      detailBody(ref, Boolean(entry?.loading), entry?.failure, issue ? this.document(issue, wide) : null)
+      detailBody(ref, Boolean(entry?.loading), entry?.failure, issue ? this.document(issue, layout2) : null)
     ];
   }
-  document(issue, wide) {
+  document(issue, layout2) {
     const t = colors();
     const open = issue.state === "open";
     const onLink = (url, cx) => openLink(cx, this.host, url, issue.url);
     return detailDocument(
-      wide,
+      layout2,
       [
         stateBadge(open ? "\u25CB Open" : "\u25CF Closed", open ? t.done : t.accent),
         div8().text_size(13).font_medium().child(issue.author)
@@ -11383,10 +11408,11 @@ ${detailKey(this.ref)}` : null;
       ],
       [
         ["Assignees", people(issue.assignees, "No assignees")],
-        ["Labels", labels(issue.labels)],
+        ["Labels", labels(issue.labels), issue.labels.length],
         ["Project", projects(this.entry?.projects, Boolean(this.entry?.projectsLoading))],
         ["Milestone", milestone(issue.milestone)]
-      ]
+      ],
+      this.metadata
     );
   }
   /** A label or assignment change between the comments. */
@@ -11461,10 +11487,12 @@ var Pull = class {
   ref = null;
   entry = null;
   host;
+  metadata = new DetailMetadata();
   constructor(host) {
     this.host = host;
   }
   show(cx, ref) {
+    this.metadata.expanded = false;
     this.ref = ref;
     this.entry = null;
     this.load(cx);
@@ -11504,7 +11532,7 @@ var Pull = class {
       }
     });
   }
-  render(wide) {
+  render(layout2) {
     const ref = this.ref;
     const entry = this.entry;
     if (!ref) return [detailEmpty("pr")];
@@ -11516,16 +11544,16 @@ var Pull = class {
         { title: pull?.title, url: pull?.url, loading: Boolean(entry?.loading) },
         (cx) => this.load(cx)
       ),
-      detailBody(ref, Boolean(entry?.loading), entry?.failure, pull ? this.document(pull, wide) : null)
+      detailBody(ref, Boolean(entry?.loading), entry?.failure, pull ? this.document(pull, layout2) : null)
     ];
   }
-  document(pull, wide) {
+  document(pull, layout2) {
     const t = colors();
     const state = PULL_STATES[pull.state];
     const onLink = (url, cx) => openLink(cx, this.host, url, pull.url);
     const merged = pull.state === "merged" ? "merged changes" : "wants to merge changes";
     return detailDocument(
-      wide,
+      layout2,
       [
         stateBadge(state.label, state.color(t), state.icon),
         div9().text_size(13).child(`${pull.author} ${merged} into ${pull.base} from ${pull.head}`)
@@ -11548,10 +11576,11 @@ var Pull = class {
       [
         ["Reviewers", this.reviewers(pull)],
         ["Assignees", people(pull.assignees, "None yet")],
-        ["Labels", labels(pull.labels)],
+        ["Labels", labels(pull.labels), pull.labels.length],
         ["Project", projects(this.entry?.projects, Boolean(this.entry?.projectsLoading))],
         ["Milestone", milestone(pull.milestone)]
-      ]
+      ],
+      this.metadata
     );
   }
   reviewers(pull) {
@@ -11570,11 +11599,12 @@ var Pull = class {
 
 // src/github/views/reader.ts
 var WIDE = 820;
+var COMPACT = 480;
 var Reader = class {
   navigation = new DetailNavigation();
   issue;
   pull;
-  wide = false;
+  layout = "compact";
   reader;
   constructor() {
     this.reader = typeof props3()?.reader === "string" ? props3().reader : "";
@@ -11619,12 +11649,12 @@ var Reader = class {
     const t = colors();
     const kind = this.navigation.ref?.kind ?? this.initial();
     return v_flex6().id("reader").size_full().min_h(0).overflow_hidden().bg(t.background).text_color(t.foreground).text_size(14).on_size_change((size, cx2) => {
-      const wide = size.width >= WIDE;
-      if (wide !== this.wide) {
-        this.wide = wide;
+      const layout2 = size.width >= WIDE ? "wide" : size.width >= COMPACT ? "narrow" : "compact";
+      if (layout2 !== this.layout) {
+        this.layout = layout2;
         cx2.notify();
       }
-    }).children(kind === "pr" ? this.pull.render(this.wide) : this.issue.render(cx, this.wide));
+    }).children(kind === "pr" ? this.pull.render(this.layout) : this.issue.render(cx, this.layout));
   }
 };
 

@@ -10,6 +10,8 @@ import { readProjects } from "../io/projects.ts";
 import { readPull } from "../io/pulls.ts";
 import {
 	type DetailHost,
+	type DetailLayout,
+	DetailMetadata,
 	detailBody,
 	detailDocument,
 	detailEmpty,
@@ -45,12 +47,14 @@ export class Pull {
 	ref: DetailRef | null = null;
 	entry: Loaded | null = null;
 	private readonly host: DetailHost;
+	private metadata = new DetailMetadata();
 
 	constructor(host: DetailHost) {
 		this.host = host;
 	}
 
 	show(cx: Context, ref: DetailRef): void {
+		this.metadata.expanded = false;
 		this.ref = ref;
 		this.entry = null;
 		this.load(cx);
@@ -92,7 +96,7 @@ export class Pull {
 		});
 	}
 
-	render(wide: boolean): Element[] {
+	render(layout: DetailLayout): Element[] {
 		const ref = this.ref;
 		const entry = this.entry;
 		if (!ref) return [detailEmpty("pr")];
@@ -101,17 +105,17 @@ export class Pull {
 			detailHeader(this.host, ref, { title: pull?.title, url: pull?.url, loading: Boolean(entry?.loading) }, (cx) =>
 				this.load(cx),
 			),
-			detailBody(ref, Boolean(entry?.loading), entry?.failure, pull ? this.document(pull, wide) : null),
+			detailBody(ref, Boolean(entry?.loading), entry?.failure, pull ? this.document(pull, layout) : null),
 		];
 	}
 
-	private document(pull: PullDetail, wide: boolean): Element {
+	private document(pull: PullDetail, layout: DetailLayout): Element {
 		const t = colors();
 		const state = PULL_STATES[pull.state];
 		const onLink = (url: string, cx: Context) => openLink(cx, this.host, url, pull.url);
 		const merged = pull.state === "merged" ? "merged changes" : "wants to merge changes";
 		return detailDocument(
-			wide,
+			layout,
 			[
 				stateBadge(state.label, state.color(t), state.icon),
 				div().text_size(13).child(`${pull.author} ${merged} into ${pull.base} from ${pull.head}`),
@@ -146,10 +150,11 @@ export class Pull {
 			[
 				["Reviewers", this.reviewers(pull)],
 				["Assignees", people(pull.assignees, "None yet")],
-				["Labels", labels(pull.labels)],
+				["Labels", labels(pull.labels), pull.labels.length],
 				["Project", projects(this.entry?.projects, Boolean(this.entry?.projectsLoading))],
 				["Milestone", milestone(pull.milestone)],
 			],
+			this.metadata,
 		);
 	}
 

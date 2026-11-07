@@ -17,6 +17,8 @@ import { addComment, issueChanges, readIssue, setIssueState } from "../io/issues
 import { readProjects } from "../io/projects.ts";
 import {
 	type DetailHost,
+	type DetailLayout,
+	DetailMetadata,
 	detailBody,
 	detailDocument,
 	detailEmpty,
@@ -61,6 +63,7 @@ export class Issue {
 	/** The new comment being written; kept when posting fails, and through refreshes. */
 	draft = "";
 	private readonly host: DetailHost;
+	private metadata = new DetailMetadata();
 	private notices = new Notices();
 	private box: TextareaState | null = null;
 	/** Unsent comments of the issues Back can return to. */
@@ -97,6 +100,7 @@ export class Issue {
 		this.draft = this.drafts.get(detailKey(ref)) ?? "";
 		this.drafts.delete(detailKey(ref));
 		this.box?.set_value(this.draft);
+		this.metadata.expanded = false;
 		this.ref = ref;
 		this.writeFailure = null;
 		this.load(cx);
@@ -245,7 +249,7 @@ export class Issue {
 		if (notice.state) issue.state = notice.state.state;
 	}
 
-	render(cx: Context, wide: boolean): Element[] {
+	render(cx: Context, layout: DetailLayout): Element[] {
 		// Writes announced by other views (shared metadata re-renders this one).
 		for (const notice of this.notices.take()) this.apply(notice);
 		if (this.syncPolling()) this.load(cx);
@@ -257,16 +261,16 @@ export class Issue {
 			detailHeader(this.host, ref, { title: issue?.title, url: issue?.url, loading: Boolean(entry?.loading) }, (cx) =>
 				this.load(cx),
 			),
-			detailBody(ref, Boolean(entry?.loading), entry?.failure, issue ? this.document(issue, wide) : null),
+			detailBody(ref, Boolean(entry?.loading), entry?.failure, issue ? this.document(issue, layout) : null),
 		];
 	}
 
-	private document(issue: IssueDetail, wide: boolean): Element {
+	private document(issue: IssueDetail, layout: DetailLayout): Element {
 		const t = colors();
 		const open = issue.state === "open";
 		const onLink = (url: string, cx: Context) => openLink(cx, this.host, url, issue.url);
 		return detailDocument(
-			wide,
+			layout,
 			[
 				stateBadge(open ? "○ Open" : "● Closed", open ? t.done : t.accent),
 				div().text_size(13).font_medium().child(issue.author),
@@ -282,10 +286,11 @@ export class Issue {
 			],
 			[
 				["Assignees", people(issue.assignees, "No assignees")],
-				["Labels", labels(issue.labels)],
+				["Labels", labels(issue.labels), issue.labels.length],
 				["Project", projects(this.entry?.projects, Boolean(this.entry?.projectsLoading))],
 				["Milestone", milestone(issue.milestone)],
 			],
+			this.metadata,
 		);
 	}
 

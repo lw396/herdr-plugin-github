@@ -143,31 +143,80 @@ export function detailBody(
 		.when(document !== null, (el) => el.child(document ?? div()));
 }
 
+export type DetailLayout = "wide" | "narrow" | "compact";
+
+type MetadataSection = [title: string, value: Element, count?: number];
+
+/** Session-only disclosure state; resizing or refreshing does not discard the person's choice. */
+export class DetailMetadata {
+	expanded = false;
+
+	render(layout: DetailLayout, sections: MetadataSection[]): Element {
+		const t = colors();
+		const wide = layout === "wide";
+		const fields = () =>
+			sections.map(([title, value]) =>
+				v_flex()
+					.min_w(0)
+					.gap(10)
+					.py(16)
+					.border_b(1)
+					.border_color(t.border)
+					.when(layout === "narrow", (el) => el.w(180).min_w(140).flex_grow(1))
+					.when(layout === "compact", (el) => el.w_full().flex_none())
+					.child(div().text_size(13).font_semibold().child(title))
+					.child(value),
+			);
+		if (wide) return v_flex().w(220).flex_none().children(fields());
+		const labels = sections.find(([title]) => title === "Labels");
+		const summary = () =>
+			h_flex()
+				.min_w(0)
+				.gap(10)
+				.py(16)
+				.items_center()
+				.flex_wrap()
+				.child(div().text_size(13).font_semibold().child("Labels"))
+				.child(layout === "compact" ? quiet(String(labels?.[2] ?? 0)) : (labels?.[1] ?? quiet("None yet")));
+		let content: Element;
+		if (!this.expanded) content = summary();
+		else if (layout === "compact") content = v_flex().children(fields());
+		else content = h_flex().gap(20).items_start().flex_wrap().children(fields());
+		const label = this.expanded ? "See less" : "See more";
+		return v_flex()
+			.min_w(0)
+			.gap(12)
+			.pb(16)
+			.border_b(1)
+			.border_color(t.border)
+			.child(content)
+			.child(
+				h_flex().child(
+					button("detail-metadata-toggle", label, label, (_e, cx) => {
+						this.expanded = !this.expanded;
+						cx.notify();
+					}).text_color(t.accent),
+				),
+			);
+	}
+}
+
 /** The state badge and the line beside it, then the timeline beside (wide) or below (narrow) the metadata. */
 export function detailDocument(
-	wide: boolean,
+	layout: DetailLayout,
 	heading: Element[],
 	timeline: Element[],
-	sections: [string, Element][],
+	sections: MetadataSection[],
+	metadata: DetailMetadata,
 ): Element {
-	const t = colors();
+	const wide = layout === "wide";
 	const posts = v_flex()
 		.min_w(0)
 		.gap(20)
 		.when(wide, (el) => el.flex_1())
 		.when(!wide, (el) => el.w_full().flex_none())
 		.children(timeline);
-	const metadata = sections.map(([title, value]) =>
-		v_flex()
-			.gap(10)
-			.py(16)
-			.border_b(1)
-			.border_color(t.border)
-			.when(!wide, (el) => el.w(180).min_w(140).flex_1())
-			.child(div().text_size(13).font_semibold().child(title))
-			.child(value),
-	);
-	const side = wide ? v_flex().w(220).flex_none().children(metadata) : h_flex().gap(20).flex_wrap().children(metadata);
+	const side = metadata.render(layout, sections);
 	return v_flex()
 		.gap(18)
 		.child(h_flex().gap(10).pb(4).items_center().flex_wrap().children(heading))

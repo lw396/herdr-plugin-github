@@ -5,19 +5,21 @@ import type { AsyncContext, Context, Element } from "gpui-kit";
 import { nextCommand, props } from "herdr";
 import { DetailNavigation, type DetailRef } from "../core/detail.ts";
 import { detailCommand, navigatedDetail, readyDetail } from "../io/detail-tabs.ts";
-import type { DetailHost } from "./detail.ts";
+import type { DetailHost, DetailLayout } from "./detail.ts";
 import { Issue } from "./issue.ts";
 import { Pull } from "./pull.ts";
 import { colors, type Role } from "./ui.ts";
 
 /** At this width the metadata moves beside the timeline. */
 const WIDE = 820;
+/** Below this width, show a label count and stack expanded metadata vertically. */
+const COMPACT = 480;
 
 export class Reader implements Role {
 	navigation = new DetailNavigation();
 	issue: Issue;
 	pull: Pull;
-	wide = false;
+	layout: DetailLayout = "compact";
 	private readonly reader: string;
 
 	constructor() {
@@ -75,12 +77,12 @@ export class Reader implements Role {
 			.text_color(t.foreground)
 			.text_size(14)
 			.on_size_change((size, cx) => {
-				const wide = size.width >= WIDE;
-				if (wide !== this.wide) {
-					this.wide = wide;
+				const layout = size.width >= WIDE ? "wide" : size.width >= COMPACT ? "narrow" : "compact";
+				if (layout !== this.layout) {
+					this.layout = layout;
 					cx.notify();
 				}
 			})
-			.children(kind === "pr" ? this.pull.render(this.wide) : this.issue.render(cx, this.wide));
+			.children(kind === "pr" ? this.pull.render(this.layout) : this.issue.render(cx, this.layout));
 	}
 }
