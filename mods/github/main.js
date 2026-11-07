@@ -10568,7 +10568,7 @@ function pullRequest(kind, remote2, login, after) {
 function localPullRequest(remote2, branches) {
   const declarations = branches.map((_, i) => `$branch${i}: String!`).join(", ");
   const fields = branches.map(
-    (_, i) => `    branch${i}: pullRequests(first: 100, headRefName: $branch${i}, orderBy: {field: UPDATED_AT, direction: DESC}) {
+    (_, i) => `    branch${i}: pullRequests(first: 100, headRefName: $branch${i}, states: [OPEN, CLOSED, MERGED], orderBy: {field: UPDATED_AT, direction: DESC}) {
       pageInfo { hasNextPage }
       nodes { ${ROW} headRepository { nameWithOwner } }
     }`
@@ -10661,26 +10661,34 @@ async function githubRemote(where) {
   const r = await exec3("git", ["remote", "-v"], { cwd: where.cwd, on: where.on ?? null });
   return r.code === 0 ? pickRemote(r.stdout) : null;
 }
+async function localBranches(remote2, where) {
+  if (!where.cwd) throw new Error("No focused folder for local pull request branches.");
+  const options = { cwd: where.cwd, on: where.on ?? null };
+  const result = await exec3("git", ["for-each-ref", "--format=%(refname:short)", "refs/heads"], options);
+  if (result.code !== 0) throw new Error(result.stderr.trim() || "Could not read local branches.");
+  const branches = result.stdout.split("\n").map((b) => b.trim()).filter(Boolean);
+  if (branches.length === 0) return { branches, head: remote2 };
+  const remotes2 = await exec3("git", ["remote", "-v"], options);
+  if (remotes2.code !== 0) throw new Error(remotes2.stderr.trim() || "Could not read git remotes.");
+  const origin = remotes2.stdout.split("\n").filter((line) => /^origin\s/.test(line)).join("\n");
+  const other = remotes2.stdout.split("\n").filter((line) => {
+    const url = line.trim().split(/\s+/)[1];
+    const repo = url ? parseRemoteUrl(url) : null;
+    return repo && `${repo.owner}/${repo.repo}`.toLowerCase() !== `${remote2.owner}/${remote2.repo}`.toLowerCase();
+  }).join("\n");
+  return { branches, head: pickRemote(origin) ?? pickRemote(other) ?? remote2 };
+}
 
 // src/github/io/pulls.ts
-import { exec as exec4 } from "herdr";
 async function pullPage(kind, remote2, login, on, after) {
   const { query, variables } = pullRequest(kind, remote2, login, after);
   return parsePullGroup(await graphql(query, variables, { on }));
 }
-async function localPulls(remote2, where) {
-  if (!where.cwd) throw new Error("No focused folder for local pull request branches.");
-  const options = { cwd: where.cwd, on: where.on ?? null };
-  const result = await exec4("git", ["for-each-ref", "--format=%(refname:short)", "refs/heads"], options);
-  if (result.code !== 0) throw new Error(result.stderr.trim() || "Could not read local branches.");
-  const branches = result.stdout.split("\n").map((b) => b.trim()).filter(Boolean);
+async function localPulls(remote2, where, snapshot) {
+  const { branches, head } = snapshot ?? await localBranches(remote2, where);
   if (branches.length === 0) return { total: 0, more: false, cursor: null, pulls: [] };
-  const remotes2 = await exec4("git", ["remote", "-v"], options);
-  if (remotes2.code !== 0) throw new Error(remotes2.stderr.trim() || "Could not read git remotes.");
-  const origin = remotes2.stdout.split("\n").filter((line) => /^origin\s/.test(line)).join("\n");
-  const head = pickRemote(origin) ?? remote2;
   const { query, variables } = localPullRequest(remote2, branches);
-  return parseLocalPulls(await graphql(query, variables, { on: options.on }), head);
+  return parseLocalPulls(await graphql(query, variables, { on: where.on ?? null }), head);
 }
 
 // src/github/io/known.ts
@@ -10723,7 +10731,7 @@ var accounts = facts(16, 60 * 6e4, (a) => a.status.ok);
 var remotes = facts(64, 5 * 6e4, (r) => r !== null);
 var groups = facts(64, 6e4, () => true);
 var pullGroups = facts(64, 6e4, () => true);
-var localGroups = facts(64, 6e4, () => true);
+var localGroups = facts(64, 0, () => true);
 var localPages = /* @__PURE__ */ new WeakMap();
 var machineKey = (on) => on ?? "";
 var folderKey = (where) => `${where.on ?? ""}
@@ -10775,15 +10783,22 @@ function localPage(full, count) {
   return page;
 }
 async function localGroup(r, login, where, force = false) {
-  const full = await localGroups.look(localKey(r, login, where), force, () => localPulls(r, where));
+  const key = localKey(r, login, where);
+  const { full } = await localGroups.look(key, force, async () => {
+    const snapshot = await localBranches(r, where);
+    const signature = JSON.stringify(snapshot);
+    const kept = localGroups.peek(key);
+    if (!force && kept?.signature === signature) return kept;
+    return { signature, full: await localPulls(r, where, snapshot) };
+  });
   return localPages.get(full) ?? localPage(full, 30);
 }
 function peekLocalGroup(r, login, where) {
-  const full = localGroups.peek(localKey(r, login, where));
+  const full = localGroups.peek(localKey(r, login, where))?.full;
   return full ? localPages.get(full) : void 0;
 }
 function moreLocalPulls(r, login, where, loaded) {
-  const full = localGroups.peek(localKey(r, login, where));
+  const full = localGroups.peek(localKey(r, login, where))?.full;
   return Promise.resolve(full && localPages.get(full) === loaded ? localPage(full, loaded.pulls.length + 30) : loaded);
 }
 
@@ -11000,9 +11015,9 @@ function pullList(host) {
     ready: () => host.ready(),
     run: () => host.run(),
     asking: () => host.asking(),
-    peek: (kind, r) => kind === "local" ? peekLocalGroup(r.remote, r.login, { cwd: r.cwd, on: r.on }) : peekPullGroup(kind, r.remote, r.login, r.on),
-    ask: (kind, r, force) => kind === "local" ? localGroup(r.remote, r.login, { cwd: r.cwd, on: r.on }, force) : pullGroup(kind, r.remote, r.login, r.on, force),
-    more: (kind, r, loaded) => kind === "local" ? moreLocalPulls(r.remote, r.login, { cwd: r.cwd, on: r.on }, loaded) : morePulls(kind, r.remote, r.login, r.on, loaded),
+    peek: (kind, r) => kind === "local" ? peekLocalGroup(r.remote, r.login, r) : peekPullGroup(kind, r.remote, r.login, r.on),
+    ask: (kind, r, force) => kind === "local" ? localGroup(r.remote, r.login, r, force) : pullGroup(kind, r.remote, r.login, r.on, force),
+    more: (kind, r, loaded) => kind === "local" ? moreLocalPulls(r.remote, r.login, r, loaded) : morePulls(kind, r.remote, r.login, r.on, loaded),
     rows: (page) => page.pulls,
     key: (pull) => pull.number,
     open: (cx, pull) => {

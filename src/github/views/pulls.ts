@@ -82,15 +82,15 @@ export function pullList(host: PullHost): GroupList<PullCategory, PullGroup, Pul
 		asking: () => host.asking(),
 		peek: (kind, r) =>
 			kind === "local"
-				? known.peekLocalGroup(r.remote, r.login, { cwd: r.cwd, on: r.on })
+				? known.peekLocalGroup(r.remote, r.login, r)
 				: known.peekPullGroup(kind, r.remote, r.login, r.on),
 		ask: (kind, r, force) =>
 			kind === "local"
-				? known.localGroup(r.remote, r.login, { cwd: r.cwd, on: r.on }, force)
+				? known.localGroup(r.remote, r.login, r, force)
 				: known.pullGroup(kind, r.remote, r.login, r.on, force),
 		more: (kind, r, loaded) =>
 			kind === "local"
-				? known.moreLocalPulls(r.remote, r.login, { cwd: r.cwd, on: r.on }, loaded)
+				? known.moreLocalPulls(r.remote, r.login, r, loaded)
 				: known.morePulls(kind, r.remote, r.login, r.on, loaded),
 		rows: (page) => page.pulls,
 		key: (pull) => pull.number,

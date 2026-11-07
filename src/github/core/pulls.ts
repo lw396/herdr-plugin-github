@@ -77,7 +77,7 @@ export function localPullRequest(remote: RemoteRepo, branches: string[]): Return
 			(
 				_,
 				i,
-			) => `    branch${i}: pullRequests(first: 100, headRefName: $branch${i}, orderBy: {field: UPDATED_AT, direction: DESC}) {
+			) => `    branch${i}: pullRequests(first: 100, headRefName: $branch${i}, states: [OPEN, CLOSED, MERGED], orderBy: {field: UPDATED_AT, direction: DESC}) {
       pageInfo { hasNextPage }
       nodes { ${ROW} headRepository { nameWithOwner } }
     }`,

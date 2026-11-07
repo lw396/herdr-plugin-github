@@ -1,4 +1,4 @@
-import { afterEach, expect, test } from "bun:test";
+import { afterEach, expect, spyOn, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { graphqlArgs } from "../../src/github/core/gh-args.ts";
 import { localPullRequest } from "../../src/github/core/pulls.ts";
@@ -17,15 +17,15 @@ const branches = "/w/app$ git for-each-ref --format=%(refname:short) refs/heads"
 const remotes = "/w/app$ git remote -v";
 const query = `query($owner: String!, $name: String!, $branch0: String!, $branch1: String!, $branch2: String!) {
   repository(owner: $owner, name: $name) {
-    branch0: pullRequests(first: 100, headRefName: $branch0, orderBy: {field: UPDATED_AT, direction: DESC}) {
+    branch0: pullRequests(first: 100, headRefName: $branch0, states: [OPEN, CLOSED, MERGED], orderBy: {field: UPDATED_AT, direction: DESC}) {
       pageInfo { hasNextPage }
       nodes { number title url updatedAt isDraft state author { login } headRepository { nameWithOwner } }
     }
-    branch1: pullRequests(first: 100, headRefName: $branch1, orderBy: {field: UPDATED_AT, direction: DESC}) {
+    branch1: pullRequests(first: 100, headRefName: $branch1, states: [OPEN, CLOSED, MERGED], orderBy: {field: UPDATED_AT, direction: DESC}) {
       pageInfo { hasNextPage }
       nodes { number title url updatedAt isDraft state author { login } headRepository { nameWithOwner } }
     }
-    branch2: pullRequests(first: 100, headRefName: $branch2, orderBy: {field: UPDATED_AT, direction: DESC}) {
+    branch2: pullRequests(first: 100, headRefName: $branch2, states: [OPEN, CLOSED, MERGED], orderBy: {field: UPDATED_AT, direction: DESC}) {
       pageInfo { hasNextPage }
       nodes { number title url updatedAt isDraft state author { login } headRepository { nameWithOwner } }
     }
@@ -67,6 +67,20 @@ test("a fork only matches its own heads, even when another fork has a newer same
 	).toEqual([36, 35]);
 });
 
+test("a fork remote need not be named origin", async () => {
+	machine("center", {
+		[branches]: { stdout: "master\ntest/pr-fixture-a\ntest/pr-fixture-draft\n" },
+		[remotes]: {
+			stdout:
+				"fork\thttps://github.com/lw396/herdr-plugin-github.git (fetch)\nupstream\thttps://github.com/parent/herdr-plugin-github.git (fetch)\n",
+		},
+		[asked.replace("-f owner=lw396", "-f owner=parent")]: { stdout: fixture },
+	});
+	expect(
+		(await pulls.localPulls({ ...remote, remote: "upstream", owner: "parent" }, where)).pulls.map((p) => p.number),
+	).toEqual([36, 35]);
+});
+
 test("the newest PR per branch can be closed or merged, not the older open PR", async () => {
 	const reply = JSON.parse(fixture);
 	const repo = reply.data.repository;
@@ -86,6 +100,19 @@ test("the newest PR per branch can be closed or merged, not the older open PR", 
 		[80, "merged"],
 		[36, "closed"],
 	]);
+});
+
+test("a live merged-PR reply selects the latest PR for a reused branch", async () => {
+	const cli = { ...remote, owner: "cli", repo: "cli" };
+	const request = localPullRequest(cli, ["bagtoad/triage-ghmock-skill"]);
+	machine("center", {
+		[branches]: { stdout: "bagtoad/triage-ghmock-skill\n" },
+		[remotes]: { stdout: "origin\thttps://github.com/cli/cli.git (fetch)\n" },
+		[`~$ gh ${graphqlArgs(request.query, request.variables).join(" ")}`]: {
+			stdout: readFileSync(new URL("../fixtures/pulls-local-merged-cli.json", import.meta.url), "utf8"),
+		},
+	});
+	expect((await pulls.localPulls(cli, where)).pulls.map((p) => [p.number, p.state])).toEqual([[14976, "merged"]]);
 });
 
 test("only foreign or deleted head repositories means no local PRs", async () => {
@@ -136,6 +163,36 @@ test("local groups page 30 matches from one batch and keep each checkout separat
 	expect(known.peekLocalGroup(remote, "lw396", { ...where, cwd: "/w/other" })).toBeUndefined();
 	expect(known.peekLocalGroup(remote, "other-account", where)).toBeUndefined();
 	expect(execCalls().filter((c) => c.command === "gh")).toHaveLength(1);
+});
+
+test("unchanged local branch checks reuse the batch; explicit refresh still re-asks", async () => {
+	let now = 100_000;
+	const clock = spyOn(Date, "now").mockImplementation(() => now);
+	try {
+		machine("center", {
+			[branches]: { stdout: "master\ntest/pr-fixture-a\ntest/pr-fixture-draft\n" },
+			[remotes]: { stdout: "origin\thttps://github.com/lw396/herdr-plugin-github.git (fetch)\n" },
+			[asked]: { stdout: fixture },
+		});
+		const first = await known.localGroup(remote, "lw396", where);
+		now += 60_001;
+		expect(await known.localGroup(remote, "lw396", where)).toBe(first);
+		expect(execCalls().filter((c) => c.command === "gh")).toHaveLength(1);
+		await known.localGroup(remote, "lw396", where, true);
+		expect(execCalls().filter((c) => c.command === "gh")).toHaveLength(2);
+		const request = localPullRequest(remote, ["master", "test/pr-fixture-a"]);
+		const reply = JSON.parse(fixture);
+		delete reply.data.repository.branch2;
+		machine("center", {
+			[branches]: { stdout: "master\ntest/pr-fixture-a\n" },
+			[remotes]: { stdout: "origin\thttps://github.com/lw396/herdr-plugin-github.git (fetch)\n" },
+			[`~$ gh ${graphqlArgs(request.query, request.variables).join(" ")}`]: { stdout: JSON.stringify(reply) },
+		});
+		expect((await known.localGroup(remote, "lw396", where)).pulls.map((p) => p.number)).toEqual([35]);
+		expect(execCalls().filter((c) => c.command === "gh")).toHaveLength(3);
+	} finally {
+		clock.mockRestore();
+	}
 });
 
 test("a missing remote git never falls back to this computer", async () => {

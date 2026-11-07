@@ -3,7 +3,13 @@
 import { expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { appendPullPage, parsePullGroup, pullSearch } from "../../src/github/core/pulls.ts";
+import {
+	appendPullPage,
+	localPullRequest,
+	parseLocalPulls,
+	parsePullGroup,
+	pullSearch,
+} from "../../src/github/core/pulls.ts";
 
 const data = (name: string): unknown =>
 	(JSON.parse(readFileSync(join(import.meta.dir, "../fixtures", name), "utf8")) as { data: unknown }).data;
@@ -51,6 +57,42 @@ test("Waiting For My Review and Created By Me search the repository's open PRs f
 		"repo:cli/cli is:pr is:open review-requested:babakks sort:updated-desc",
 	);
 	expect(pullSearch("mine", r, "lw396")).toBe("repo:cli/cli is:pr is:open author:lw396 sort:updated-desc");
+});
+
+test("local branch names are GraphQL variables, never query syntax, and include every PR state", () => {
+	const request = localPullRequest(
+		{ remote: "origin", host: "github.com", owner: "lw396", repo: "herdr-plugin-github" },
+		['topic/"quoted"', "fix/$branch"],
+	);
+	expect(request.variables).toEqual({
+		owner: "lw396",
+		name: "herdr-plugin-github",
+		branch0: 'topic/"quoted"',
+		branch1: "fix/$branch",
+	});
+	expect(request.query).toContain("branch0: pullRequests(");
+	expect(request.query).toContain("branch1: pullRequests(");
+	expect(request.query).not.toContain('topic/"quoted"');
+	expect(request.query).toContain("states: [OPEN, CLOSED, MERGED]");
+});
+
+test("local matches omit empty branches and sort matching heads by update", () => {
+	expect(
+		parseLocalPulls(data("pulls-local-plugin.json"), {
+			remote: "origin",
+			host: "github.com",
+			owner: "LW396",
+			repo: "HERDR-PLUGIN-GITHUB",
+		}).pulls.map((p) => p.number),
+	).toEqual([36, 35]);
+	expect(
+		parseLocalPulls(data("pulls-local-plugin.json"), {
+			remote: "origin",
+			host: "github.com",
+			owner: "other",
+			repo: "herdr-plugin-github",
+		}).pulls,
+	).toEqual([]);
 });
 
 test("a search reply parses into the same rows as a repository list", () => {
