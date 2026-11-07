@@ -13,6 +13,7 @@ test("merge comments and commits by time, omit unsupported events", () => {
 		"https://github.com/a/b/pull/1",
 	);
 	expect(items.map((x) => x.verb)).toEqual(["committed", "closed this"]);
+	expect(items.map((x) => x.kind)).toEqual(["event", "event"]);
 });
 test("reviews carry inline code, replies and reactions, pending reviews are excluded", () => {
 	const url = "https://github.com/a/b/pull/1";
@@ -22,6 +23,7 @@ test("reviews carry inline code, replies and reactions, pending reviews are excl
 		[
 			{ id: 1, state: "APPROVED", submitted_at: "2026-01-01", user: { login: "reviewer" }, body: "Good" },
 			{ id: 2, state: "PENDING", submitted_at: null },
+			{ id: 3, state: "COMMENTED", submitted_at: "2026-01-02", user: { login: "author" }, body: "" },
 		],
 		[
 			{
@@ -47,6 +49,8 @@ test("reviews carry inline code, replies and reactions, pending reviews are excl
 		url,
 	);
 	expect(items).toHaveLength(1);
+	expect(items[0]?.kind).toBe("review");
+	expect(items[0]?.discussion.map((d) => d.root)).toEqual([10, 10]);
 	expect(items[0]?.discussion.map((d) => [d.comment.body, d.snippet, d.comment.reactions])).toEqual([
 		["Fix", "@@ -1 +1 @@\n-old\n+new", [{ emoji: "👍", count: 2 }]],
 		["Done", "", []],

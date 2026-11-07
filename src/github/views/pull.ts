@@ -29,6 +29,7 @@ import {
 } from "./detail.ts";
 import { FileDiff } from "./diff.ts";
 import { ChangedFiles } from "./files.ts";
+import { timelineItem } from "./pull-timeline.ts";
 import { ReviewThreads } from "./review-threads.ts";
 import { button, colors, link, PULL_STATES } from "./ui.ts";
 
@@ -252,23 +253,8 @@ export class Pull {
 			],
 			[
 				postCard("pull-body", pull, "opened this pull request", onLink),
-				...(pull.timeline ?? []).map((item, index) =>
-					v_flex()
-						.gap(8)
-						.child(postCard(`pull-event-${index}`, item, item.verb, onLink))
-						.children(
-							item.discussion.map((d) =>
-								v_flex()
-									.gap(6)
-									.child(
-										button(`inline-jump-${d.comment.id}`, d.path, "Open discussion in diff", (_e, cx) =>
-											this.select(cx, d.path, d.comment.id),
-										).text_color(t.accent),
-									)
-									.when(Boolean(d.snippet), (el) => el.child(div().text_size(12).child(d.snippet)))
-									.child(postCard(`inline-${d.comment.id}`, d.comment, "commented", onLink)),
-							),
-						),
+				...(pull.timeline ?? []).map((item) =>
+					timelineItem(item, this.discussions, onLink, (cx, path, comment) => this.select(cx, path, comment)),
 				),
 				v_flex()
 					.gap(10)

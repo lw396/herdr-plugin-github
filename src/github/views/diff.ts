@@ -4,10 +4,9 @@ import { div, type Element } from "gpui-kit";
 import { type DiffLine, parsePatch } from "../core/diff.ts";
 import type { ChangedFile } from "../core/files.ts";
 import { type ReviewThread, threadRow } from "../core/review-threads.ts";
+import { diffRow, ROW_HEIGHT } from "./diff-lines.ts";
 import { type ReviewThreads, THREAD_HEIGHT } from "./review-threads.ts";
 import { colors, link } from "./ui.ts";
-
-const ROW_HEIGHT = 22;
 
 export class FileDiff {
 	private file: ChangedFile | null = null;
@@ -154,48 +153,4 @@ export class FileDiff {
 			)
 			.child(body);
 	}
-}
-
-/** No event handlers here: deferred virtual-list renderers run during native layout. */
-function diffRow(row: DiffLine): Element {
-	const t = colors();
-	const added = row.kind === "add",
-		deleted = row.kind === "delete";
-	return h_flex()
-		.h(ROW_HEIGHT)
-		.w_full()
-		.flex_none()
-		.items_center()
-		.font_family("monospace")
-		.text_size(13)
-		.when(added, (el) => el.bg(`${t.done}20`))
-		.when(deleted, (el) => el.bg(`${t.blocked}20`))
-		.when(row.kind === "hunk", (el) => el.bg(`${t.accent}18`).text_color(t.accent))
-		.when(row.kind === "notice", (el) => el.text_color(t.dim))
-		.child(
-			div()
-				.w(54)
-				.flex_none()
-				.pr(8)
-				.text_right()
-				.text_color(t.dim)
-				.child(row.oldLine ?? ""),
-		)
-		.child(
-			div()
-				.w(54)
-				.flex_none()
-				.pr(8)
-				.text_right()
-				.text_color(t.dim)
-				.child(row.newLine ?? ""),
-		)
-		.child(
-			div()
-				.w(20)
-				.flex_none()
-				.text_color(added ? t.done : deleted ? t.blocked : t.dim)
-				.child(added ? "+" : deleted ? "−" : ""),
-		)
-		.child(div().flex_none().whitespace_nowrap().child(row.text));
 }

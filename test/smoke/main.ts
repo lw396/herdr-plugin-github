@@ -7,11 +7,13 @@ import { parseIssueDetail } from "../../src/github/core/issue-detail.ts";
 import { browserUrl, detailLink, readerMarkdown } from "../../src/github/core/markdown.ts";
 import { PREVIEW_CLOSE_MS, PREVIEW_OPEN_MS, parsePreview } from "../../src/github/core/preview.ts";
 import { parsePullDetail } from "../../src/github/core/pull-detail.ts";
+import { pullTimeline } from "../../src/github/core/pull-timeline.ts";
 import { parseThreads, threadRow } from "../../src/github/core/review-threads.ts";
 import { DetailMetadata, labels, people } from "../../src/github/views/detail.ts";
 import { FileDiff } from "../../src/github/views/diff.ts";
 import { ChangedFiles } from "../../src/github/views/files.ts";
 import { previewCard } from "../../src/github/views/preview.ts";
+import { timelineItem } from "../../src/github/views/pull-timeline.ts";
 import { Reader } from "../../src/github/views/reader.ts";
 import { ReviewThreads } from "../../src/github/views/review-threads.ts";
 import issue from "../fixtures/issue-plugin-13.json";
@@ -22,6 +24,8 @@ import pullReviews from "../fixtures/pull-cli-14974-reviews.json";
 import filePages from "../fixtures/pull-plugin-35-files.json";
 import inlinePages from "../fixtures/pull-plugin-35-inline.json";
 import threadPages from "../fixtures/pull-plugin-35-threads.json";
+import inline36 from "../fixtures/pull-plugin-36-inline.json";
+import review36 from "../fixtures/pull-plugin-36-reviews.json";
 import events from "../fixtures/timeline-plugin-13.json";
 
 function expectEqual(actual: string, expected: string, what: string): void {
@@ -179,6 +183,29 @@ export default class Smoke extends View {
 				this.threadDiff.render(
 					this.files!.files!.find((file) => file.path === "docs/pr-fixture.md")!,
 					this.discussions ?? undefined,
+				),
+			)
+			.child(
+				this.discussions!.timeline(
+					this.discussions!.threads[0]!,
+					this.files!.files!.find((file) => file.path === "docs/pr-fixture.md")!.patch ?? "",
+					() => {},
+				),
+			)
+			.children(
+				pullTimeline(
+					[],
+					events,
+					review36.flat(),
+					inline36.flat(),
+					"https://github.com/lw396/herdr-plugin-github/pull/36",
+				).map((item) =>
+					timelineItem(
+						item,
+						null,
+						() => {},
+						() => {},
+					),
 				),
 			)
 			.child(

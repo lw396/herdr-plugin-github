@@ -10403,15 +10403,27 @@ function parsePullDetail(pull, issue, comments, reviews) {
 
 // src/github/core/pull-timeline.ts
 function pullTimeline(comments, events, reviews, inline, url) {
-  const result = comments.map((c) => ({ ...c, verb: "commented", discussion: [] }));
+  const result = comments.map((c) => ({
+    ...c,
+    kind: "comment",
+    verb: "commented",
+    discussion: []
+  }));
   for (const r of reviews) {
     if (!r.submitted_at || r.state === "PENDING") continue;
     const all2 = inline;
     const roots = all2.filter((c) => !c.in_reply_to_id && c.pull_request_review_id === r.id).sort((a, b) => a.created_at.localeCompare(b.created_at) || a.id - b.id);
+    if (r.state === "COMMENTED" && !r.body?.trim() && roots.length === 0 && all2.some((c) => c.pull_request_review_id === r.id && c.in_reply_to_id))
+      continue;
     const discussion = roots.flatMap((root) => [
       root,
       ...all2.filter((c) => c.in_reply_to_id === root.id).sort((a, b) => a.created_at.localeCompare(b.created_at) || a.id - b.id)
-    ]).map((c) => ({ comment: parseComment(c, url), path: c.path, snippet: c.in_reply_to_id ? "" : c.diff_hunk }));
+    ]).map((c) => ({
+      root: c.in_reply_to_id ?? c.id,
+      comment: parseComment(c, url),
+      path: c.path,
+      snippet: c.in_reply_to_id ? "" : c.diff_hunk
+    }));
     const verbs = {
       APPROVED: "approved these changes",
       CHANGES_REQUESTED: "requested changes",
@@ -10420,6 +10432,7 @@ function pullTimeline(comments, events, reviews, inline, url) {
     };
     result.push({
       ...parseComment({ id: r.id, user: r.user, body: r.body, created_at: r.submitted_at }, url),
+      kind: "review",
       verb: verbs[r.state] ?? "reviewed",
       discussion
     });
@@ -10450,6 +10463,7 @@ function pullTimeline(comments, events, reviews, inline, url) {
       body,
       markdown: readerMarkdown(body, url),
       reactions: [],
+      kind: "event",
       verb,
       discussion: []
     });
@@ -10927,16 +10941,19 @@ function detailDocument(layout2, heading, timeline, sections, metadata) {
 function stateBadge(label, color, icon2) {
   return h_flex2().gap(6).items_center().px(10).py(4).rounded(14).bg(`${color}26`).text_size(13).font_semibold().text_color(color).when(icon2 !== void 0, (el) => el.child(svg3(icon2 ?? "").size(14))).child(label);
 }
-function postCard(id, post, verb, onLink) {
+function postCard(id, post, verb, onLink, options = {}) {
   const t = colors();
   const reactions = post.reactions ?? [];
-  const heading = h_flex2().px(16).py(10).gap(8).items_center().flex_wrap().bg(t.raised).border_b(1).border_color(t.border).text_size(12).child(div3().font_semibold().child(post.author)).child(div3().text_color(t.dim).child(verb)).child(div3().flex_1()).child(div3().text_color(t.dim).tooltip(post.createdAt).child(relativeTime(post.createdAt, Date.now())));
+  const heading = h_flex2().px(16).py(10).gap(8).items_center().flex_wrap().when(!options.embedded, (el) => el.bg(t.raised)).border_b(1).border_color(t.border).text_size(12).child(div3().font_semibold().child(post.author)).child(div3().text_color(t.dim).child(verb)).child(div3().flex_1()).child(div3().text_color(t.dim).tooltip(post.createdAt).child(relativeTime(post.createdAt, Date.now())));
   const text3 = TextView.markdown(id, post.markdown).selectable(true).scrollable(false).on_link_click(onLink);
-  return v_flex().id(`${id}-card`).min_w(0).w_full().overflow_hidden().rounded(8).border_1().border_color(t.border).bg(t.background).child(heading).child(
-    v_flex().min_w(0).px(16).py(16).gap(12).child(text3).when(
-      reactions.length > 0,
-      (el) => el.child(
-        h_flex2().gap(6).flex_wrap().children(reactions.map((r) => chip(`${r.emoji} ${r.count}`, t.border, t.raised)))
+  return v_flex().id(`${id}-card`).min_w(0).w_full().overflow_hidden().when(!options.embedded, (el) => el.rounded(8).border_1().border_color(t.border).bg(t.background)).child(heading).when(
+    !options.headingOnly,
+    (el) => el.child(
+      v_flex().min_w(0).px(16).py(16).gap(12).child(text3).when(
+        reactions.length > 0,
+        (el2) => el2.child(
+          h_flex2().gap(6).flex_wrap().children(reactions.map((r) => chip(`${r.emoji} ${r.count}`, t.border, t.raised)))
+        )
       )
     )
   );
@@ -11696,7 +11713,7 @@ var Panel = class {
 };
 
 // src/github/views/reader.ts
-import { v_flex as v_flex10 } from "gpui-base";
+import { v_flex as v_flex12 } from "gpui-base";
 import { nextCommand, props as props3 } from "herdr";
 
 // src/github/views/issue.ts
@@ -12025,12 +12042,12 @@ ${detailKey(this.ref)}` : null;
 };
 
 // src/github/views/pull.ts
-import { h_flex as h_flex10, v_flex as v_flex9 } from "gpui-base";
-import { div as div13 } from "gpui-kit";
+import { h_flex as h_flex12, v_flex as v_flex11 } from "gpui-base";
+import { div as div15 } from "gpui-kit";
 
 // src/github/views/diff.ts
-import { h_flex as h_flex9, Scrollbar, VirtualListScrollHandle, v_flex as v_flex8, v_virtual_list } from "gpui-base";
-import { div as div12 } from "gpui-kit";
+import { h_flex as h_flex10, Scrollbar, VirtualListScrollHandle, v_flex as v_flex9, v_virtual_list } from "gpui-base";
+import { div as div13 } from "gpui-kit";
 
 // src/github/core/diff.ts
 function parsePatch(patch) {
@@ -12083,9 +12100,28 @@ function parsePatch(patch) {
   return rows;
 }
 
-// src/github/views/review-threads.ts
-import { h_flex as h_flex8, Textarea as Textarea2, TextareaState as TextareaState2, v_flex as v_flex7 } from "gpui-base";
+// src/github/views/diff-lines.ts
+import { h_flex as h_flex8, v_flex as v_flex7 } from "gpui-base";
 import { div as div11 } from "gpui-kit";
+var ROW_HEIGHT = 22;
+function diffSnippet(id, patch) {
+  return v_flex7().id(id).min_w(0).w_full().overflow_x_scrollbar().children(parsePatch(patch).map(diffRow));
+}
+function diffRow(row) {
+  const t = colors();
+  const added = row.kind === "add", deleted = row.kind === "delete";
+  return h_flex8().h(ROW_HEIGHT).w_full().flex_none().items_center().font_family("monospace").text_size(13).when(added, (el) => el.bg(`${t.done}20`)).when(deleted, (el) => el.bg(`${t.blocked}20`)).when(row.kind === "hunk", (el) => el.bg(`${t.accent}18`).text_color(t.accent)).when(row.kind === "notice", (el) => el.text_color(t.dim)).child(
+    div11().w(54).flex_none().pr(8).text_right().text_color(t.dim).child(row.oldLine ?? "")
+  ).child(
+    div11().w(54).flex_none().pr(8).text_right().text_color(t.dim).child(row.newLine ?? "")
+  ).child(
+    div11().w(20).flex_none().text_color(added ? t.done : deleted ? t.blocked : t.dim).child(added ? "+" : deleted ? "\u2212" : "")
+  ).child(div11().flex_none().whitespace_nowrap().child(row.text));
+}
+
+// src/github/views/review-threads.ts
+import { h_flex as h_flex9, Textarea as Textarea2, TextareaState as TextareaState2, v_flex as v_flex8 } from "gpui-base";
+import { div as div12 } from "gpui-kit";
 var THREAD_HEIGHT = 340;
 var ReviewThreads = class {
   threads = [];
@@ -12097,6 +12133,7 @@ var ReviewThreads = class {
   failures = /* @__PURE__ */ new Map();
   boxes = /* @__PURE__ */ new Map();
   dirty = false;
+  hiddenSnippets = /* @__PURE__ */ new Set();
   constructor(ref, on, host) {
     this.ref = ref;
     this.on = on;
@@ -12136,50 +12173,84 @@ var ReviewThreads = class {
     }
   }
   status() {
-    return div11().text_size(12).text_color(this.failure ? colors().blocked : colors().dim).child(this.failure ?? (this.loading ? "Loading discussions\u2026" : ""));
+    return div12().text_size(12).text_color(this.failure ? colors().blocked : colors().dim).child(this.failure ?? (this.loading ? "Loading discussions\u2026" : ""));
   }
   /** Built during render, NOT in the virtual list's deferred row callback. */
   card(thread, unavailable, width) {
+    return this.conversation(thread, unavailable, true).w(width);
+  }
+  /** Code and its conversation stay together in the review, without navigating away. */
+  timeline(thread, snippet, open) {
+    const hidden = this.hiddenSnippets.has(thread.id);
     const t = colors();
+    return v_flex8().min_w(0).w_full().border_1().border_color(t.border).rounded(6).overflow_hidden().child(
+      h_flex9().gap(8).items_center().px(12).py(6).border_b(1).border_color(t.border).child(
+        button(`timeline-file-${thread.id}`, thread.path, "Open File Diff", (_e, cx) => open(cx)).text_color(
+          t.accent
+        )
+      ).child(div12().flex_1()).when(
+        Boolean(snippet),
+        (el) => el.child(
+          button(
+            `snippet-toggle-${thread.id}`,
+            hidden ? "Show" : "Hide",
+            hidden ? "Show Diff" : "Hide Diff",
+            (_e, cx) => {
+              if (hidden) this.hiddenSnippets.delete(thread.id);
+              else this.hiddenSnippets.add(thread.id);
+              cx.notify();
+            }
+          ).border_1().border_color(t.border).px(10).py(4)
+        )
+      )
+    ).when(!hidden && Boolean(snippet), (el) => el.child(diffSnippet(`timeline-snippet-${thread.id}`, snippet))).child(this.conversation(thread, thread.outdated, false));
+  }
+  conversation(thread, unavailable, virtual) {
+    const t = colors();
+    const scope = virtual ? "diff" : "timeline";
     const box = this.boxes.get(thread.id);
     const busy = this.writing.has(thread.id);
     const url = `https://github.com/${this.ref.repo}/pull/${this.ref.number}#discussion_r${thread.root}`;
-    return v_flex7().h(THREAD_HEIGHT).w(width).min_w(0).p(12).gap(8).border_1().border_color(t.border).bg(t.surface).child(
-      h_flex8().gap(10).items_center().child(
-        div11().font_medium().child(thread.resolved ? "Resolved" : "Discussion")
-      ).child(
-        div11().text_size(12).text_color(t.dim).child(`${thread.side} ${thread.line ?? ""}`)
-      ).child(link(`thread-browser-${thread.id}`, url, "Open on GitHub").text_size(12).text_color(t.accent))
-    ).when(
+    return v_flex8().when(virtual, (el) => el.h(THREAD_HEIGHT)).min_w(0).p(12).gap(8).when(virtual, (el) => el.border_1().border_color(t.border).bg(t.surface)).when(
+      virtual,
+      (el) => el.child(
+        h_flex9().gap(10).items_center().child(
+          div12().font_medium().child(thread.resolved ? "Resolved" : "Discussion")
+        ).child(
+          div12().text_size(12).text_color(t.dim).child(`${thread.side} ${thread.line ?? ""}`)
+        ).child(link(`thread-browser-${thread.id}`, url, "Open on GitHub").text_size(12).text_color(t.accent))
+      )
+    ).when(!virtual && thread.resolved, (el) => el.child(div12().text_size(12).text_color(t.done).child("Resolved"))).when(
       unavailable,
       (el) => el.child(
-        div11().text_size(12).text_color(t.dim).child(
+        div12().text_size(12).text_color(t.dim).child(
           thread.outdated ? "Outdated \u2014 this discussion is no longer in the current diff." : "This discussion is not attached to a line in the available diff."
         )
       )
     ).child(
-      v_flex7().id(`thread-comments-${thread.id}`).flex_1().min_h(0).overflow_y_scrollbar().gap(8).children(
+      v_flex8().id(`${scope}-thread-comments-${thread.id}`).when(virtual, (el) => el.flex_1().min_h(0).overflow_y_scrollbar()).gap(8).children(
         thread.comments.map(
           (c) => postCard(
-            `diff-comment-${c.id}`,
+            `${scope}-comment-${c.id}`,
             c,
             "commented",
-            (url2, cx) => openLink(cx, this.host, url2, `https://github.com/${this.ref.repo}/pull/${this.ref.number}`)
+            (url2, cx) => openLink(cx, this.host, url2, `https://github.com/${this.ref.repo}/pull/${this.ref.number}`),
+            { embedded: !virtual }
           )
         )
       )
     ).when(
       Boolean(box),
-      (el) => el.child(div11().h(66).on_mouse_down("left", stop).child(Textarea2.new(box).w_full().text_size(13)))
+      (el) => el.child(div12().h(66).on_mouse_down("left", stop).child(Textarea2.new(box).w_full().text_size(13)))
     ).when(
       this.failures.has(thread.id),
       (el) => el.child(
-        div11().text_size(12).text_color(t.blocked).child(this.failures.get(thread.id) ?? "")
+        div12().text_size(12).text_color(t.blocked).child(this.failures.get(thread.id) ?? "")
       )
     ).child(
-      h_flex8().gap(8).child(
+      h_flex9().gap(8).child(
         button(
-          `reply-${thread.id}`,
+          `${scope}-reply-${thread.id}`,
           busy ? "Saving\u2026" : box ? "Comment" : "Reply",
           "Reply to discussion",
           (_e, cx) => {
@@ -12204,8 +12275,8 @@ var ReviewThreads = class {
         thread.resolved ? thread.canUnresolve : thread.canResolve,
         (el) => el.child(
           button(
-            `resolve-${thread.id}`,
-            thread.resolved ? "Unresolve conversation" : "Resolve conversation",
+            `${scope}-resolve-${thread.id}`,
+            thread.resolved ? "Unresolve Conversation" : "Resolve Conversation",
             "Change discussion resolution",
             (_e, cx) => {
               this.write(
@@ -12244,7 +12315,6 @@ var ReviewThreads = class {
 };
 
 // src/github/views/diff.ts
-var ROW_HEIGHT = 22;
 var FileDiff = class {
   file = null;
   rows = [];
@@ -12305,14 +12375,14 @@ var FileDiff = class {
       }
     }
     const id = `pull-diff-${file.path}`;
-    const header = v_flex8().flex_none().px(16).py(8).gap(6).border_b(1).border_color(t.border).child(
-      h_flex9().gap(10).items_center().flex_wrap().child(div12().min_w(0).font_medium().child(file.path)).child(div12().text_color(t.done).child(`+${file.additions}`)).child(div12().text_color(t.blocked).child(`\u2212${file.deletions}`)).child(link(`${id}-browser`, file.url, "Open File on GitHub").text_size(12).text_color(t.accent))
+    const header = v_flex9().flex_none().px(16).py(8).gap(6).border_b(1).border_color(t.border).child(
+      h_flex10().gap(10).items_center().flex_wrap().child(div13().min_w(0).font_medium().child(file.path)).child(div13().text_color(t.done).child(`+${file.additions}`)).child(div13().text_color(t.blocked).child(`\u2212${file.deletions}`)).child(link(`${id}-browser`, file.url, "Open File on GitHub").text_size(12).text_color(t.accent))
     ).when(
       file.previousPath !== null,
-      (el) => el.child(div12().text_size(12).text_color(t.dim).child(`Renamed from ${file.previousPath}`))
+      (el) => el.child(div13().text_size(12).text_color(t.dim).child(`Renamed from ${file.previousPath}`))
     );
-    const body = items.length > 0 ? div12().flex_1().min_h(0).min_w(0).relative().child(
-      div12().id(`${id}-horizontal`).size_full().overflow_x_scrollbar().child(
+    const body = items.length > 0 ? div13().flex_1().min_h(0).min_w(0).relative().child(
+      div13().id(`${id}-horizontal`).size_full().overflow_x_scrollbar().child(
         v_virtual_list(
           id,
           items.length,
@@ -12321,10 +12391,10 @@ var FileDiff = class {
           (range) => items.slice(range.start, range.end).map((item) => item.element ?? diffRow(item.line))
         ).with_item_to_measure_index(0).when(this.scroll !== null, (el) => el.track_scroll(this.scroll)).h_full().w_full().min_w(this.width)
       )
-    ).child(Scrollbar.vertical(id).absolute().inset_0()) : div12().p(20).text_color(t.dim).child(
+    ).child(Scrollbar.vertical(id).absolute().inset_0()) : div13().p(20).text_color(t.dim).child(
       file.additions === 0 && file.deletions === 0 ? "No textual changes in this file. Open it on GitHub to view the full file." : "GitHub did not provide a patch for this file (it may be binary or too large). Open it on GitHub to view the changes."
     );
-    return v_flex8().id(`${id}-viewport`).flex_1().min_h(0).min_w(0).overflow_hidden().on_size_change((size, cx) => {
+    return v_flex9().id(`${id}-viewport`).flex_1().min_h(0).min_w(0).overflow_hidden().on_size_change((size, cx) => {
       if (size.width > 0 && size.width !== this.viewportWidth) {
         this.viewportWidth = size.width;
         cx.notify();
@@ -12332,21 +12402,51 @@ var FileDiff = class {
     }).child(header).when(Boolean(discussions), (el) => el.child(discussions.status())).when(
       !file.patch && file.status !== "unchanged" && items.length > 0,
       (el) => el.child(
-        div12().p(12).text_color(t.dim).child("GitHub did not provide a patch for this file. Discussions are shown below.")
+        div13().p(12).text_color(t.dim).child("GitHub did not provide a patch for this file. Discussions are shown below.")
       )
     ).child(body);
   }
 };
-function diffRow(row) {
+
+// src/github/views/pull-timeline.ts
+import { h_flex as h_flex11, v_flex as v_flex10 } from "gpui-base";
+import { div as div14 } from "gpui-kit";
+function timelineItem(item, discussions, onLink, open) {
   const t = colors();
-  const added = row.kind === "add", deleted = row.kind === "delete";
-  return h_flex9().h(ROW_HEIGHT).w_full().flex_none().items_center().font_family("monospace").text_size(13).when(added, (el) => el.bg(`${t.done}20`)).when(deleted, (el) => el.bg(`${t.blocked}20`)).when(row.kind === "hunk", (el) => el.bg(`${t.accent}18`).text_color(t.accent)).when(row.kind === "notice", (el) => el.text_color(t.dim)).child(
-    div12().w(54).flex_none().pr(8).text_right().text_color(t.dim).child(row.oldLine ?? "")
-  ).child(
-    div12().w(54).flex_none().pr(8).text_right().text_color(t.dim).child(row.newLine ?? "")
-  ).child(
-    div12().w(20).flex_none().text_color(added ? t.done : deleted ? t.blocked : t.dim).child(added ? "+" : deleted ? "\u2212" : "")
-  ).child(div12().flex_none().whitespace_nowrap().child(row.text));
+  if (item.kind === "event") {
+    return h_flex11().id(`pull-activity-${item.id}`).min_w(0).gap(8).py(6).items_center().flex_wrap().text_size(12).child(div14().text_color(t.dim).child("\u25C7")).child(div14().font_semibold().child(item.author)).child(div14().text_color(t.dim).child(item.verb)).when(Boolean(item.body.trim()), (el) => el.child(div14().child(item.body))).child(div14().flex_1()).child(div14().text_color(t.dim).tooltip(item.createdAt).child(relativeTime(item.createdAt, Date.now())));
+  }
+  if (item.kind === "comment") return postCard(`pull-comment-${item.id}`, item, item.verb, onLink);
+  const roots = item.discussion.filter((d) => d.root === d.comment.id);
+  return v_flex10().id(`pull-review-${item.id}`).min_w(0).w_full().border_1().border_color(t.border).rounded(8).overflow_hidden().child(
+    postCard(`pull-review-header-${item.id}`, item, item.verb, onLink, {
+      embedded: true,
+      headingOnly: !item.body.trim()
+    })
+  ).when(
+    roots.length > 0,
+    (el) => el.child(
+      v_flex10().min_w(0).p(12).gap(12).children(
+        roots.map((d) => {
+          const thread = discussions?.threads.find((thread2) => thread2.root === d.root);
+          if (thread && discussions)
+            return discussions.timeline(thread, d.snippet, (cx) => open(cx, d.path, d.root));
+          return v_flex10().min_w(0).border_1().border_color(t.border).rounded(6).overflow_hidden().child(
+            button(
+              `inline-jump-${d.root}`,
+              d.path,
+              "Open File Diff",
+              (_e, cx) => open(cx, d.path, d.root)
+            ).text_color(t.accent)
+          ).when(Boolean(d.snippet), (el2) => el2.child(diffSnippet(`inline-snippet-${d.root}`, d.snippet))).children(
+            item.discussion.filter((reply) => reply.root === d.root).map(
+              (reply) => postCard(`inline-${reply.comment.id}`, reply.comment, "commented", onLink, { embedded: true })
+            )
+          ).when(Boolean(discussions), (el2) => el2.child(discussions.status()));
+        })
+      )
+    )
+  );
 }
 
 // src/github/views/pull.ts
@@ -12449,7 +12549,7 @@ var Pull = class {
         (cx2) => this.load(cx2)
       ),
       ...this.selected !== null ? [
-        h_flex10().flex_none().px(24).pb(8).child(
+        h_flex12().flex_none().px(24).pb(8).child(
           button(
             "pull-description",
             "Description",
@@ -12464,13 +12564,13 @@ var Pull = class {
   fileView() {
     const file = this.files?.files?.find((f) => f.path === this.selected);
     if (file)
-      return v_flex9().flex_1().min_h(0).child(
-        h_flex10().px(16).gap(8).items_center().child(this.files.viewedButton(file)).child(
-          div13().text_size(12).child(file.viewed ? "Viewed" : "Not viewed")
+      return v_flex11().flex_1().min_h(0).child(
+        h_flex12().px(16).gap(8).items_center().child(this.files.viewedButton(file)).child(
+          div15().text_size(12).child(file.viewed ? "Viewed" : "Not viewed")
         ).when(
           Boolean(this.files?.failure),
           (el) => el.child(
-            div13().text_color(colors().blocked).child(this.files?.failure ?? "")
+            div15().text_color(colors().blocked).child(this.files?.failure ?? "")
           )
         )
       ).child(this.diff.render(file, this.discussions ?? void 0));
@@ -12486,12 +12586,12 @@ var Pull = class {
           viewed: false,
           url: this.entry?.pull?.url ?? `https://github.com/${this.ref?.repo}/pull/${this.ref?.number}`
         };
-      return v_flex9().flex_1().min_h(0).child(quiet("This file is no longer in the changed-files list. Its discussions are shown below.")).child(this.diff.render(this.missingFile, this.discussions));
+      return v_flex11().flex_1().min_h(0).child(quiet("This file is no longer in the changed-files list. Its discussions are shown below.")).child(this.diff.render(this.missingFile, this.discussions));
     }
     const failure = this.files?.failure ?? this.discussions?.failure;
     const message = failure ?? (this.files?.loading ? "Loading changed files\u2026" : "This file is not in the changed-files list. Choose another file in the GitHub sidebar or refresh.");
-    return v_flex9().flex_1().min_h(0).p(24).gap(8).child(
-      div13().text_color(failure ? colors().blocked : colors().dim).child(message)
+    return v_flex11().flex_1().min_h(0).p(24).gap(8).child(
+      div15().text_color(failure ? colors().blocked : colors().dim).child(message)
     ).when(
       !this.files?.loading,
       (el) => el.child(
@@ -12511,25 +12611,14 @@ var Pull = class {
       layout2,
       [
         stateBadge(state.label, state.color(t), state.icon),
-        div13().text_size(13).child(`${pull.author} ${merged} into ${pull.base} from ${pull.head}`)
+        div15().text_size(13).child(`${pull.author} ${merged} into ${pull.base} from ${pull.head}`)
       ],
       [
         postCard("pull-body", pull, "opened this pull request", onLink),
         ...(pull.timeline ?? []).map(
-          (item, index2) => v_flex9().gap(8).child(postCard(`pull-event-${index2}`, item, item.verb, onLink)).children(
-            item.discussion.map(
-              (d) => v_flex9().gap(6).child(
-                button(
-                  `inline-jump-${d.comment.id}`,
-                  d.path,
-                  "Open discussion in diff",
-                  (_e, cx) => this.select(cx, d.path, d.comment.id)
-                ).text_color(t.accent)
-              ).when(Boolean(d.snippet), (el) => el.child(div13().text_size(12).child(d.snippet))).child(postCard(`inline-${d.comment.id}`, d.comment, "commented", onLink))
-            )
-          )
+          (item) => timelineItem(item, this.discussions, onLink, (cx, path, comment) => this.select(cx, path, comment))
         ),
-        v_flex9().gap(10).child(div13().font_semibold().child("Checks")).children(
+        v_flex11().gap(10).child(div15().font_semibold().child("Checks")).children(
           (pull.checks ?? []).map(
             (c) => c.url ? link(c.id, c.url, `${c.name} \xB7 ${c.status} \xB7 ${c.duration}`).text_color(t.accent) : quiet(`${c.name} \xB7 ${c.status} \xB7 ${c.duration}`)
           )
@@ -12548,12 +12637,12 @@ var Pull = class {
   reviewers(pull) {
     const t = colors();
     if (pull.reviewers.length === 0) return quiet("None yet");
-    return v_flex9().gap(8).children(
+    return v_flex11().gap(8).children(
       pull.reviewers.map((r) => {
         const state = REVIEWS[r.state];
-        return h_flex10().gap(8).items_center().tooltip(state.label).accessibility_label(`${r.name}: ${state.label}`).child(
-          div13().flex_1().min_w(0).text_size(13).child(`${r.name}${r.team ? " (team)" : ""}`)
-        ).child(div13().text_color(t[state.color]).child(state.icon));
+        return h_flex12().gap(8).items_center().tooltip(state.label).accessibility_label(`${r.name}: ${state.label}`).child(
+          div15().flex_1().min_w(0).text_size(13).child(`${r.name}${r.team ? " (team)" : ""}`)
+        ).child(div15().text_color(t[state.color]).child(state.icon));
       })
     );
   }
@@ -12622,7 +12711,7 @@ var Reader = class {
     }
     const t = colors();
     const kind = this.navigation.ref?.kind ?? this.initial();
-    return v_flex10().id("reader").size_full().min_h(0).overflow_hidden().bg(t.background).text_color(t.foreground).text_size(14).on_size_change((size, cx2) => {
+    return v_flex12().id("reader").size_full().min_h(0).overflow_hidden().bg(t.background).text_color(t.foreground).text_size(14).on_size_change((size, cx2) => {
       const layout2 = size.width >= WIDE ? "wide" : size.width >= COMPACT ? "narrow" : "compact";
       if (layout2 !== this.layout) {
         this.layout = layout2;

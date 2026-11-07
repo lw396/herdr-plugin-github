@@ -7,6 +7,7 @@ import { Notices } from "../io/changes.ts";
 import { failureOf } from "../io/gh.ts";
 import { readPullThreads, replyPullThread, resolvePullThread } from "../io/pulls.ts";
 import { type DetailHost, openLink, postCard } from "./detail.ts";
+import { diffSnippet } from "./diff-lines.ts";
 import { button, colors, link, stop } from "./ui.ts";
 
 export const THREAD_HEIGHT = 340;
@@ -21,6 +22,7 @@ export class ReviewThreads {
 	private failures = new Map<string, string>();
 	private boxes = new Map<string, TextareaState>();
 	private dirty = false;
+	private hiddenSnippets = new Set<string>();
 	constructor(ref: DetailRef, on: string | null, host: DetailHost) {
 		this.ref = ref;
 		this.on = on;
@@ -75,36 +77,89 @@ export class ReviewThreads {
 
 	/** Built during render, NOT in the virtual list's deferred row callback. */
 	card(thread: ReviewThread, unavailable: boolean, width: number): Element {
+		return this.conversation(thread, unavailable, true).w(width);
+	}
+
+	/** Code and its conversation stay together in the review, without navigating away. */
+	timeline(thread: ReviewThread, snippet: string, open: (cx: Context) => void): Element {
+		const hidden = this.hiddenSnippets.has(thread.id);
 		const t = colors();
+		return v_flex()
+			.min_w(0)
+			.w_full()
+			.border_1()
+			.border_color(t.border)
+			.rounded(6)
+			.overflow_hidden()
+			.child(
+				h_flex()
+					.gap(8)
+					.items_center()
+					.px(12)
+					.py(6)
+					.border_b(1)
+					.border_color(t.border)
+					.child(
+						button(`timeline-file-${thread.id}`, thread.path, "Open File Diff", (_e, cx) => open(cx)).text_color(
+							t.accent,
+						),
+					)
+					.child(div().flex_1())
+					.when(Boolean(snippet), (el) =>
+						el.child(
+							button(
+								`snippet-toggle-${thread.id}`,
+								hidden ? "Show" : "Hide",
+								hidden ? "Show Diff" : "Hide Diff",
+								(_e, cx) => {
+									if (hidden) this.hiddenSnippets.delete(thread.id);
+									else this.hiddenSnippets.add(thread.id);
+									cx.notify();
+								},
+							)
+								.border_1()
+								.border_color(t.border)
+								.px(10)
+								.py(4),
+						),
+					),
+			)
+			.when(!hidden && Boolean(snippet), (el) => el.child(diffSnippet(`timeline-snippet-${thread.id}`, snippet)))
+			.child(this.conversation(thread, thread.outdated, false));
+	}
+
+	private conversation(thread: ReviewThread, unavailable: boolean, virtual: boolean): Element {
+		const t = colors();
+		const scope = virtual ? "diff" : "timeline";
 		const box = this.boxes.get(thread.id);
 		const busy = this.writing.has(thread.id);
 		const url = `https://github.com/${this.ref.repo}/pull/${this.ref.number}#discussion_r${thread.root}`;
 		return v_flex()
-			.h(THREAD_HEIGHT)
-			.w(width)
+			.when(virtual, (el) => el.h(THREAD_HEIGHT))
 			.min_w(0)
 			.p(12)
 			.gap(8)
-			.border_1()
-			.border_color(t.border)
-			.bg(t.surface)
-			.child(
-				h_flex()
-					.gap(10)
-					.items_center()
-					.child(
-						div()
-							.font_medium()
-							.child(thread.resolved ? "Resolved" : "Discussion"),
-					)
-					.child(
-						div()
-							.text_size(12)
-							.text_color(t.dim)
-							.child(`${thread.side} ${thread.line ?? ""}`),
-					)
-					.child(link(`thread-browser-${thread.id}`, url, "Open on GitHub").text_size(12).text_color(t.accent)),
+			.when(virtual, (el) => el.border_1().border_color(t.border).bg(t.surface))
+			.when(virtual, (el) =>
+				el.child(
+					h_flex()
+						.gap(10)
+						.items_center()
+						.child(
+							div()
+								.font_medium()
+								.child(thread.resolved ? "Resolved" : "Discussion"),
+						)
+						.child(
+							div()
+								.text_size(12)
+								.text_color(t.dim)
+								.child(`${thread.side} ${thread.line ?? ""}`),
+						)
+						.child(link(`thread-browser-${thread.id}`, url, "Open on GitHub").text_size(12).text_color(t.accent)),
+				),
 			)
+			.when(!virtual && thread.resolved, (el) => el.child(div().text_size(12).text_color(t.done).child("Resolved")))
 			.when(unavailable, (el) =>
 				el.child(
 					div()
@@ -119,15 +174,18 @@ export class ReviewThreads {
 			)
 			.child(
 				v_flex()
-					.id(`thread-comments-${thread.id}`)
-					.flex_1()
-					.min_h(0)
-					.overflow_y_scrollbar()
+					.id(`${scope}-thread-comments-${thread.id}`)
+					.when(virtual, (el) => el.flex_1().min_h(0).overflow_y_scrollbar())
 					.gap(8)
 					.children(
 						thread.comments.map((c) =>
-							postCard(`diff-comment-${c.id}`, c, "commented", (url, cx) =>
-								openLink(cx, this.host, url, `https://github.com/${this.ref.repo}/pull/${this.ref.number}`),
+							postCard(
+								`${scope}-comment-${c.id}`,
+								c,
+								"commented",
+								(url, cx) =>
+									openLink(cx, this.host, url, `https://github.com/${this.ref.repo}/pull/${this.ref.number}`),
+								{ embedded: !virtual },
 							),
 						),
 					),
@@ -148,7 +206,7 @@ export class ReviewThreads {
 					.gap(8)
 					.child(
 						button(
-							`reply-${thread.id}`,
+							`${scope}-reply-${thread.id}`,
 							busy ? "Saving…" : box ? "Comment" : "Reply",
 							"Reply to discussion",
 							(_e, cx) => {
@@ -173,8 +231,8 @@ export class ReviewThreads {
 					.when(thread.resolved ? thread.canUnresolve : thread.canResolve, (el) =>
 						el.child(
 							button(
-								`resolve-${thread.id}`,
-								thread.resolved ? "Unresolve conversation" : "Resolve conversation",
+								`${scope}-resolve-${thread.id}`,
+								thread.resolved ? "Unresolve Conversation" : "Resolve Conversation",
 								"Change discussion resolution",
 								(_e, cx) => {
 									this.write(cx, thread, async () =>

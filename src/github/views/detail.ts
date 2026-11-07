@@ -228,7 +228,13 @@ export function stateBadge(label: string, color: Color, icon?: string): Element 
 
 export type Post = Pick<Comment, "author" | "createdAt" | "markdown"> & { reactions?: Comment["reactions"] };
 
-export function postCard(id: string, post: Post, verb: string, onLink: (url: string, cx: Context) => void): Element {
+export function postCard(
+	id: string,
+	post: Post,
+	verb: string,
+	onLink: (url: string, cx: Context) => void,
+	options: { embedded?: boolean; headingOnly?: boolean } = {},
+): Element {
 	const t = colors();
 	const reactions = post.reactions ?? [];
 	const heading = h_flex()
@@ -237,7 +243,7 @@ export function postCard(id: string, post: Post, verb: string, onLink: (url: str
 		.gap(8)
 		.items_center()
 		.flex_wrap()
-		.bg(t.raised)
+		.when(!options.embedded, (el) => el.bg(t.raised))
 		.border_b(1)
 		.border_color(t.border)
 		.text_size(12)
@@ -251,26 +257,25 @@ export function postCard(id: string, post: Post, verb: string, onLink: (url: str
 		.min_w(0)
 		.w_full()
 		.overflow_hidden()
-		.rounded(8)
-		.border_1()
-		.border_color(t.border)
-		.bg(t.background)
+		.when(!options.embedded, (el) => el.rounded(8).border_1().border_color(t.border).bg(t.background))
 		.child(heading)
-		.child(
-			v_flex()
-				.min_w(0)
-				.px(16)
-				.py(16)
-				.gap(12)
-				.child(text)
-				.when(reactions.length > 0, (el) =>
-					el.child(
-						h_flex()
-							.gap(6)
-							.flex_wrap()
-							.children(reactions.map((r) => chip(`${r.emoji} ${r.count}`, t.border, t.raised))),
+		.when(!options.headingOnly, (el) =>
+			el.child(
+				v_flex()
+					.min_w(0)
+					.px(16)
+					.py(16)
+					.gap(12)
+					.child(text)
+					.when(reactions.length > 0, (el) =>
+						el.child(
+							h_flex()
+								.gap(6)
+								.flex_wrap()
+								.children(reactions.map((r) => chip(`${r.emoji} ${r.count}`, t.border, t.raised))),
+						),
 					),
-				),
+			),
 		);
 }
 
