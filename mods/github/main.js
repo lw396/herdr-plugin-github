@@ -8661,7 +8661,7 @@ function compiler(options) {
     transforms: [],
     canContainEols: ["emphasis", "fragment", "heading", "paragraph", "strong"],
     enter: {
-      autolink: opener(link2),
+      autolink: opener(link3),
       autolinkProtocol: onenterdata,
       autolinkEmail: onenterdata,
       atxHeading: opener(heading),
@@ -8689,7 +8689,7 @@ function compiler(options) {
       htmlTextData: onenterdata,
       image: opener(image2),
       label: buffer,
-      link: opener(link2),
+      link: opener(link3),
       listItem: opener(listItem),
       listItemValue: onenterlistitemvalue,
       listOrdered: opener(list2, onenterlistordered),
@@ -9286,7 +9286,7 @@ function compiler(options) {
       position: void 0
     };
   }
-  function link2() {
+  function link3() {
     return {
       type: "link",
       title: null,
@@ -9913,6 +9913,16 @@ import { theme } from "herdr";
 var colors = () => theme();
 var spinner = (size = 12) => svg("mods/github/assets/spinner.svg").size(size).flex_none().text_color(colors().dim).spin(900);
 var stop = (_e, cx) => cx.stop_propagation();
+function link2(id, url, label) {
+  return div().id(id).cursor_pointer().on_mouse_down("left", stop).on_click((_e, cx) => {
+    cx.stop_propagation();
+    cx.open_url(url);
+  }).child(label);
+}
+function chip(label, border, background) {
+  return div().px(8).py(3).rounded(12).border_1().border_color(border).bg(background).text_size(12).child(label);
+}
+var square = (el) => el.size(36).flex_none().flex().items_center().justify_center();
 function button(id, label, tip, act) {
   const t = colors();
   return div().id(id).px(6).py(2).rounded(6).text_size(12).text_color(t.dim).cursor_pointer().hover((s) => s.bg(t.hover).text_color(t.foreground)).tooltip(tip).accessibility_label(tip).on_mouse_down("left", stop).on_click((e, cx) => {
@@ -10011,16 +10021,15 @@ var Issue = class {
         entry.projectsLoading = true;
         cx2.spawn(async (cx3) => {
           const projects = await readIssueProjects(ref.repo, ref.number, account3.on);
-          if (this.entry === entry) {
-            entry.projects = projects;
-            entry.projectsLoading = false;
-            cx3.notify();
-          }
+          if (this.entry !== entry) return;
+          entry.projects = projects;
+          entry.projectsLoading = false;
+          cx3.notify();
         });
       } catch (e) {
+        if (this.entry !== entry) return;
         const failure = failureOf(e);
-        if (this.entry === entry)
-          entry.failure = failure.notFound ? `${ref.repo} #${ref.number} isn't on GitHub, or this account can't see it.` : failure.message;
+        entry.failure = failure.notFound ? `${ref.repo} #${ref.number} isn't on GitHub, or this account can't see it.` : failure.message;
       } finally {
         if (this.entry === entry) {
           entry.loading = false;
@@ -10043,12 +10052,9 @@ var Issue = class {
     });
   }
   setState(cx, state) {
-    this.write(
-      cx,
-      "state",
-      true,
-      async (repo, number, on) => this.publish({ repo, number, state: await setIssueState(repo, number, state, on) })
-    );
+    this.write(cx, "state", true, async (repo, number, on) => {
+      this.publish({ repo, number, state: await setIssueState(repo, number, state, on) });
+    });
   }
   /** Shows this view's own write at once, then tells the other views. */
   publish(notice) {
@@ -10057,7 +10063,8 @@ var Issue = class {
   }
   /** One write at a time, through the gh that read the issue; a failure is said with gh's words. */
   write(cx, kind, ready, act) {
-    const ref = this.ref, entry = this.entry;
+    const ref = this.ref;
+    const entry = this.entry;
     if (!ref || !entry?.issue || entry.on === void 0 || this.writing || !ready) return;
     const on = entry.on;
     this.writing = kind;
@@ -10077,205 +10084,203 @@ var Issue = class {
   }
   /** A write to the shown issue: a new comment joins the timeline (once), a new state shows. */
   apply(notice) {
-    const issue = this.entry?.issue, comment = notice.comment;
+    const issue = this.entry?.issue;
+    const comment = notice.comment;
     if (!issue || !this.ref || issueKey(notice) !== issueKey(this.ref)) return;
     if (comment && !issue.comments.some((c) => c.id === comment.id)) issue.comments = [...issue.comments, comment];
     if (notice.state) issue.state = notice.state.state;
   }
+  /** A link in a post: an issue of this repository opens here; any other web link, in the browser. */
+  openLink(cx, url, issue) {
+    const linked = issueLink(url, issue.url);
+    if (!linked) {
+      const external = browserUrl(url, issue.url);
+      if (external) cx.open_url(external);
+    } else if (this.ref && issueKey(linked) !== issueKey(this.ref)) this.follow(cx, linked);
+  }
   render(_cx) {
     if (this.reader) readyDetail(this.reader);
     for (const notice of this.notices.take()) this.apply(notice);
-    const t = colors(), ref = this.ref, entry = this.entry, issue = entry?.issue;
-    const url = issue?.url ?? (ref ? `https://github.com/${ref.repo}/issues/${ref.number}` : "");
-    return v_flex().id("issue-reader").size_full().min_h(0).overflow_hidden().bg(t.background).text_color(t.foreground).text_size(14).on_size_change((size, cx) => {
+    const t = colors();
+    const root = v_flex().id("issue-reader").size_full().min_h(0).overflow_hidden().bg(t.background).text_color(t.foreground).text_size(14).on_size_change((size, cx) => {
       const wide = size.width >= 820;
       if (wide !== this.wide) {
         this.wide = wide;
         cx.notify();
       }
-    }).when(
-      !ref,
+    });
+    const ref = this.ref;
+    if (!ref) return root.child(this.empty());
+    return root.child(this.header(ref)).child(this.body(ref));
+  }
+  /** No issue yet: this tab was restored after a restart, or its issue hasn't arrived. */
+  empty() {
+    const t = colors();
+    const hint = "Choose an issue in the GitHub sidebar. Issue details are not restored after restarting Herdr.";
+    return v_flex().flex_1().gap(8).items_center().justify_center().p(24).child(div2().font_semibold().child("Issue details")).child(div2().text_size(13).text_color(t.dim).text_center().child(hint));
+  }
+  /** Back, the title with its number (opens the browser) and copy, and refresh. */
+  header(ref) {
+    const t = colors();
+    const entry = this.entry;
+    const url = entry?.issue?.url ?? `https://github.com/${ref.repo}/issues/${ref.number}`;
+    const number = link2("issue-browser", url, `#${ref.number}`).px(2).rounded(4).text_color(t.accent).hover((s) => s.bg(t.hover)).tooltip(`Open ${ref.repo} #${ref.number} in browser`).accessibility_label(`Open #${ref.number} in browser`);
+    const copy = button(
+      "issue-copy",
+      svg2("mods/github/assets/copy.svg").size(16),
+      "Copy issue link",
+      (_e, cx) => cx.write_to_clipboard(url)
+    );
+    const refresh = entry?.loading ? square(div2()).child(spinner(18)) : square(
+      button("issue-refresh", "\u21BB", "Refresh issue", (_e, cx) => {
+        this.load(cx);
+        cx.notify();
+      })
+    ).text_size(22);
+    return h_flex().flex_none().px(24).pt(18).pb(12).gap(12).items_start().when(this.history.length > 0, (el) => el.child(this.back())).child(
+      h_flex().flex_1().min_w(0).gap(8).items_center().flex_wrap().text_size(22).child(
+        div2().min_w(0).font_semibold().child(entry?.issue?.title ?? "Issue details")
+      ).child(h_flex().gap(2).items_center().flex_none().child(number).child(copy))
+    ).child(refresh);
+  }
+  back() {
+    const previous3 = this.history.at(-1);
+    return square(button("issue-back", "\u2190", `Back to #${previous3.number}`, (_e, cx) => this.goBack(cx))).text_size(22);
+  }
+  /** The scrolling part: loading and failure notes, then the issue. */
+  body(ref) {
+    const t = colors();
+    const entry = this.entry;
+    return v_flex().id(`issue-scroll-${issueKey(ref)}`).flex_1().min_h(0).overflow_y_scroll().px(24).pb(18).gap(12).when(entry?.loading, (el) => el.child(div2().text_size(12).text_color(t.dim).child("Loading issue\u2026"))).when(
+      entry?.failure,
       (el) => el.child(
-        v_flex().flex_1().gap(8).items_center().justify_center().p(24).child(div2().font_semibold().child("Issue details")).child(
-          div2().text_size(13).text_color(t.dim).text_center().child(
-            "Choose an issue in the GitHub sidebar. Issue details are not restored after restarting Herdr."
-          )
+        div2().text_color(t.blocked).child(entry?.failure ?? "")
+      )
+    ).child(entry?.issue ? this.document(entry.issue) : div2());
+  }
+  /** State and author, then the timeline beside (wide) or below (narrow) the metadata. */
+  document(issue) {
+    const timeline = v_flex().min_w(0).gap(20).when(this.wide, (el) => el.flex_1()).when(!this.wide, (el) => el.w_full().flex_none()).child(this.card("issue-body", issue, issue, "opened this issue")).children(
+      issueTimeline(issue.comments, issue.activities).map(
+        (row) => row.type === "comment" ? this.card(`comment-${row.comment.id}`, issue, row.comment, "commented") : this.activity(row.activity)
+      )
+    ).child(this.composer(issue));
+    const metadata = this.metadata(issue);
+    const content3 = this.wide ? h_flex().gap(24).items_start().child(timeline).child(metadata) : v_flex().gap(20).child(metadata).child(timeline);
+    return v_flex().gap(18).child(
+      h_flex().gap(10).pb(4).items_center().flex_wrap().child(this.stateBadge(issue)).child(div2().text_size(13).font_medium().child(issue.author))
+    ).child(content3);
+  }
+  stateBadge(issue) {
+    const t = colors();
+    const open = issue.state === "open";
+    const color = open ? t.done : t.accent;
+    return div2().px(10).py(4).rounded(14).bg(`${color}26`).text_size(13).font_semibold().text_color(color).child(open ? "\u25CB Open" : "\u25CF Closed");
+  }
+  /** The description or a comment: who, what and when, its Markdown, and its reactions. */
+  card(id, issue, post, verb) {
+    const t = colors();
+    const reactions = post.reactions ?? [];
+    const heading = h_flex().px(16).py(10).gap(8).items_center().flex_wrap().bg(t.raised).border_b(1).border_color(t.border).text_size(12).child(div2().font_semibold().child(post.author)).child(div2().text_color(t.dim).child(verb)).child(div2().flex_1()).child(div2().text_color(t.dim).tooltip(post.createdAt).child(relativeTime(post.createdAt, Date.now())));
+    const text3 = TextView.markdown(id, post.markdown).selectable(true).scrollable(false).on_link_click((url, cx) => this.openLink(cx, url, issue));
+    return v_flex().id(`${id}-card`).min_w(0).w_full().overflow_hidden().rounded(8).border_1().border_color(t.border).bg(t.background).child(heading).child(
+      v_flex().min_w(0).px(16).py(16).gap(12).child(text3).when(
+        reactions.length > 0,
+        (el) => el.child(
+          h_flex().gap(6).flex_wrap().children(reactions.map((r) => chip(`${r.emoji} ${r.count}`, t.border, t.raised)))
         )
       )
-    ).when(
-      Boolean(ref),
-      (el) => el.child(
-        h_flex().flex_none().px(24).pt(18).pb(12).gap(12).items_start().when(this.history.length > 0, (el2) => el2.child(this.back())).child(
-          h_flex().flex_1().min_w(0).gap(8).items_center().flex_wrap().text_size(22).child(
-            div2().min_w(0).font_semibold().child(issue?.title ?? "Issue details")
-          ).child(
-            h_flex().gap(2).items_center().flex_none().child(
-              div2().id("issue-browser").px(2).rounded(4).text_color(t.accent).cursor_pointer().hover((s) => s.bg(t.hover)).tooltip(`Open ${ref?.repo} #${ref?.number} in browser`).accessibility_label(`Open #${ref?.number} in browser`).on_mouse_down("left", stop).on_click((_e, cx) => {
-                cx.stop_propagation();
-                cx.open_url(url);
-              }).child(ref ? `#${ref.number}` : "")
-            ).child(
-              button(
-                "issue-copy",
-                svg2("mods/github/assets/copy.svg").size(16),
-                "Copy issue link",
-                (_e, cx) => cx.write_to_clipboard(url)
-              )
-            )
-          )
-        ).child(
-          entry?.loading ? div2().size(36).flex_none().flex().items_center().justify_center().child(spinner(18)) : button("issue-refresh", "\u21BB", "Refresh issue", (_e, cx) => {
-            this.load(cx);
-            cx.notify();
-          }).size(36).flex_none().flex().items_center().justify_center().text_size(22)
-        )
+    );
+  }
+  /** A label or assignment change between the comments. */
+  activity(activity) {
+    const t = colors();
+    const avatar = div2().size(22).flex_none().rounded(11).bg(t.raised).text_color(t.muted).font_semibold().flex().items_center().justify_center().child(activity.actor.slice(0, 1).toUpperCase());
+    const labels = "labels" in activity ? activity.labels : null;
+    return h_flex().id(`activity-${activity.id}`).px(16).py(4).gap(8).items_center().flex_wrap().text_size(12).child(avatar).child(div2().font_semibold().child(activity.actor)).child(div2().text_color(t.dim).child(activityText(activity))).when(
+      labels,
+      (el) => el.children((labels ?? []).map((label) => this.label(label))).child(
+        div2().text_color(t.dim).child(labels?.length === 1 ? "label" : "labels")
       )
-    ).when(
-      Boolean(ref),
-      (el) => el.child(
-        v_flex().id(`issue-scroll-${ref ? issueKey(ref) : ""}`).flex_1().min_h(0).overflow_y_scroll().px(24).pb(18).gap(12).when(
-          Boolean(entry?.loading),
-          (el2) => el2.child(div2().text_size(12).text_color(t.dim).child("Loading issue\u2026"))
-        ).when(
-          Boolean(entry?.failure),
-          (el2) => el2.child(
-            div2().text_color(t.blocked).child(entry?.failure ?? "")
-          )
-        ).child(issue ? this.document(issue) : div2())
-      )
+    ).child(div2().flex_1()).child(div2().text_color(t.dim).tooltip(activity.createdAt).child(relativeTime(activity.createdAt, Date.now())));
+  }
+  label(label) {
+    const t = colors();
+    return chip(label.name, label.color ?? t.input, label.color ? `${label.color}26` : t.raised).text_color(
+      t.foreground
     );
   }
   /** A new comment, and close / reopen: GitHub's own order of the two buttons. */
   composer(issue) {
-    const t = colors(), box = this.box, open = issue.state === "open";
-    const action = (id, label, tip, enabled, primary, act) => h_flex().id(id).h(32).px(14).gap(6).items_center().rounded(6).border_1().text_size(13).font_medium().border_color(primary ? t.accent : t.border).bg(primary ? t.accent : t.raised).text_color(primary ? t.background : t.foreground).when(
+    const t = colors();
+    const box = this.box;
+    const open = issue.state === "open";
+    const busy = this.writing !== null;
+    const close = {
+      id: "issue-state",
+      label: open ? "Close issue" : "Reopen issue",
+      tip: open ? `Close #${issue.number}` : `Reopen #${issue.number}`,
+      enabled: !busy,
+      primary: false
+    };
+    const send = {
+      id: "issue-comment",
+      label: "Comment",
+      tip: "Comment (\u2318/Ctrl+Enter)",
+      enabled: !busy && this.draft.trim() !== "",
+      primary: true
+    };
+    return v_flex().id("issue-composer").min_w(0).w_full().gap(10).pt(4).when(
+      box,
+      (el) => el.child(
+        div2().min_w(0).rounded(8).border_1().border_color(t.border).bg(t.background).p(8).on_mouse_down("left", stop).child(Textarea.new(box).w_full().text_size(13).text_color(t.foreground))
+      )
+    ).when(
+      this.writeFailure,
+      (el) => el.child(
+        div2().text_size(12).text_color(t.blocked).child(this.writeFailure ?? "")
+      )
+    ).child(
+      h_flex().gap(8).items_center().justify_end().when(busy, (el) => el.child(spinner(14))).child(this.action(close, (cx) => this.setState(cx, open ? "closed" : "open"))).child(this.action(send, (cx) => this.comment(cx)))
+    );
+  }
+  action({ id, label, tip, enabled, primary }, act) {
+    const t = colors();
+    return h_flex().id(id).h(32).px(14).gap(6).items_center().rounded(6).border_1().text_size(13).font_medium().border_color(primary ? t.accent : t.border).bg(primary ? t.accent : t.raised).text_color(primary ? t.background : t.foreground).when(
       enabled,
       (el) => el.cursor_pointer().hover((s) => s.opacity(0.85)).on_click((_e, cx) => {
         cx.stop_propagation();
         act(cx);
       })
     ).when(!enabled, (el) => el.opacity(0.5)).tooltip(tip).accessibility_label(tip).on_mouse_down("left", stop).child(label);
-    const busy = this.writing !== null;
-    return v_flex().id("issue-composer").min_w(0).w_full().gap(10).pt(4).when(
-      Boolean(box),
-      (el) => el.child(
-        div2().min_w(0).rounded(8).border_1().border_color(t.border).bg(t.background).p(8).on_mouse_down("left", stop).child(Textarea.new(box).w_full().text_size(13).text_color(t.foreground))
-      )
-    ).when(
-      Boolean(this.writeFailure),
-      (el) => el.child(
-        div2().text_size(12).text_color(t.blocked).child(this.writeFailure ?? "")
-      )
-    ).child(
-      h_flex().gap(8).items_center().justify_end().when(busy, (el) => el.child(spinner(14))).child(
-        action(
-          "issue-state",
-          open ? "Close issue" : "Reopen issue",
-          open ? `Close #${issue.number}` : `Reopen #${issue.number}`,
-          !busy,
-          false,
-          (cx) => this.setState(cx, open ? "closed" : "open")
-        )
-      ).child(
-        action(
-          "issue-comment",
-          "Comment",
-          "Comment (\u2318/Ctrl+Enter)",
-          !busy && this.draft.trim() !== "",
-          true,
-          (cx) => this.comment(cx)
-        )
-      )
-    );
   }
-  back() {
-    const previous3 = this.history.at(-1);
-    return button("issue-back", "\u2190", `Back to #${previous3.number}`, (_e, cx) => this.goBack(cx)).size(36).flex_none().flex().items_center().justify_center().text_size(22);
-  }
-  document(issue) {
-    const t = colors();
-    const post = (id, p, verb) => v_flex().id(`${id}-card`).min_w(0).w_full().overflow_hidden().rounded(8).border_1().border_color(t.border).bg(t.background).child(
-      h_flex().px(16).py(10).gap(8).items_center().flex_wrap().bg(t.raised).border_b(1).border_color(t.border).text_size(12).child(div2().font_semibold().child(p.author)).child(div2().text_color(t.dim).child(verb)).child(div2().flex_1()).child(div2().text_color(t.dim).tooltip(p.createdAt).child(relativeTime(p.createdAt, Date.now())))
-    ).child(
-      v_flex().min_w(0).px(16).py(16).gap(12).child(
-        TextView.markdown(id, p.markdown).selectable(true).scrollable(false).on_link_click((url, cx) => {
-          const linked = issueLink(url, issue.url);
-          if (linked) {
-            if (this.ref && issueKey(linked) !== issueKey(this.ref)) this.follow(cx, linked);
-            return;
-          }
-          const external = browserUrl(url, issue.url);
-          if (external) cx.open_url(external);
-        })
-      ).when(
-        Boolean(p.reactions?.length),
-        (el) => el.child(
-          h_flex().gap(6).flex_wrap().children(
-            (p.reactions ?? []).map(
-              (r) => div2().px(8).py(3).rounded(12).border_1().border_color(t.border).bg(t.raised).text_size(12).child(`${r.emoji} ${r.count}`)
-            )
-          )
-        )
-      )
-    );
-    const rows = issueTimeline(issue.comments, issue.activities);
-    const timeline = v_flex().min_w(0).gap(20).when(this.wide, (el) => el.flex_1()).when(!this.wide, (el) => el.w_full().flex_none()).child(post("issue-body", issue, "opened this issue")).children(
-      rows.map(
-        (row) => row.type === "comment" ? post(`comment-${row.comment.id}`, row.comment, "commented") : this.activity(row.activity)
-      )
-    ).child(this.composer(issue));
-    const metadata = this.metadata(issue);
-    const content3 = this.wide ? h_flex().gap(24).items_start().child(timeline).child(metadata) : v_flex().gap(20).child(metadata).child(timeline);
-    return v_flex().gap(18).child(
-      h_flex().gap(10).pb(4).items_center().flex_wrap().child(
-        div2().px(10).py(4).rounded(14).bg(issue.state === "open" ? `${t.done}26` : `${t.accent}26`).text_size(13).font_semibold().text_color(issue.state === "open" ? t.done : t.accent).child(issue.state === "open" ? "\u25CB Open" : "\u25CF Closed")
-      ).child(div2().text_size(13).font_medium().child(issue.author))
-    ).child(content3);
-  }
-  activity(activity) {
-    const t = colors();
-    const row = h_flex().id(`activity-${activity.id}`).px(16).py(4).gap(8).items_center().flex_wrap().text_size(12).child(
-      div2().size(22).flex_none().rounded(11).bg(t.raised).text_color(t.muted).font_semibold().flex().items_center().justify_center().child(activity.actor.slice(0, 1).toUpperCase())
-    ).child(div2().font_semibold().child(activity.actor)).child(div2().text_color(t.dim).child(activityText(activity)));
-    if ("labels" in activity)
-      row.children(activity.labels.map((label) => this.label(label))).child(
-        div2().text_color(t.dim).child(activity.labels.length === 1 ? "label" : "labels")
-      );
-    return row.child(div2().flex_1()).child(div2().text_color(t.dim).tooltip(activity.createdAt).child(relativeTime(activity.createdAt, Date.now())));
-  }
-  label(label) {
-    const t = colors();
-    return div2().px(8).py(3).rounded(12).border_1().border_color(label.color ?? t.input).bg(label.color ? `${label.color}26` : t.raised).text_size(12).text_color(t.foreground).child(label.name);
-  }
+  /** Assignees, labels, Projects and milestone: a column beside the timeline (wide) or a row above it. */
   metadata(issue) {
-    const t = colors(), projects = this.entry?.projects;
-    const section = (title, value) => v_flex().gap(10).py(16).border_b(1).border_color(t.border).when(!this.wide, (el) => el.w(180).min_w(140).flex_1()).child(div2().text_size(13).font_semibold().child(title)).child(value);
+    const t = colors();
     const quiet = (text3) => div2().text_size(12).text_color(t.dim).child(text3);
-    let projectContent;
-    if (!projects) projectContent = quiet(this.entry?.projectsLoading ? "Loading Projects\u2026" : "Projects not loaded.");
-    else if (!projects.ok) projectContent = quiet("None yet").tooltip(projects.message);
-    else
-      projectContent = projects.projects.length === 0 ? quiet("None yet") : v_flex().gap(8).children(
-        projects.projects.map(
-          (project) => div2().id(`project-${project.url}`).text_size(13).text_color(t.accent).cursor_pointer().tooltip(project.url).on_mouse_down("left", stop).on_click((_e, cx) => {
-            cx.stop_propagation();
-            cx.open_url(project.url);
-          }).child(project.title)
-        )
-      );
+    const section = (title, value) => v_flex().gap(10).py(16).border_b(1).border_color(t.border).when(!this.wide, (el) => el.w(180).min_w(140).flex_1()).child(div2().text_size(13).font_semibold().child(title)).child(value);
+    const assignees = issue.assignees.length === 0 ? quiet("No assignees") : v_flex().gap(8).children(issue.assignees.map((login) => div2().text_size(13).font_medium().child(login)));
+    const labels = issue.labels.length === 0 ? quiet("None yet") : h_flex().gap(6).flex_wrap().children(issue.labels.map((label) => this.label(label)));
     const sections = [
-      section(
-        "Assignees",
-        issue.assignees.length === 0 ? quiet("No assignees") : v_flex().gap(8).children(issue.assignees.map((login) => div2().text_size(13).font_medium().child(login)))
-      ),
-      section(
-        "Labels",
-        issue.labels.length === 0 ? quiet("None yet") : h_flex().gap(6).flex_wrap().children(issue.labels.map((label) => this.label(label)))
-      ),
-      section("Project", projectContent),
+      section("Assignees", assignees),
+      section("Labels", labels),
+      section("Project", this.projects(quiet)),
       section("Milestone", issue.milestone ? div2().text_size(13).child(issue.milestone) : quiet("No milestone"))
     ];
     return this.wide ? v_flex().w(220).flex_none().children(sections) : h_flex().gap(20).flex_wrap().children(sections);
+  }
+  /** The issue's Projects, each opening in the browser; why there are none shows in a tooltip. */
+  projects(quiet) {
+    const t = colors();
+    const projects = this.entry?.projects;
+    if (!projects) return quiet(this.entry?.projectsLoading ? "Loading Projects\u2026" : "Projects not loaded.");
+    if (!projects.ok) return quiet("None yet").tooltip(projects.message);
+    if (projects.projects.length === 0) return quiet("None yet");
+    return v_flex().gap(8).children(
+      projects.projects.map(
+        (project) => link2(`project-${project.url}`, project.url, project.title).text_size(13).text_color(t.accent).tooltip(project.url)
+      )
+    );
   }
 };
 
@@ -10634,8 +10639,45 @@ var Panel = class {
     this.details.deliver();
     this.receive(cx);
     if (locationKey() !== this.context) this.refresh(cx);
-    const t = colors(), where = location(), overlay = props3()?.overlay;
-    const repo = this.remote ? `${this.remote.owner}/${this.remote.repo}` : "";
+    const t = colors();
+    const where = location();
+    const overlay = props3()?.overlay;
+    const noRemote = this.remote === null && !(this.account && !this.account.status.ok);
+    const ghLine = this.account ? describeAccount(this.account) : null;
+    return v_flex2().id("github").size_full().min_h(0).overflow_hidden().bg(t.background).text_color(t.foreground).text_size(13).when(!overlay, (el) => el.rounded(10).border_1().border_color(t.border)).child(this.header(overlay)).when(noRemote, (el) => el.child(this.noRemote(where.cwd))).when(!noRemote, (el) => el.child(this.tabs()).child(this.list())).child(
+      div4().flex_none().px(14).py(8).border_t(1).border_color(t.border).text_size(11).text_color(t.dim).truncate().child(`${ghLine?.text ?? "checking gh\u2026"} \xB7 ${where.cwd ?? "no folder"}`)
+    );
+  }
+  /** The repository, then ↻ (Herdr's own spinner while anything loads, as its tab bar shows a working agent). */
+  header(overlay) {
+    const t = colors();
+    const busy = this.loading || GROUPS.some(({ kind }) => this.groups[kind].loading || this.groups[kind].loadingMore);
+    const refresh = button("gh-refresh", "\u21BB", "Refresh", (_e, cx) => {
+      this.refresh(cx, true);
+      cx.notify();
+    });
+    return h_flex3().h(42).flex_none().px(14).gap(8).items_center().border_b(1).border_color(t.border).child(div4().font_semibold().child("GitHub")).child(div4().flex_1().min_w(0).truncate().text_right().text_size(12).text_color(t.dim).child(this.repo())).child(busy ? div4().size(24).flex_none().flex().items_center().justify_center().child(spinner()) : refresh).when(overlay, (el) => el.child(button("gh-close", "\xD7", "Close", () => closeOverlay(overlay))));
+  }
+  repo() {
+    return this.remote ? `${this.remote.owner}/${this.remote.repo}` : "";
+  }
+  /** No GitHub remote here: nothing is wrong, there is just no repository. Said calmly, in place of the tabs and lists. */
+  noRemote(cwd) {
+    const t = colors();
+    const empty = noRepository(cwd);
+    return v_flex2().flex_1().min_h(0).px(28).gap(8).items_center().justify_center().child(svg4("mods/github/assets/github.svg").size(28).text_color(t.dim)).child(div4().pt(4).font_medium().text_color(t.muted).child(empty.title)).child(div4().text_size(12).text_center().text_color(t.dim).child(empty.detail));
+  }
+  /** Only Issues in this version; PRs, Actions and notifications join it later. */
+  tabs() {
+    const t = colors();
+    return h_flex3().h(34).flex_none().px(10).gap(4).items_center().border_b(1).border_color(t.border).child(div4().px(8).py(3).rounded(6).bg(t.hover).text_size(12).font_medium().child("Issues"));
+  }
+  /**
+   * The groups, or what stands in their place. A missing repository (404) or Issues turned off is the same for
+   * every group: said once, in the list's place. Any other failure stays in its own group, beside the others' rows.
+   */
+  list() {
+    const t = colors();
     const loaded = GROUPS.map(({ kind }) => this.groups[kind]);
     const notice = issuesNotice({
       account: this.account,
@@ -10643,124 +10685,75 @@ var Panel = class {
       group: loaded.find((g) => g.page)?.page,
       failure: this.failure ?? loaded.find((g) => g.failure?.notFound)?.failure
     });
-    const busy = this.loading || loaded.some((g) => g.loading || g.loadingMore);
-    const noRemote = this.remote === null && !(this.account && !this.account.status.ok);
-    const empty = noRepository(where.cwd);
-    const row = (kind, issue) => {
-      const key = `${kind}#${issue.number}`, hovered = this.hovered === key;
-      return h_flex3().id(`issue-${kind}-${issue.number}`).h(28).px(8).pl(22).gap(8).items_center().rounded(6).cursor_pointer().hover((s) => s.bg(t.hover)).on_mouse_down("left", stop).on_click((_e, cx2) => {
-        this.openFailure = null;
-        cx2.spawn(async (cx3) => {
-          try {
-            await this.details.open({ repo, number: issue.number });
-          } catch (e) {
-            this.openFailure = e instanceof Error ? e.message : String(e);
-          }
-          cx3.notify();
-        });
-      }).on_hover((h, cx2) => {
-        if (h) this.hovered = key;
-        else if (this.hovered === key) this.hovered = null;
+    const problem = (text3) => div4().p(8).text_size(12).text_color(t.blocked).child(text3);
+    return v_flex2().id("gh-list").flex_1().min_h(0).overflow_y_scroll().p(6).gap(4).when(this.openFailure, (el) => el.child(problem(this.openFailure ?? ""))).when(notice, (el) => el.child(problem(notice ?? ""))).when(!notice && this.ready(), (el) => el.children(GROUPS.map((g) => this.group(g)))).when(!notice && !this.ready() && this.loading, (el) => el.child(div4().p(8).text_color(t.dim).child("\u2026")));
+  }
+  /** A foldable group: its title and count, then (unfolded) why it failed, its rows and Load more. */
+  group({ kind, title, empty }) {
+    const t = colors();
+    const g = this.groups[kind];
+    const page = g.page;
+    const heading = h_flex3().id(`group-${kind}`).h(26).px(8).gap(6).items_center().rounded(6).text_size(12).text_color(t.dim).cursor_pointer().hover((s) => s.bg(t.hover)).on_mouse_down("left", stop).on_click((_e, cx) => this.toggle(cx, kind)).accessibility_label(`${g.expanded ? "Fold" : "Unfold"} ${title}`).child(
+      div4().w(10).flex_none().child(g.expanded ? "\u25BE" : "\u25B8")
+    ).child(div4().font_medium().child(title)).child(div4().child(page ? String(page.total) : "")).when(g.expanded && g.loading, (el) => el.child(spinner()));
+    const failure = h_flex3().px(8).pl(22).py(2).gap(6).items_center().text_size(12).child(div4().flex_none().size(6).rounded(3).bg(t.blocked)).child(
+      div4().flex_1().min_w(0).text_color(t.dim).child(g.failure?.message ?? "")
+    ).when(
+      !g.loading,
+      (el) => el.child(
+        button(`retry-${kind}`, "Retry", `Load ${title} again`, (_e, cx) => {
+          this.load(cx, kind, true);
+          cx.notify();
+        })
+      )
+    );
+    const left = (page?.total ?? 0) - (page?.issues.length ?? 0);
+    const more2 = h_flex3().id(`more-${kind}`).h(26).px(8).pl(22).gap(6).items_center().rounded(6).text_size(12).text_color(t.dim).cursor_pointer().hover((s) => s.bg(t.hover).text_color(t.foreground)).on_mouse_down("left", stop).on_click((_e, cx) => this.more(cx, kind)).child(g.loadingMore ? "Loading\u2026" : `Load more (${left} left)`).when(g.loadingMore, (el) => el.child(spinner()));
+    return v_flex2().gap(1).child(heading).when(
+      g.expanded,
+      (el) => el.when(g.failure, (el2) => el2.child(failure)).when(
+        page?.issues.length === 0,
+        (el2) => el2.child(div4().px(8).pl(22).py(4).text_size(12).text_color(t.dim).child(empty))
+      ).children((page?.issues ?? []).map((issue) => this.row(kind, issue))).when(page?.more, (el2) => el2.child(more2))
+    );
+  }
+  /** One issue: click opens its tab; hovering swaps assignees and age for Copy and Open in browser. */
+  row(kind, issue) {
+    const t = colors();
+    const key = `${kind}#${issue.number}`;
+    const hovered = this.hovered === key;
+    const repo = this.repo();
+    return h_flex3().id(`issue-${kind}-${issue.number}`).h(28).px(8).pl(22).gap(8).items_center().rounded(6).cursor_pointer().hover((s) => s.bg(t.hover)).on_mouse_down("left", stop).on_click((_e, cx) => {
+      this.openFailure = null;
+      cx.spawn(async (cx2) => {
+        try {
+          await this.details.open({ repo, number: issue.number });
+        } catch (e) {
+          this.openFailure = e instanceof Error ? e.message : String(e);
+        }
         cx2.notify();
-      }).child(div4().flex_none().text_color(t.dim).child(`#${issue.number}`)).child(div4().flex_1().min_w(0).truncate().child(issue.title)).when(
-        !hovered,
-        (el) => el.child(
-          div4().flex_none().max_w(90).truncate().text_size(12).text_color(t.dim).child(issue.assignees.join(", "))
-        ).child(
-          div4().flex_none().w(28).text_right().text_size(12).text_color(t.dim).child(relativeTime(issue.updatedAt, Date.now()))
-        )
-      ).when(
-        hovered,
-        (el) => el.child(
-          button(
-            `copy-${kind}-${issue.number}`,
-            "#",
-            `Copy #${issue.number}`,
-            (_e, cx2) => cx2.write_to_clipboard(`#${issue.number}`)
-          )
-        ).child(button(`open-${kind}-${issue.number}`, "\u2197", "Open in browser", (_e, cx2) => cx2.open_url(issue.url)))
-      );
-    };
-    const group2 = ({ kind, title, empty: empty2 }) => {
-      const g = this.groups[kind], page = g.page;
-      return v_flex2().gap(1).child(
-        h_flex3().id(`group-${kind}`).h(26).px(8).gap(6).items_center().rounded(6).text_size(12).text_color(t.dim).cursor_pointer().hover((s) => s.bg(t.hover)).on_mouse_down("left", stop).on_click((_e, cx2) => this.toggle(cx2, kind)).accessibility_label(`${g.expanded ? "Fold" : "Unfold"} ${title}`).child(
-          div4().w(10).flex_none().child(g.expanded ? "\u25BE" : "\u25B8")
-        ).child(div4().font_medium().child(title)).child(div4().child(page ? String(page.total) : "")).when(g.expanded && g.loading, (el) => el.child(spinner()))
-      ).when(
-        g.expanded,
-        (el) => el.when(
-          Boolean(g.failure),
-          (el2) => el2.child(
-            h_flex3().px(8).pl(22).py(2).gap(6).items_center().text_size(12).child(div4().flex_none().size(6).rounded(3).bg(t.blocked)).child(
-              div4().flex_1().min_w(0).text_color(t.dim).child(g.failure?.message ?? "")
-            ).when(
-              !g.loading,
-              (el3) => el3.child(
-                button(`retry-${kind}`, "Retry", `Load ${title} again`, (_e, cx2) => {
-                  this.load(cx2, kind, true);
-                  cx2.notify();
-                })
-              )
-            )
-          )
-        ).when(
-          Boolean(page && page.issues.length === 0),
-          (el2) => el2.child(div4().px(8).pl(22).py(4).text_size(12).text_color(t.dim).child(empty2))
-        ).children((page?.issues ?? []).map((issue) => row(kind, issue))).when(
-          Boolean(page?.more),
-          (el2) => el2.child(
-            h_flex3().id(`more-${kind}`).h(26).px(8).pl(22).gap(6).items_center().rounded(6).text_size(12).text_color(t.dim).cursor_pointer().hover((s) => s.bg(t.hover).text_color(t.foreground)).on_mouse_down("left", stop).on_click((_e, cx2) => this.more(cx2, kind)).child(
-              g.loadingMore ? "Loading\u2026" : `Load more (${(page?.total ?? 0) - (page?.issues.length ?? 0)} left)`
-            ).when(g.loadingMore, (el3) => el3.child(spinner()))
-          )
-        )
-      );
-    };
-    const ghLine = this.account ? describeAccount(this.account) : null;
-    return v_flex2().id("github").size_full().min_h(0).overflow_hidden().bg(t.background).text_color(t.foreground).text_size(13).when(!overlay, (el) => el.rounded(10).border_1().border_color(t.border)).child(
-      h_flex3().h(42).flex_none().px(14).gap(8).items_center().border_b(1).border_color(t.border).child(div4().font_semibold().child("GitHub")).child(div4().flex_1().min_w(0).truncate().text_right().text_size(12).text_color(t.dim).child(repo)).when(
-        busy,
-        (el) => el.child(div4().size(24).flex_none().flex().items_center().justify_center().child(spinner()))
-      ).when(
-        !busy,
-        (el) => el.child(
-          button("gh-refresh", "\u21BB", "Refresh", (_e, cx2) => {
-            this.refresh(cx2, true);
-            cx2.notify();
-          })
-        )
-      ).when(Boolean(overlay), (el) => el.child(button("gh-close", "\xD7", "Close", () => closeOverlay(overlay))))
-    ).when(
-      noRemote,
+      });
+    }).on_hover((h, cx) => {
+      if (h) this.hovered = key;
+      else if (this.hovered === key) this.hovered = null;
+      cx.notify();
+    }).child(div4().flex_none().text_color(t.dim).child(`#${issue.number}`)).child(div4().flex_1().min_w(0).truncate().child(issue.title)).when(
+      !hovered,
       (el) => el.child(
-        v_flex2().flex_1().min_h(0).px(28).gap(8).items_center().justify_center().child(svg4("mods/github/assets/github.svg").size(28).text_color(t.dim)).child(div4().pt(4).font_medium().text_color(t.muted).child(empty.title)).child(div4().text_size(12).text_center().text_color(t.dim).child(empty.detail))
+        div4().flex_none().max_w(90).truncate().text_size(12).text_color(t.dim).child(issue.assignees.join(", "))
+      ).child(
+        div4().flex_none().w(28).text_right().text_size(12).text_color(t.dim).child(relativeTime(issue.updatedAt, Date.now()))
       )
     ).when(
-      !noRemote,
+      hovered,
       (el) => el.child(
-        h_flex3().h(34).flex_none().px(10).gap(4).items_center().border_b(1).border_color(t.border).child(div4().px(8).py(3).rounded(6).bg(t.hover).text_size(12).font_medium().child("Issues"))
-      )
-    ).when(
-      !noRemote,
-      (el) => el.child(
-        v_flex2().id("gh-list").flex_1().min_h(0).overflow_y_scroll().p(6).gap(4).when(
-          Boolean(this.openFailure),
-          (el2) => el2.child(
-            div4().p(8).text_size(12).text_color(t.blocked).child(this.openFailure ?? "")
-          )
-        ).when(
-          Boolean(notice),
-          (el2) => el2.child(
-            div4().p(8).text_size(12).text_color(t.blocked).child(notice ?? "")
-          )
-        ).when(!notice && Boolean(this.ready()), (el2) => el2.children(GROUPS.map(group2))).when(
-          !notice && !this.ready() && this.loading,
-          (el2) => el2.child(div4().p(8).text_color(t.dim).child("\u2026"))
+        button(
+          `copy-${kind}-${issue.number}`,
+          "#",
+          `Copy #${issue.number}`,
+          (_e, cx) => cx.write_to_clipboard(`#${issue.number}`)
         )
-      )
-    ).child(
-      div4().flex_none().px(14).py(8).border_t(1).border_color(t.border).text_size(11).text_color(t.dim).truncate().child(`${ghLine?.text ?? "checking gh\u2026"} \xB7 ${where.cwd ?? "no folder"}`)
+      ).child(button(`open-${kind}-${issue.number}`, "\u2197", "Open in browser", (_e, cx) => cx.open_url(issue.url)))
     );
   }
 };
