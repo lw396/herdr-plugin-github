@@ -131,6 +131,7 @@ export class FileDiff {
 								: "GitHub did not provide a patch for this file (it may be binary or too large). Open it on GitHub to view the changes.",
 						);
 		return v_flex()
+			.id(`${id}-viewport`)
 			.flex_1()
 			.min_h(0)
 			.min_w(0)
@@ -143,7 +144,7 @@ export class FileDiff {
 			})
 			.child(header)
 			.when(Boolean(discussions), (el) => el.child(discussions!.status()))
-			.when(!file.patch && items.length > 0, (el) =>
+			.when(!file.patch && file.status !== "unchanged" && items.length > 0, (el) =>
 				el.child(
 					div()
 						.p(12)

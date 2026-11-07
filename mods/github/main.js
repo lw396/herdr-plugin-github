@@ -12324,13 +12324,13 @@ var FileDiff = class {
     ).child(Scrollbar.vertical(id).absolute().inset_0()) : div12().p(20).text_color(t.dim).child(
       file.additions === 0 && file.deletions === 0 ? "No textual changes in this file. Open it on GitHub to view the full file." : "GitHub did not provide a patch for this file (it may be binary or too large). Open it on GitHub to view the changes."
     );
-    return v_flex8().flex_1().min_h(0).min_w(0).overflow_hidden().on_size_change((size, cx) => {
+    return v_flex8().id(`${id}-viewport`).flex_1().min_h(0).min_w(0).overflow_hidden().on_size_change((size, cx) => {
       if (size.width > 0 && size.width !== this.viewportWidth) {
         this.viewportWidth = size.width;
         cx.notify();
       }
     }).child(header).when(Boolean(discussions), (el) => el.child(discussions.status())).when(
-      !file.patch && items.length > 0,
+      !file.patch && file.status !== "unchanged" && items.length > 0,
       (el) => el.child(
         div12().p(12).text_color(t.dim).child("GitHub did not provide a patch for this file. Discussions are shown below.")
       )
