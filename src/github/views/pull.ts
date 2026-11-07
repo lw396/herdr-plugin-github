@@ -189,11 +189,13 @@ export class Pull {
 					.text_color(failure ? colors().blocked : colors().dim)
 					.child(message),
 			)
-			.child(
-				button("pull-files-retry", "Retry", "Load changed files again", (_e, cx) => {
-					this.files?.load(cx, true);
-					cx.notify();
-				}),
+			.when(!this.files?.loading, (el) =>
+				el.child(
+					button("pull-files-retry", failure ? "Retry" : "Refresh", "Load changed files again", (_e, cx) => {
+						this.files?.load(cx, true);
+						cx.notify();
+					}),
+				),
 			);
 	}
 

@@ -53,7 +53,7 @@ export class FileDiff {
 							div()
 								.id(`${id}-horizontal`)
 								.size_full()
-								.overflow_x_scroll()
+								.overflow_x_scrollbar()
 								.child(
 									v_virtual_list(
 										id,

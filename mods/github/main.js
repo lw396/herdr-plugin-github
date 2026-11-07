@@ -11767,7 +11767,7 @@ var FileDiff = class {
       (el) => el.child(div10().text_size(12).text_color(t.dim).child(`Renamed from ${file.previousPath}`))
     );
     const body = rows.length > 0 ? div10().flex_1().min_h(0).min_w(0).relative().child(
-      div10().id(`${id}-horizontal`).size_full().overflow_x_scroll().child(
+      div10().id(`${id}-horizontal`).size_full().overflow_x_scrollbar().child(
         v_virtual_list(
           id,
           rows.length,
@@ -11916,11 +11916,14 @@ var Pull = class {
     const message = failure ?? (this.files?.loading ? "Loading changed files\u2026" : "This file is not in the changed-files list. Choose another file or refresh.");
     return v_flex7().flex_1().min_h(0).p(24).gap(8).child(
       div11().text_color(failure ? colors().blocked : colors().dim).child(message)
-    ).child(
-      button("pull-files-retry", "Retry", "Load changed files again", (_e, cx) => {
-        this.files?.load(cx, true);
-        cx.notify();
-      })
+    ).when(
+      !this.files?.loading,
+      (el) => el.child(
+        button("pull-files-retry", failure ? "Retry" : "Refresh", "Load changed files again", (_e, cx) => {
+          this.files?.load(cx, true);
+          cx.notify();
+        })
+      )
     );
   }
   document(pull, layout2) {

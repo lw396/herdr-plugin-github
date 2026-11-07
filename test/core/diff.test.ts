@@ -1,15 +1,22 @@
 import { expect, test } from "bun:test";
 import { parsePatch } from "../../src/github/core/diff.ts";
-import files from "../fixtures/pull-plugin-35-files.json";
+import pages from "../fixtures/pull-plugin-35-files.json";
+
+function patch(path: string): string {
+	const file = pages.flat().find((f) => f.filename === path);
+	if (!file || !("patch" in file) || typeof file.patch !== "string")
+		throw new Error(`Fixture has no patch for ${path}`);
+	return file.patch;
+}
 
 test("new and deleted files start on the correct side, including zero-length hunk ranges", () => {
-	const added = parsePatch((files[2]![0]! as { patch: string }).patch);
+	const added = parsePatch(patch("docs/pr-fixture.md"));
 	expect(added.slice(1).map((r) => [r.oldLine, r.newLine, r.comment])).toEqual([
 		[null, 1, { side: "RIGHT", line: 1 }],
 		[null, 2, { side: "RIGHT", line: 2 }],
 		[null, 3, { side: "RIGHT", line: 3 }],
 	]);
-	const removed = parsePatch((files[1]![0]! as { patch: string }).patch);
+	const removed = parsePatch(patch("docs/adr/0006-poll-with-conditional-requests.md"));
 	expect(removed.slice(1).map((r) => r.comment)).toEqual([
 		{ side: "LEFT", line: 1 },
 		{ side: "LEFT", line: 2 },
@@ -35,7 +42,7 @@ test("replacement lines target opposite sides and no-newline markers are never c
 });
 
 test("a real multi-hunk patch keeps old/new line numbers and GitHub comment targets", () => {
-	const rows = parsePatch((files[3]![0]! as { patch: string }).patch);
+	const rows = parsePatch(patch("src/github/core/time.ts"));
 	expect(rows.slice(0, 4)).toEqual([
 		{ kind: "hunk", text: "@@ -1,4 +1,5 @@", oldLine: null, newLine: null, comment: null },
 		{
