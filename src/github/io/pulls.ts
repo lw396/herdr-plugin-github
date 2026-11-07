@@ -1,4 +1,5 @@
 // Pull requests from GitHub, through gh on the folder's or reader tab's machine (ADR 0003).
+import { type Comment, parseComment } from "../core/discussion.ts";
 import { type ChangedFile, parseFiles } from "../core/files.ts";
 import { type PullDetail, parsePullDetail } from "../core/pull-detail.ts";
 import { parseChecks, pullTimeline } from "../core/pull-timeline.ts";
@@ -12,6 +13,7 @@ import {
 	pullGroupQuery,
 } from "../core/pulls.ts";
 import type { RemoteRepo } from "../core/remote.ts";
+import { parseThreads, type ReviewThread, type ThreadNode } from "../core/review-threads.ts";
 import { announce } from "./changes.ts";
 import { api, graphql } from "./gh.ts";
 import type { LocalBranches } from "./git.ts";
@@ -121,6 +123,83 @@ export async function setPullFileViewed(
 		on,
 	);
 	announce({ repo, number, files: { on } });
+}
+
+/** Replies are published once, never retried after a dropped response. */
+export async function replyPullThread(
+	repo: string,
+	number: number,
+	root: number,
+	body: string,
+	on: string | null,
+): Promise<Comment> {
+	const raw = await api(`repos/${repo}/pulls/${number}/comments/${root}/replies`, {
+		on,
+		method: "POST",
+		rawFields: { body },
+	});
+	const comment = parseComment(raw, `https://github.com/${repo}/pull/${number}`);
+	announce({ repo, number, threads: { on } });
+	return comment;
+}
+
+/** Resolution permissions come from GitHub, not from whether the viewer authored the PR. */
+export async function resolvePullThread(
+	repo: string,
+	number: number,
+	id: string,
+	resolved: boolean,
+	on: string | null,
+): Promise<Pick<ReviewThread, "resolved" | "canResolve" | "canUnresolve">> {
+	const op = resolved ? "resolveReviewThread" : "unresolveReviewThread";
+	const data = await graphql<
+		Record<
+			string,
+			{ thread: { id: string; isResolved: boolean; viewerCanResolve: boolean; viewerCanUnresolve: boolean } }
+		>
+	>(
+		{
+			query: `mutation($id:ID!){${op}(input:{threadId:$id}){thread{id isResolved viewerCanResolve viewerCanUnresolve}}}`,
+			variables: { id },
+		},
+		on,
+	);
+	const thread = data?.[op]?.thread;
+	if (!thread || thread.id !== id) throw new Error("GitHub did not return the updated discussion.");
+	announce({ repo, number, threads: { on } });
+	return { resolved: thread.isResolved, canResolve: thread.viewerCanResolve, canUnresolve: thread.viewerCanUnresolve };
+}
+
+/** Thread metadata is paged separately from REST's complete comment/reaction list. */
+export async function readPullThreads(repo: string, number: number, on: string | null): Promise<ReviewThread[]> {
+	const comments = await api(`repos/${repo}/pulls/${number}/comments?per_page=100`, { on, paginate: true });
+	const [owner, name] = repo.split("/");
+	const nodes: ThreadNode[] = [];
+	let after: string | null = null;
+	for (;;) {
+		const data: {
+			repository: {
+				pullRequest: {
+					reviewThreads: { nodes: ThreadNode[]; pageInfo: { hasNextPage: boolean; endCursor: string | null } };
+				} | null;
+			} | null;
+		} = await graphql(
+			{
+				query:
+					"query($owner:String!,$repo:String!,$number:Int!,$after:String){repository(owner:$owner,name:$repo){pullRequest(number:$number){reviewThreads(first:100,after:$after){nodes{id path diffSide line isOutdated isResolved viewerCanResolve viewerCanUnresolve comments(first:1){nodes{databaseId}}} pageInfo{hasNextPage endCursor}}}}}",
+				variables: { owner: owner ?? "", repo: name ?? "", number, after },
+			},
+			on,
+		);
+		const page = data?.repository?.pullRequest?.reviewThreads;
+		if (!page) throw new Error("GitHub did not return the pull request's discussions.");
+		nodes.push(...page.nodes);
+		if (!page.pageInfo.hasNextPage)
+			return parseThreads(nodes, comments as unknown[], `https://github.com/${repo}/pull/${number}`);
+		const next = page.pageInfo.endCursor;
+		if (!next || next === after) throw new Error("GitHub did not return the next discussions page.");
+		after = next;
+	}
 }
 
 /** The local branches' latest PRs, in one batch. */

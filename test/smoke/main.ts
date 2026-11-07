@@ -1,21 +1,27 @@
 // Herdr smoke mod: runs real parser and reader paths inside Herdr's QuickJS (scripts/smoke.sh).
 import { HoverCard, h_flex } from "gpui-base";
 import { type AsyncContext, type Context, div, View } from "gpui-kit";
+import { parsePatch } from "../../src/github/core/diff.ts";
 import { parseFiles } from "../../src/github/core/files.ts";
 import { parseIssueDetail } from "../../src/github/core/issue-detail.ts";
 import { browserUrl, detailLink, readerMarkdown } from "../../src/github/core/markdown.ts";
 import { PREVIEW_CLOSE_MS, PREVIEW_OPEN_MS, parsePreview } from "../../src/github/core/preview.ts";
 import { parsePullDetail } from "../../src/github/core/pull-detail.ts";
+import { parseThreads, threadRow } from "../../src/github/core/review-threads.ts";
 import { DetailMetadata, labels, people } from "../../src/github/views/detail.ts";
+import { FileDiff } from "../../src/github/views/diff.ts";
 import { ChangedFiles } from "../../src/github/views/files.ts";
 import { previewCard } from "../../src/github/views/preview.ts";
 import { Reader } from "../../src/github/views/reader.ts";
+import { ReviewThreads } from "../../src/github/views/review-threads.ts";
 import issue from "../fixtures/issue-plugin-13.json";
 import pull from "../fixtures/pull-cli-14974.json";
 import pullComments from "../fixtures/pull-cli-14974-comments.json";
 import pullIssue from "../fixtures/pull-cli-14974-issue.json";
 import pullReviews from "../fixtures/pull-cli-14974-reviews.json";
 import filePages from "../fixtures/pull-plugin-35-files.json";
+import inlinePages from "../fixtures/pull-plugin-35-inline.json";
+import threadPages from "../fixtures/pull-plugin-35-threads.json";
 import events from "../fixtures/timeline-plugin-13.json";
 
 function expectEqual(actual: string, expected: string, what: string): void {
@@ -29,6 +35,8 @@ const imageLinks = (markdown: string): string => readerMarkdown(markdown, "https
 export default class Smoke extends View {
 	readers: Reader[] = [];
 	files: ChangedFiles | null = null;
+	threadDiff = new FileDiff();
+	discussions: ReviewThreads | null = null;
 
 	init(_props: unknown, cx: AsyncContext): void {
 		// The readers' own init: the issue page's comment box (TextareaState) must be creatable in QuickJS.
@@ -42,6 +50,21 @@ export default class Smoke extends View {
 
 		const files = parseFiles(filePages.flat()).map((file, index) => ({ ...file, viewed: index === 0 }));
 		const fileRef = { kind: "pr", repo: "lw396/herdr-plugin-github", number: 35 } as const;
+		this.threadDiff.init();
+		this.discussions = new ReviewThreads(fileRef, "center");
+		this.discussions.threads = parseThreads(
+			threadPages.data.repository.pullRequest.reviewThreads
+				.nodes as import("../../src/github/core/review-threads.ts").ThreadNode[],
+			inlinePages.flat(),
+			"https://github.com/lw396/herdr-plugin-github/pull/35",
+		);
+		const threadFile = files.find((file) => file.path === "docs/pr-fixture.md")!;
+		expectEqual(
+			String(threadRow(parsePatch(threadFile.patch ?? ""), this.discussions.threads[0]!)),
+			"3",
+			"thread RIGHT anchor in QuickJS",
+		);
+		this.threadDiff.jump(4502780899);
 		for (const path of ["src/github/core/time.ts", "docs/adr/0005-one-repository-renamed.md"]) {
 			const reader = new Reader();
 			reader.init(cx);
@@ -146,6 +169,12 @@ export default class Smoke extends View {
 			.children(this.readers.map((reader) => div().flex_1().child(reader.render(cx))))
 			.children(this.metadataSamples())
 			.child(this.files?.render(cx) ?? div())
+			.child(
+				this.threadDiff.render(
+					this.files!.files!.find((file) => file.path === "docs/pr-fixture.md")!,
+					this.discussions ?? undefined,
+				),
+			)
 			.child(
 				HoverCard.new("smoke-hover")
 					.open_delay(PREVIEW_OPEN_MS)

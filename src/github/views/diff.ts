@@ -1,8 +1,10 @@
-// A fixed-height unified diff: the native virtual list asks JavaScript only for visible rows.
-import { h_flex, Scrollbar, v_flex, v_virtual_list } from "gpui-base";
+// Virtualized code rows and fixed-height, independently scrollable discussion cards.
+import { h_flex, Scrollbar, VirtualListScrollHandle, v_flex, v_virtual_list } from "gpui-base";
 import { div, type Element } from "gpui-kit";
 import { type DiffLine, parsePatch } from "../core/diff.ts";
 import type { ChangedFile } from "../core/files.ts";
+import { type ReviewThread, threadRow } from "../core/review-threads.ts";
+import type { ReviewThreads } from "./review-threads.ts";
 import { colors, link } from "./ui.ts";
 
 const ROW_HEIGHT = 22;
@@ -11,8 +13,17 @@ export class FileDiff {
 	private file: ChangedFile | null = null;
 	private rows: DiffLine[] = [];
 	private width = 0;
+	private scroll: VirtualListScrollHandle | null = null;
+	private target: number | null = null;
 
-	render(file: ChangedFile): Element {
+	init(): void {
+		this.scroll = VirtualListScrollHandle.new();
+	}
+	jump(comment: number | null): void {
+		this.target = comment;
+	}
+
+	render(file: ChangedFile, discussions?: ReviewThreads): Element {
 		const t = colors();
 		if (this.file !== file) {
 			this.file = file;
@@ -21,6 +32,38 @@ export class FileDiff {
 			this.width = this.rows.reduce((width, row) => Math.max(width, row.text.length * 16 + 152), 240);
 		}
 		const rows = this.rows;
+		// Build interactive cards now: native deferred renderers cannot register handlers.
+		const items: { key: string; height: number; element?: Element; line?: DiffLine; commentIds?: number[] }[] = [];
+		const threads = (discussions?.threads ?? []).filter((thread) => thread.path === file.path);
+		const anchors = new Map<number | null, ReviewThread[]>();
+		for (const thread of threads) {
+			const row = threadRow(rows, thread);
+			const group = anchors.get(row) ?? [];
+			group.push(thread);
+			anchors.set(row, group);
+		}
+		const appendThreads = (row: number | null) => {
+			for (const thread of anchors.get(row) ?? []) {
+				items.push({
+					key: thread.id,
+					height: 340,
+					element: discussions!.card(thread, row === null),
+					commentIds: thread.comments.map((c) => c.id),
+				});
+			}
+		};
+		rows.forEach((row, index) => {
+			items.push({ key: `line-${index}`, height: ROW_HEIGHT, line: row });
+			appendThreads(index);
+		});
+		appendThreads(null);
+		if (this.target !== null) {
+			const index = items.findIndex((item) => item.commentIds?.includes(this.target!));
+			if (index >= 0) {
+				this.scroll?.scroll_to_item(index, "center");
+				this.target = null;
+			}
+		}
 		const id = `pull-diff-${file.path}`;
 		const header = v_flex()
 			.flex_none()
@@ -43,7 +86,7 @@ export class FileDiff {
 				el.child(div().text_size(12).text_color(t.dim).child(`Renamed from ${file.previousPath}`)),
 			);
 		const body =
-			rows.length > 0
+			items.length > 0
 				? div()
 						.flex_1()
 						.min_h(0)
@@ -57,11 +100,12 @@ export class FileDiff {
 								.child(
 									v_virtual_list(
 										id,
-										rows.length,
-										ROW_HEIGHT,
-										(index) => String(index),
-										(range) => rows.slice(range.start, range.end).map(diffRow),
+										items.length,
+										items.map((item) => item.height),
+										(index) => items[index]!.key,
+										(range) => items.slice(range.start, range.end).map((item) => item.element ?? diffRow(item.line!)),
 									)
+										.when(this.scroll !== null, (el) => el.track_scroll(this.scroll!))
 										.h_full()
 										.w_full()
 										.min_w(this.width),
@@ -76,7 +120,22 @@ export class FileDiff {
 								? "No textual changes in this file. Open it on GitHub to view the full file."
 								: "GitHub did not provide a patch for this file (it may be binary or too large). Open it on GitHub to view the changes.",
 						);
-		return v_flex().flex_1().min_h(0).min_w(0).overflow_hidden().child(header).child(body);
+		return v_flex()
+			.flex_1()
+			.min_h(0)
+			.min_w(0)
+			.overflow_hidden()
+			.child(header)
+			.when(Boolean(discussions), (el) => el.child(discussions!.status()))
+			.when(!file.patch && items.length > 0, (el) =>
+				el.child(
+					div()
+						.p(12)
+						.text_color(t.dim)
+						.child("GitHub did not provide a patch for this file. Discussions are shown below."),
+				),
+			)
+			.child(body);
 	}
 }
 

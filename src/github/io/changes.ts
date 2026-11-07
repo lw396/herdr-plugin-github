@@ -12,6 +12,8 @@ export interface Notice {
 	state?: IssueChange;
 	/** Re-read this PR's viewed-file state, only on the machine that performed the write. */
 	files?: { on: string | null };
+	/** Re-read discussions through the same machine/account, without sharing private review data. */
+	threads?: { on: string | null };
 }
 
 /**

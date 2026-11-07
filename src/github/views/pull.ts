@@ -27,6 +27,7 @@ import {
 } from "./detail.ts";
 import { FileDiff } from "./diff.ts";
 import { ChangedFiles } from "./files.ts";
+import { ReviewThreads } from "./review-threads.ts";
 import { button, colors, link, PULL_STATES } from "./ui.ts";
 
 interface Loaded {
@@ -51,6 +52,11 @@ export class Pull {
 	files: ChangedFiles | null = null;
 	private selected: string | null = null;
 	private diff = new FileDiff();
+	private discussions: ReviewThreads | null = null;
+
+	init(): void {
+		this.diff.init();
+	}
 	private readonly host: DetailHost;
 	private metadata = new DetailMetadata();
 
@@ -63,13 +69,16 @@ export class Pull {
 		this.ref = ref;
 		this.entry = null;
 		this.files = null;
+		this.discussions = null;
+		this.diff.jump(null);
 		this.selected = null;
 		this.load(cx);
 	}
 
 	/** A sidebar file command changes this view even when the PR identity did not change. */
-	select(cx: Context, path: string | null): void {
+	select(cx: Context, path: string | null, comment: number | null = null): void {
 		this.selected = path;
+		this.diff.jump(comment);
 		if (path !== null) this.files?.load(cx);
 		cx.notify();
 	}
@@ -78,6 +87,8 @@ export class Pull {
 		const ref = this.ref;
 		const place = detailLocation(this.host.reader);
 		if (!ref || !place || !this.host.active("pr")) return;
+		this.discussions ??= new ReviewThreads(ref, place.on);
+		this.discussions.load(cx);
 		this.files ??= new ChangedFiles(`reader-${this.host.reader}`, ref, place.on, (cx, path) => this.select(cx, path));
 		if (this.selected !== null) this.files.load(cx, true);
 		const entry: Loaded = { pull: this.entry?.pull, loading: true, projectsLoading: false };
@@ -114,6 +125,7 @@ export class Pull {
 
 	render(cx: Context, layout: DetailLayout): Element[] {
 		this.files?.sync(cx);
+		this.discussions?.sync(cx);
 		const ref = this.ref;
 		const entry = this.entry;
 		if (!ref) return [detailEmpty("pr")];
@@ -166,8 +178,33 @@ export class Pull {
 							),
 						),
 				)
-				.child(this.diff.render(file));
-		const failure = this.files?.failure;
+				.child(this.diff.render(file, this.discussions ?? undefined));
+		if (
+			this.selected &&
+			this.files?.files &&
+			this.discussions?.threads.some((thread) => thread.path === this.selected)
+		) {
+			return v_flex()
+				.flex_1()
+				.min_h(0)
+				.child(quiet("This file is no longer in the changed-files list. Its discussions are shown below."))
+				.child(
+					this.diff.render(
+						{
+							path: this.selected,
+							previousPath: null,
+							status: "unchanged",
+							additions: 0,
+							deletions: 0,
+							patch: null,
+							viewed: false,
+							url: this.entry?.pull?.url ?? `https://github.com/${this.ref?.repo}/pull/${this.ref?.number}`,
+						},
+						this.discussions,
+					),
+				);
+		}
+		const failure = this.files?.failure ?? this.discussions?.failure;
 		const message =
 			failure ??
 			(this.files?.loading
@@ -214,7 +251,11 @@ export class Pull {
 							item.discussion.map((d) =>
 								v_flex()
 									.gap(6)
-									.child(div().text_size(12).child(d.path))
+									.child(
+										button(`inline-jump-${d.comment.id}`, d.path, "Open discussion in diff", (_e, cx) =>
+											this.select(cx, d.path, d.comment.id),
+										).text_color(t.accent),
+									)
 									.when(Boolean(d.snippet), (el) => el.child(div().text_size(12).child(d.snippet)))
 									.child(postCard(`inline-${d.comment.id}`, d.comment, "commented", onLink)),
 							),

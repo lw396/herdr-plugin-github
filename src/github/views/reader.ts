@@ -49,6 +49,7 @@ export class Reader implements Role {
 
 	init(cx: AsyncContext): void {
 		this.issue.init(cx);
+		this.pull.init();
 		cx.spawn(async (cx) => {
 			for (;;) {
 				const ref = detailCommand(await nextCommand(), this.reader);
