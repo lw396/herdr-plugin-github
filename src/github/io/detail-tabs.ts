@@ -149,6 +149,12 @@ export function detailLocation(id: string): { pane: string; on: string | null; v
 	};
 }
 
+/** Close a reader that received no item, never an unrelated focused pane or a hidden pending tab. */
+export function closeEmptyDetail(id: string): void {
+	const location = detailLocation(id);
+	if (location?.visible) run("pane.close", { pane: location.pane });
+}
+
 /** Mod commands are broadcast: only the intended reader may accept this issue or PR. */
 export function detailCommand(command: string, id: string): DetailTarget | null {
 	if (!command.startsWith(COMMAND)) return null;

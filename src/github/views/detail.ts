@@ -33,22 +33,9 @@ export function openLink(cx: Context, host: DetailHost, url: string, page: strin
 	}
 }
 
-/** Nothing to show yet: the tab was restored after a restart, or its item hasn't arrived. */
-export function detailEmpty(kind: DetailKind): Element {
-	const t = colors();
-	const hint = `Choose ${kind === "pr" ? "a" : "an"} ${NOUN[kind]} in the GitHub sidebar. ${Noun(kind)} details are not restored after restarting Herdr.`;
-	return v_flex()
-		.flex_1()
-		.gap(8)
-		.items_center()
-		.justify_center()
-		.p(24)
-		.child(
-			div()
-				.font_semibold()
-				.child(`${Noun(kind)} details`),
-		)
-		.child(div().text_size(13).text_color(t.dim).text_center().child(hint));
+/** Leave the reader blank during its handshake; readers without an item close automatically. */
+export function detailEmpty(_kind: DetailKind): Element {
+	return div().flex_1();
 }
 
 /** Back, the title with its number (opens the browser) and copy, and refresh. */

@@ -53,7 +53,7 @@ Focus a terminal in your repository, select **GitHub** in the sidebar, and click
 
 Issues can be read, commented on, closed and reopened. Pull requests can be listed, their descriptions and comments read, and their changed files viewed as read-only unified diffs; submitting reviews is in progress. Creating or editing issues and pull requests is left to the browser or to `gh`.
 
-Images are shown as browser links rather than loaded automatically. Open issue and PR contents are session-only: after restarting Herdr or hot-reloading the mod, select the item from the sidebar to load it again.
+Images are shown as browser links rather than loaded automatically. Open issue and PR contents are session-only: after restarting Herdr or hot-reloading the mod, empty detail panes close automatically after a short wait. Select the item from the sidebar to open it again.
 
 Linked Projects require the appropriate GitHub permissions. If Projects cannot be read, the reader displays `None yet`, with the reason available in its tooltip.
 

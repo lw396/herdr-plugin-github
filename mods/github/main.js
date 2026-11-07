@@ -442,6 +442,10 @@ function detailLocation(id) {
     visible: Boolean(space.active && tab.active && !all2.some((p) => p.zoomed && p.pane !== pane.pane))
   };
 }
+function closeEmptyDetail(id) {
+  const location2 = detailLocation(id);
+  if (location2?.visible) run2("pane.close", { pane: location2.pane });
+}
 function detailCommand(command, id) {
   if (!command.startsWith(COMMAND)) return null;
   try {
@@ -11296,12 +11300,8 @@ function openLink(cx, host, url, page) {
     if (external) cx.open_url(external);
   }
 }
-function detailEmpty(kind) {
-  const t = colors();
-  const hint = `Choose ${kind === "pr" ? "a" : "an"} ${NOUN[kind]} in the GitHub sidebar. ${Noun(kind)} details are not restored after restarting Herdr.`;
-  return v_flex4().flex_1().gap(8).items_center().justify_center().p(24).child(
-    div8().font_semibold().child(`${Noun(kind)} details`)
-  ).child(div8().text_size(13).text_color(t.dim).text_center().child(hint));
+function detailEmpty(_kind) {
+  return div8().flex_1();
 }
 function detailHeader(host, ref, shown, refresh) {
   const t = colors();
@@ -11985,6 +11985,7 @@ var Reader = class {
   pull;
   layout = "compact";
   reader;
+  checkingEmpty = false;
   constructor() {
     this.reader = typeof props3()?.reader === "string" ? props3().reader : "";
     const navigation = this.navigation;
@@ -12028,6 +12029,13 @@ var Reader = class {
   }
   render(cx) {
     if (this.reader) readyDetail(this.reader);
+    if (!this.navigation.ref && !this.checkingEmpty && detailLocation(this.reader)?.visible) {
+      this.checkingEmpty = true;
+      cx.timer.after(1e3, () => {
+        this.checkingEmpty = false;
+        if (!this.navigation.ref) closeEmptyDetail(this.reader);
+      });
+    }
     const t = colors();
     const kind = this.navigation.ref?.kind ?? this.initial();
     return v_flex8().id("reader").size_full().min_h(0).overflow_hidden().bg(t.background).text_color(t.foreground).text_size(14).on_size_change((size, cx2) => {

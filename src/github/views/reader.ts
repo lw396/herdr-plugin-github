@@ -4,7 +4,7 @@ import { v_flex } from "gpui-base";
 import type { AsyncContext, Context, Element } from "gpui-kit";
 import { nextCommand, props } from "herdr";
 import { DetailNavigation, type DetailRef } from "../core/detail.ts";
-import { detailCommand, navigatedDetail, readyDetail } from "../io/detail-tabs.ts";
+import { closeEmptyDetail, detailCommand, detailLocation, navigatedDetail, readyDetail } from "../io/detail-tabs.ts";
 import type { DetailHost, DetailLayout } from "./detail.ts";
 import { Issue } from "./issue.ts";
 import { Pull } from "./pull.ts";
@@ -21,6 +21,7 @@ export class Reader implements Role {
 	pull: Pull;
 	layout: DetailLayout = "compact";
 	private readonly reader: string;
+	private checkingEmpty = false;
 
 	constructor() {
 		this.reader = typeof props()?.reader === "string" ? props().reader : "";
@@ -69,6 +70,15 @@ export class Reader implements Role {
 
 	render(cx: Context): Element {
 		if (this.reader) readyDetail(this.reader);
+		// A newly created tab needs its readiness handshake before the sidebar can deliver the item.
+		// Restored readers have no session-only item to deliver; discard their empty pane instead.
+		if (!this.navigation.ref && !this.checkingEmpty && detailLocation(this.reader)?.visible) {
+			this.checkingEmpty = true;
+			cx.timer.after(1000, () => {
+				this.checkingEmpty = false;
+				if (!this.navigation.ref) closeEmptyDetail(this.reader);
+			});
+		}
 		const t = colors();
 		const kind = this.navigation.ref?.kind ?? this.initial();
 		return v_flex()
