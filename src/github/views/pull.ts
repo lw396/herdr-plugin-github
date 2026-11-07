@@ -50,7 +50,6 @@ export class Pull {
 	entry: Loaded | null = null;
 	files: ChangedFiles | null = null;
 	private selected: string | null = null;
-	private filesExpanded = false;
 	private diff = new FileDiff();
 	private readonly host: DetailHost;
 	private metadata = new DetailMetadata();
@@ -65,13 +64,13 @@ export class Pull {
 		this.entry = null;
 		this.files = null;
 		this.selected = null;
-		this.filesExpanded = false;
 		this.load(cx);
 	}
 
 	/** A sidebar file command changes this view even when the PR identity did not change. */
 	select(cx: Context, path: string | null): void {
 		this.selected = path;
+		if (path !== null) this.files?.load(cx);
 		cx.notify();
 	}
 
@@ -80,7 +79,7 @@ export class Pull {
 		const place = detailLocation(this.host.reader);
 		if (!ref || !place || !this.host.active("pr")) return;
 		this.files ??= new ChangedFiles(`reader-${this.host.reader}`, ref, place.on, (cx, path) => this.select(cx, path));
-		this.files.load(cx, true);
+		if (this.selected !== null) this.files.load(cx, true);
 		const entry: Loaded = { pull: this.entry?.pull, loading: true, projectsLoading: false };
 		this.entry = entry;
 		cx.spawn(async (cx) => {
@@ -122,52 +121,23 @@ export class Pull {
 			detailHeader(this.host, ref, { title: pull?.title, url: pull?.url, loading: Boolean(entry?.loading) }, (cx) =>
 				this.load(cx),
 			),
-			this.navigation(),
+			...(this.selected !== null
+				? [
+						h_flex()
+							.flex_none()
+							.px(24)
+							.pb(8)
+							.child(
+								button("pull-description", "Description", "Show pull request description", (_e, cx) =>
+									this.select(cx, null),
+								).text_color(colors().accent),
+							),
+					]
+				: []),
 			this.selected !== null
 				? this.fileView()
 				: detailBody(ref, Boolean(entry?.loading), entry?.failure, pull ? this.document(pull, layout) : null),
 		];
-	}
-
-	private navigation(): Element {
-		const t = colors();
-		return v_flex()
-			.flex_none()
-			.min_w(0)
-			.px(24)
-			.pb(8)
-			.gap(6)
-			.child(
-				h_flex()
-					.gap(8)
-					.items_center()
-					.flex_wrap()
-					.child(
-						button("pull-description", "Description", "Show pull request description", (_e, cx) =>
-							this.select(cx, null),
-						).text_color(this.selected === null ? t.accent : t.dim),
-					)
-					.child(
-						button(
-							"pull-files",
-							`${this.filesExpanded ? "▾" : "▸"} Files changed${this.files?.files ? ` (${this.files.files.length})` : ""}`,
-							"Show changed files",
-							(_e, cx) => {
-								this.filesExpanded = !this.filesExpanded;
-								cx.notify();
-							},
-						),
-					),
-			)
-			.when(this.filesExpanded && this.files !== null, (el) =>
-				el.child(
-					div()
-						.id("pull-files-navigation")
-						.max_h(240)
-						.overflow_y_scroll()
-						.child(this.files?.render(this.selected) ?? div()),
-				),
-			);
 	}
 
 	private fileView(): Element {
@@ -178,7 +148,7 @@ export class Pull {
 			failure ??
 			(this.files?.loading
 				? "Loading changed files…"
-				: "This file is not in the changed-files list. Choose another file or refresh.");
+				: "This file is not in the changed-files list. Choose another file in the GitHub sidebar or refresh.");
 		return v_flex()
 			.flex_1()
 			.min_h(0)

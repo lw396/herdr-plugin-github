@@ -10776,7 +10776,7 @@ var GroupList = class {
       button(`${id}-open-${kind}-${row.number}`, "\u2197", "Open in browser", (_e, cx) => cx.open_url(row.url))
     ];
     const disclosure = this.source.disclosure?.(row, key);
-    const frame = h_flex2().id(`${id}-${kind}-${row.number}`).h(28).px(8).pl(22).gap(8).items_center().rounded(6).cursor_pointer().hover((s) => s.bg(t.hover)).on_mouse_down("left", stop).on_click((_e, cx) => {
+    const frame = h_flex2().id(`${id}-${kind}-${row.number}`).h(28).px(8).pl(disclosure ? 14 : 22).gap(disclosure ? 6 : 8).items_center().rounded(6).cursor_pointer().hover((s) => s.bg(t.hover)).on_mouse_down("left", stop).on_click((_e, cx) => {
       const r = this.host.ready();
       if (r) this.host.open(cx, { kind: id, repo: `${r.remote.owner}/${r.remote.repo}`, number: row.number });
     }).on_hover((h, cx) => {
@@ -10919,7 +10919,7 @@ var ChangedFiles = class {
       const folded = this.folded.has(node2.path);
       const status2 = node2.kind === "file" ? STATUS[node2.file.status] ?? STATUS.changed : null;
       const tip = node2.kind === "file" ? `${node2.path}${node2.file.previousPath ? ` \u2190 ${node2.file.previousPath}` : ""} \xB7 ${status2?.label} \xB7 +${node2.file.additions} \u2212${node2.file.deletions}` : node2.path;
-      const row = h_flex3().id(`${this.id}-${node2.kind}-${node2.path}`).h(26).min_w(0).pl(8 + depth * 12).pr(6).gap(6).items_center().cursor_pointer().hover((s) => s.bg(t.hover)).when(!folder2 && selected === node2.path, (el) => el.bg(t.selected)).tooltip(tip).accessibility_label(tip).on_mouse_down("left", stop).on_click((_e, cx) => {
+      const row = h_flex3().id(`${this.id}-${node2.kind}-${node2.path}`).h(26).min_w(0).pl(4 + depth * 8).pr(6).gap(4).items_center().cursor_pointer().hover((s) => s.bg(t.hover)).when(!folder2 && selected === node2.path, (el) => el.bg(t.selected)).tooltip(tip).accessibility_label(tip).on_mouse_down("left", stop).on_click((_e, cx) => {
         cx.stop_propagation();
         if (folder2) {
           if (folded) this.folded.delete(node2.path);
@@ -10984,11 +10984,11 @@ function pullList(host) {
           if (state.expanded) state.files.load(cx);
           cx.notify();
         }
-      ).flex_none();
+      ).px(2).flex_none();
     },
     expandedRow: (pull, key) => {
       const state = disclosure(pull, key);
-      return state?.expanded ? div6().pl(24).child(state.files.render()) : null;
+      return state?.expanded ? div6().pl(16).child(state.files.render()) : null;
     },
     cells: (pull) => {
       const state = PULL_STATES[pull.state];
@@ -11807,7 +11807,6 @@ var Pull = class {
   entry = null;
   files = null;
   selected = null;
-  filesExpanded = false;
   diff = new FileDiff();
   host;
   metadata = new DetailMetadata();
@@ -11820,12 +11819,12 @@ var Pull = class {
     this.entry = null;
     this.files = null;
     this.selected = null;
-    this.filesExpanded = false;
     this.load(cx);
   }
   /** A sidebar file command changes this view even when the PR identity did not change. */
   select(cx, path) {
     this.selected = path;
+    if (path !== null) this.files?.load(cx);
     cx.notify();
   }
   load(cx) {
@@ -11833,7 +11832,7 @@ var Pull = class {
     const place = detailLocation(this.host.reader);
     if (!ref || !place || !this.host.active("pr")) return;
     this.files ??= new ChangedFiles(`reader-${this.host.reader}`, ref, place.on, (cx2, path) => this.select(cx2, path));
-    this.files.load(cx, true);
+    if (this.selected !== null) this.files.load(cx, true);
     const entry = { pull: this.entry?.pull, loading: true, projectsLoading: false };
     this.entry = entry;
     cx.spawn(async (cx2) => {
@@ -11877,43 +11876,24 @@ var Pull = class {
         { title: pull?.title, url: pull?.url, loading: Boolean(entry?.loading) },
         (cx) => this.load(cx)
       ),
-      this.navigation(),
+      ...this.selected !== null ? [
+        h_flex8().flex_none().px(24).pb(8).child(
+          button(
+            "pull-description",
+            "Description",
+            "Show pull request description",
+            (_e, cx) => this.select(cx, null)
+          ).text_color(colors().accent)
+        )
+      ] : [],
       this.selected !== null ? this.fileView() : detailBody(ref, Boolean(entry?.loading), entry?.failure, pull ? this.document(pull, layout2) : null)
     ];
-  }
-  navigation() {
-    const t = colors();
-    return v_flex7().flex_none().min_w(0).px(24).pb(8).gap(6).child(
-      h_flex8().gap(8).items_center().flex_wrap().child(
-        button(
-          "pull-description",
-          "Description",
-          "Show pull request description",
-          (_e, cx) => this.select(cx, null)
-        ).text_color(this.selected === null ? t.accent : t.dim)
-      ).child(
-        button(
-          "pull-files",
-          `${this.filesExpanded ? "\u25BE" : "\u25B8"} Files changed${this.files?.files ? ` (${this.files.files.length})` : ""}`,
-          "Show changed files",
-          (_e, cx) => {
-            this.filesExpanded = !this.filesExpanded;
-            cx.notify();
-          }
-        )
-      )
-    ).when(
-      this.filesExpanded && this.files !== null,
-      (el) => el.child(
-        div11().id("pull-files-navigation").max_h(240).overflow_y_scroll().child(this.files?.render(this.selected) ?? div11())
-      )
-    );
   }
   fileView() {
     const file = this.files?.files?.find((f) => f.path === this.selected);
     if (file) return this.diff.render(file);
     const failure = this.files?.failure;
-    const message = failure ?? (this.files?.loading ? "Loading changed files\u2026" : "This file is not in the changed-files list. Choose another file or refresh.");
+    const message = failure ?? (this.files?.loading ? "Loading changed files\u2026" : "This file is not in the changed-files list. Choose another file in the GitHub sidebar or refresh.");
     return v_flex7().flex_1().min_h(0).p(24).gap(8).child(
       div11().text_color(failure ? colors().blocked : colors().dim).child(message)
     ).when(

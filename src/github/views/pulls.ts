@@ -54,11 +54,13 @@ export function pullList(host: ListHost): GroupList<PullCategory, Pull, PullGrou
 					if (state.expanded) state.files.load(cx);
 					cx.notify();
 				},
-			).flex_none();
+			)
+				.px(2)
+				.flex_none();
 		},
 		expandedRow: (pull, key) => {
 			const state = disclosure(pull, key);
-			return state?.expanded ? div().pl(24).child(state.files.render()) : null;
+			return state?.expanded ? div().pl(16).child(state.files.render()) : null;
 		},
 		cells: (pull) => {
 			const state = PULL_STATES[pull.state];
