@@ -112,7 +112,8 @@ export class Pull {
 		});
 	}
 
-	render(layout: DetailLayout): Element[] {
+	render(cx: Context, layout: DetailLayout): Element[] {
+		this.files?.sync(cx);
 		const ref = this.ref;
 		const entry = this.entry;
 		if (!ref) return [detailEmpty("pr")];
@@ -142,7 +143,30 @@ export class Pull {
 
 	private fileView(): Element {
 		const file = this.files?.files?.find((f) => f.path === this.selected);
-		if (file) return this.diff.render(file);
+		if (file)
+			return v_flex()
+				.flex_1()
+				.min_h(0)
+				.child(
+					h_flex()
+						.px(16)
+						.gap(8)
+						.items_center()
+						.child(this.files!.viewedButton(file))
+						.child(
+							div()
+								.text_size(12)
+								.child(file.viewed ? "Viewed" : "Not viewed"),
+						)
+						.when(Boolean(this.files?.failure), (el) =>
+							el.child(
+								div()
+									.text_color(colors().blocked)
+									.child(this.files?.failure ?? ""),
+							),
+						),
+				)
+				.child(this.diff.render(file));
 		const failure = this.files?.failure;
 		const message =
 			failure ??

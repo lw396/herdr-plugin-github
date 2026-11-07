@@ -8,6 +8,7 @@ export interface ChangedFile {
 	deletions: number;
 	patch: string | null;
 	url: string;
+	viewed: boolean;
 }
 
 export interface FileEntry {
@@ -27,14 +28,18 @@ export type FileNode = FileEntry | DirectoryEntry;
 const byPath = (a: { path: string }, b: { path: string }): number => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0);
 
 /** A flat list keeps the full path visible; the source array remains in GitHub's order. */
-export function flatFiles(files: ChangedFile[]): FileEntry[] {
-	return files.map((file): FileEntry => ({ kind: "file", name: file.path, path: file.path, file })).sort(byPath);
+export function flatFiles(files: ChangedFile[], hideViewed = false): FileEntry[] {
+	return files
+		.filter((f) => !hideViewed || !f.viewed)
+		.map((file): FileEntry => ({ kind: "file", name: file.path, path: file.path, file }))
+		.sort(byPath);
 }
 
 /** Compact directory chains only: a file is always its own selectable row. */
-export function fileTree(files: ChangedFile[]): FileNode[] {
+export function fileTree(files: ChangedFile[], hideViewed = false): FileNode[] {
 	const root: FileNode[] = [];
 	for (const file of files) {
+		if (hideViewed && file.viewed) continue;
 		const parts = file.path.split("/");
 		let children = root;
 		let path = "";
@@ -87,5 +92,6 @@ export function parseFiles(data: unknown): ChangedFile[] {
 		deletions: f.deletions,
 		patch: f.patch ?? null,
 		url: f.blob_url,
+		viewed: false,
 	}));
 }

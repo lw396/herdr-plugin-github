@@ -12,6 +12,7 @@ import {
 	pullGroupQuery,
 } from "../core/pulls.ts";
 import type { RemoteRepo } from "../core/remote.ts";
+import { announce } from "./changes.ts";
 import { api, graphql } from "./gh.ts";
 import type { LocalBranches } from "./git.ts";
 
@@ -56,7 +57,70 @@ export async function readPull(repo: string, number: number, on: string | null):
 
 /** All changed-file pages; GitHub may omit a patch (binary, too large, or a pure rename). */
 export async function readPullFiles(repo: string, number: number, on: string | null): Promise<ChangedFile[]> {
-	return parseFiles(await api(`repos/${repo}/pulls/${number}/files?per_page=100`, { on, paginate: true }));
+	const files = parseFiles(await api(`repos/${repo}/pulls/${number}/files?per_page=100`, { on, paginate: true }));
+	const { viewed } = await readPullViewed(repo, number, on);
+	const paths = new Set(viewed);
+	return files.map((file) => ({ ...file, viewed: paths.has(file.path) }));
+}
+
+/** GitHub invalidates viewed marks after a file changes (DISMISSED, not VIEWED). */
+export async function readPullViewed(
+	repo: string,
+	number: number,
+	on: string | null,
+): Promise<{ id: string; viewed: string[] }> {
+	const [owner, name] = repo.split("/");
+	const viewed: string[] = [];
+	let after: string | null = null;
+	let id = "";
+	for (;;) {
+		const data: {
+			repository: {
+				pullRequest: {
+					id: string;
+					files: {
+						nodes: { path: string; viewerViewedState: string }[];
+						pageInfo: { hasNextPage: boolean; endCursor: string | null };
+					};
+				} | null;
+			} | null;
+		} = await graphql(
+			{
+				query:
+					"query($owner:String!,$repo:String!,$number:Int!,$after:String){repository(owner:$owner,name:$repo){pullRequest(number:$number){id files(first:100,after:$after){nodes{path viewerViewedState} pageInfo{hasNextPage endCursor}}}}}",
+				variables: { owner: owner ?? "", repo: name ?? "", number, after },
+			},
+			on,
+		);
+		const pull = data?.repository?.pullRequest;
+		if (!pull) throw new Error("GitHub did not return the pull request's viewed-file states.");
+		id = pull.id;
+		viewed.push(...pull.files.nodes.filter((f) => f.viewerViewedState === "VIEWED").map((f) => f.path));
+		if (!pull.files.pageInfo.hasNextPage) return { id, viewed };
+		const next = pull.files.pageInfo.endCursor;
+		if (!next || next === after) throw new Error("GitHub did not return the next viewed-files page.");
+		after = next;
+	}
+}
+
+/** A write is never retried: a dropped reply may still have marked the file on GitHub. */
+export async function setPullFileViewed(
+	repo: string,
+	number: number,
+	path: string,
+	viewed: boolean,
+	on: string | null,
+): Promise<void> {
+	const { id } = await readPullViewed(repo, number, on);
+	const operation = viewed ? "markFileAsViewed" : "unmarkFileAsViewed";
+	await graphql(
+		{
+			query: `mutation($id:ID!,$path:String!){${operation}(input:{pullRequestId:$id,path:$path}){pullRequest{id}}}`,
+			variables: { id, path },
+		},
+		on,
+	);
+	announce({ repo, number, files: { on } });
 }
 
 /** The local branches' latest PRs, in one batch. */

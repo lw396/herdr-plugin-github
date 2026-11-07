@@ -10310,12 +10310,13 @@ async function localBranches(remote2, { cwd, on }) {
 
 // src/github/core/files.ts
 var byPath = (a, b) => a.path < b.path ? -1 : a.path > b.path ? 1 : 0;
-function flatFiles(files) {
-  return files.map((file) => ({ kind: "file", name: file.path, path: file.path, file })).sort(byPath);
+function flatFiles(files, hideViewed = false) {
+  return files.filter((f) => !hideViewed || !f.viewed).map((file) => ({ kind: "file", name: file.path, path: file.path, file })).sort(byPath);
 }
-function fileTree(files) {
+function fileTree(files, hideViewed = false) {
   const root = [];
   for (const file of files) {
+    if (hideViewed && file.viewed) continue;
     const parts = file.path.split("/");
     let children = root;
     let path = "";
@@ -10353,7 +10354,8 @@ function parseFiles(data) {
     additions: f.additions,
     deletions: f.deletions,
     patch: f.patch ?? null,
-    url: f.blob_url
+    url: f.blob_url,
+    viewed: false
   }));
 }
 
@@ -10505,7 +10507,45 @@ async function readPull(repo, number, on) {
   return detail;
 }
 async function readPullFiles(repo, number, on) {
-  return parseFiles(await api(`repos/${repo}/pulls/${number}/files?per_page=100`, { on, paginate: true }));
+  const files = parseFiles(await api(`repos/${repo}/pulls/${number}/files?per_page=100`, { on, paginate: true }));
+  const { viewed } = await readPullViewed(repo, number, on);
+  const paths = new Set(viewed);
+  return files.map((file) => ({ ...file, viewed: paths.has(file.path) }));
+}
+async function readPullViewed(repo, number, on) {
+  const [owner, name] = repo.split("/");
+  const viewed = [];
+  let after = null;
+  let id = "";
+  for (; ; ) {
+    const data = await graphql(
+      {
+        query: "query($owner:String!,$repo:String!,$number:Int!,$after:String){repository(owner:$owner,name:$repo){pullRequest(number:$number){id files(first:100,after:$after){nodes{path viewerViewedState} pageInfo{hasNextPage endCursor}}}}}",
+        variables: { owner: owner ?? "", repo: name ?? "", number, after }
+      },
+      on
+    );
+    const pull = data?.repository?.pullRequest;
+    if (!pull) throw new Error("GitHub did not return the pull request's viewed-file states.");
+    id = pull.id;
+    viewed.push(...pull.files.nodes.filter((f) => f.viewerViewedState === "VIEWED").map((f) => f.path));
+    if (!pull.files.pageInfo.hasNextPage) return { id, viewed };
+    const next = pull.files.pageInfo.endCursor;
+    if (!next || next === after) throw new Error("GitHub did not return the next viewed-files page.");
+    after = next;
+  }
+}
+async function setPullFileViewed(repo, number, path, viewed, on) {
+  const { id } = await readPullViewed(repo, number, on);
+  const operation = viewed ? "markFileAsViewed" : "unmarkFileAsViewed";
+  await graphql(
+    {
+      query: `mutation($id:ID!,$path:String!){${operation}(input:{pullRequestId:$id,path:$path}){pullRequest{id}}}`,
+      variables: { id, path }
+    },
+    on
+  );
+  announce({ repo, number, files: { on } });
 }
 async function localPulls(remote2, { branches, head }, on) {
   if (branches.length === 0) return [];
@@ -11010,17 +11050,17 @@ var GroupList = class {
       }
     });
   }
-  render() {
-    return this.source.groups.map((spec) => this.group(spec));
+  render(cx) {
+    return this.source.groups.map((spec) => this.group(spec, cx));
   }
   /** A foldable group: its title and count, then (unfolded) why it failed, its rows and Load more. */
-  group({ kind, title, empty }) {
+  group({ kind, title, empty }, cx) {
     const t = colors();
     const id = this.source.kind;
     const g = this.groups[kind];
     const page = g.page;
     const rows = page?.rows ?? [];
-    const heading = h_flex4().id(`${id}-group-${kind}`).h(26).px(8).gap(6).items_center().rounded(6).text_size(12).text_color(t.dim).cursor_pointer().hover((s) => s.bg(t.hover)).on_mouse_down("left", stop).on_click((_e, cx) => this.toggle(cx, kind)).accessibility_label(`${g.expanded ? "Fold" : "Unfold"} ${title}`).child(
+    const heading = h_flex4().id(`${id}-group-${kind}`).h(26).px(8).gap(6).items_center().rounded(6).text_size(12).text_color(t.dim).cursor_pointer().hover((s) => s.bg(t.hover)).on_mouse_down("left", stop).on_click((_e, cx2) => this.toggle(cx2, kind)).accessibility_label(`${g.expanded ? "Fold" : "Unfold"} ${title}`).child(
       div5().w(10).flex_none().child(g.expanded ? "\u25BE" : "\u25B8")
     ).child(div5().font_medium().child(title)).child(div5().child(page ? String(page.total) : "")).when(g.expanded && g.loading, (el) => el.child(spinner()));
     const failure = h_flex4().px(8).pl(22).py(2).gap(6).items_center().text_size(12).child(div5().flex_none().size(6).rounded(3).bg(t.blocked)).child(
@@ -11028,23 +11068,23 @@ var GroupList = class {
     ).when(
       !g.loading,
       (el) => el.child(
-        button(`${id}-retry-${kind}`, "Retry", `Load ${title} again`, (_e, cx) => {
-          this.loadGroup(cx, kind, true);
-          cx.notify();
+        button(`${id}-retry-${kind}`, "Retry", `Load ${title} again`, (_e, cx2) => {
+          this.loadGroup(cx2, kind, true);
+          cx2.notify();
         })
       )
     );
-    const more = h_flex4().id(`${id}-more-${kind}`).h(26).px(8).pl(22).gap(6).items_center().rounded(6).text_size(12).text_color(t.dim).cursor_pointer().hover((s) => s.bg(t.hover).text_color(t.foreground)).on_mouse_down("left", stop).on_click((_e, cx) => this.more(cx, kind)).child(g.loadingMore ? "Loading\u2026" : `Load more (${(page?.total ?? 0) - rows.length} left)`).when(g.loadingMore, (el) => el.child(spinner()));
+    const more = h_flex4().id(`${id}-more-${kind}`).h(26).px(8).pl(22).gap(6).items_center().rounded(6).text_size(12).text_color(t.dim).cursor_pointer().hover((s) => s.bg(t.hover).text_color(t.foreground)).on_mouse_down("left", stop).on_click((_e, cx2) => this.more(cx2, kind)).child(g.loadingMore ? "Loading\u2026" : `Load more (${(page?.total ?? 0) - rows.length} left)`).when(g.loadingMore, (el) => el.child(spinner()));
     return v_flex3().gap(1).child(heading).when(
       g.expanded,
       (el) => el.when(g.failure !== void 0 && !g.failure.notFound, (el2) => el2.child(failure)).when(
         page !== void 0 && rows.length === 0,
         (el2) => el2.child(div5().px(8).pl(22).py(4).text_size(12).text_color(t.dim).child(empty))
-      ).children(rows.map((row) => this.row(kind, row))).when(Boolean(page?.more), (el2) => el2.child(more))
+      ).children(rows.map((row) => this.row(kind, row, cx))).when(Boolean(page?.more), (el2) => el2.child(more))
     );
   }
   /** A row's frame: click opens it; the pointer over it swaps its end for Copy and Open in browser. */
-  row(kind, row) {
+  row(kind, row, cx) {
     const t = colors();
     const id = this.source.kind;
     const key = `${kind}#${row.number}`;
@@ -11056,27 +11096,27 @@ var GroupList = class {
         `${id}-copy-${kind}-${row.number}`,
         "#",
         `Copy #${row.number}`,
-        (_e, cx) => cx.write_to_clipboard(`#${row.number}`)
+        (_e, cx2) => cx2.write_to_clipboard(`#${row.number}`)
       ),
-      button(`${id}-open-${kind}-${row.number}`, "\u2197", "Open in browser", (_e, cx) => cx.open_url(row.url))
+      button(`${id}-open-${kind}-${row.number}`, "\u2197", "Open in browser", (_e, cx2) => cx2.open_url(row.url))
     ];
     const disclosure = this.source.disclosure?.(row, key);
-    const frame = h_flex4().id(`${id}-${kind}-${row.number}`).h(28).px(8).pl(disclosure ? 14 : 22).gap(disclosure ? 6 : 8).items_center().rounded(6).cursor_pointer().hover((s) => s.bg(t.hover)).on_mouse_down("left", stop).on_click((_e, cx) => {
+    const frame = h_flex4().id(`${id}-${kind}-${row.number}`).h(28).px(8).pl(disclosure ? 14 : 22).gap(disclosure ? 6 : 8).items_center().rounded(6).cursor_pointer().hover((s) => s.bg(t.hover)).on_mouse_down("left", stop).on_click((_e, cx2) => {
       const r = this.host.ready();
-      if (r) this.host.open(cx, { kind: id, repo: `${r.remote.owner}/${r.remote.repo}`, number: row.number });
-    }).on_hover((h, cx) => {
+      if (r) this.host.open(cx2, { kind: id, repo: `${r.remote.owner}/${r.remote.repo}`, number: row.number });
+    }).on_hover((h, cx2) => {
       if (h) this.hovered = key;
       else if (this.hovered === key) this.hovered = null;
-      this.previews.hover(cx, `${key}-${contextKey}`, h ? ref : null, ready, () => {
+      this.previews.hover(cx2, `${key}-${contextKey}`, h ? ref : null, ready, () => {
         const live = this.host.ready();
         if (!live || !ref || this.hovered !== key || !this.host.asking()) return false;
         const target = { ...ref, repo: `${live.remote.owner}/${live.remote.repo}` };
         return previewKey(target, live.on, live.login) === contextKey;
       });
-      cx.notify();
+      cx2.notify();
     }).children(disclosure ? [disclosure] : []).children([...this.source.cells(row), ...this.hovered === key ? actions : this.source.idle(row)]);
     const card = ready && ref ? this.previews.wrap(`${id}-${key}`, frame, ref, ready) : frame;
-    const expanded = this.source.expandedRow?.(row, key);
+    const expanded = this.source.expandedRow?.(row, key, cx);
     return expanded ? v_flex3().child(card).child(expanded) : card;
   }
 };
@@ -11130,6 +11170,10 @@ var ChangedFiles = class {
   loading = false;
   failure = null;
   flat = false;
+  hideViewed = false;
+  filtered = false;
+  notices = new Notices();
+  writing = /* @__PURE__ */ new Set();
   folded = /* @__PURE__ */ new Set();
   latest = 0;
   source = null;
@@ -11164,12 +11208,41 @@ var ChangedFiles = class {
       }
     });
   }
-  render(selected = null) {
+  /** Shared write notices carry no account-specific data: each view reads using its own gh. */
+  sync(cx) {
+    if (this.notices.take().some((n) => n.repo === this.ref.repo && n.number === this.ref.number && n.files?.on === this.on)) {
+      this.load(cx, true);
+    }
+  }
+  viewedButton(file) {
+    const pending = this.writing.has(file.path);
+    const label = file.viewed ? "Mark File As Not Viewed" : "Mark File As Viewed";
+    return button(`${this.id}-viewed-${file.path}`, pending ? "Saving\u2026" : file.viewed ? "\u2713" : "\u25CB", label, (_e, cx) => {
+      if (this.writing.has(file.path) || this.loading) return;
+      this.writing.add(file.path);
+      this.failure = null;
+      cx.notify();
+      cx.spawn(async (cx2) => {
+        try {
+          await setPullFileViewed(this.ref.repo, this.ref.number, file.path, !file.viewed, this.on);
+          this.sync(cx2);
+        } catch (e) {
+          this.failure = failureOf(e).message;
+        } finally {
+          this.writing.delete(file.path);
+          cx2.notify();
+        }
+      });
+    }).text_color(file.viewed ? colors().done : colors().dim);
+  }
+  render(cx, selected = null) {
+    this.sync(cx);
     const t = colors();
-    if (this.source !== this.files) {
+    if (this.source !== this.files || this.filtered !== this.hideViewed) {
       this.source = this.files;
-      this.tree = fileTree(this.files ?? []);
-      this.list = flatFiles(this.files ?? []);
+      this.filtered = this.hideViewed;
+      this.tree = fileTree(this.files ?? [], this.hideViewed);
+      this.list = flatFiles(this.files ?? [], this.hideViewed);
     }
     return v_flex4().min_w(0).gap(2).child(
       h_flex5().gap(6).items_center().child(
@@ -11179,15 +11252,25 @@ var ChangedFiles = class {
           `${this.id}-mode`,
           this.flat ? "Tree" : "List",
           this.flat ? "View as Tree" : "View as List",
-          (_e, cx) => {
+          (_e, cx2) => {
             this.flat = !this.flat;
-            cx.notify();
+            cx2.notify();
           }
         )
       ).child(
-        button(`${this.id}-refresh`, "\u21BB", "Refresh changed files", (_e, cx) => {
-          this.load(cx, true);
-          cx.notify();
+        button(
+          `${this.id}-hide-viewed`,
+          this.hideViewed ? "Show" : "Hide",
+          "Toggle Hide Viewed Files",
+          (_e, cx2) => {
+            this.hideViewed = !this.hideViewed;
+            cx2.notify();
+          }
+        )
+      ).child(
+        button(`${this.id}-refresh`, "\u21BB", "Refresh changed files", (_e, cx2) => {
+          this.load(cx2, true);
+          cx2.notify();
         })
       )
     ).when(this.loading, (el) => el.child(h_flex5().gap(6).child(spinner()).child("Loading changed files\u2026"))).when(
@@ -11196,13 +11279,16 @@ var ChangedFiles = class {
         v_flex4().gap(4).child(
           div7().text_size(12).text_color(t.blocked).child(this.failure ?? "")
         ).child(
-          button(`${this.id}-retry`, "Retry", "Load changed files again", (_e, cx) => {
-            this.load(cx, true);
-            cx.notify();
+          button(`${this.id}-retry`, "Retry", "Load changed files again", (_e, cx2) => {
+            this.load(cx2, true);
+            cx2.notify();
           })
         )
       )
-    ).when(this.files?.length === 0, (el) => el.child(div7().text_color(t.dim).child("No changed files"))).children(this.nodes(this.flat ? this.list : this.tree, selected, 0));
+    ).when(this.files?.length === 0, (el) => el.child(div7().text_color(t.dim).child("No changed files"))).when(
+      Boolean(this.files?.length) && this.hideViewed && this.list.length === 0,
+      (el) => el.child(div7().text_color(t.dim).child("All files viewed"))
+    ).children(this.nodes(this.flat ? this.list : this.tree, selected, 0));
   }
   nodes(nodes, selected, depth) {
     const t = colors();
@@ -11220,7 +11306,7 @@ var ChangedFiles = class {
         } else this.open(cx, node2.path);
       }).child(
         div7().w(12).flex_none().text_color(t.dim).child(folder2 ? folded ? "\u25B8" : "\u25BE" : "")
-      ).child(div7().flex_1().min_w(0).truncate().text_size(12).child(node2.name)).when(
+      ).child(div7().flex_1().min_w(0).truncate().text_size(12).child(node2.name)).children(node2.kind === "file" ? [this.viewedButton(node2.file)] : []).when(
         status2 !== null,
         (el) => el.child(
           div7().flex_none().text_size(12).text_color(t[status2?.color ?? "dim"]).child(status2?.mark ?? "")
@@ -11278,9 +11364,9 @@ function pullList(host) {
         }
       ).px(2).flex_none();
     },
-    expandedRow: (pull, key) => {
+    expandedRow: (pull, key, cx) => {
       const state = disclosure(pull, key);
-      return state?.expanded ? div8().pl(16).child(state.files.render()) : null;
+      return state?.expanded ? div8().pl(16).child(state.files.render(cx)) : null;
     },
     cells: (pull) => {
       const state = PULL_STATES[pull.state];
@@ -11443,7 +11529,7 @@ var Panel = class {
     const t = colors();
     const overlay = props2()?.overlay;
     const noRemote = this.remote === null && !(this.account && !this.account.status.ok);
-    return v_flex5().id("github").size_full().min_h(0).overflow_hidden().bg(t.background).text_color(t.foreground).text_size(13).when(!overlay, (el) => el.rounded(10).border_1().border_color(t.border)).child(this.header(overlay, where.cwd ?? "no folder")).when(noRemote, (el) => el.child(this.noRemote(where.cwd))).when(!noRemote, (el) => el.child(this.tabs()).child(this.list())).child(this.statusCard(where.on, where.cwd));
+    return v_flex5().id("github").size_full().min_h(0).overflow_hidden().bg(t.background).text_color(t.foreground).text_size(13).when(!overlay, (el) => el.rounded(10).border_1().border_color(t.border)).child(this.header(overlay, where.cwd ?? "no folder")).when(noRemote, (el) => el.child(this.noRemote(where.cwd))).when(!noRemote, (el) => el.child(this.tabs()).child(this.list(cx))).child(this.statusCard(where.on, where.cwd));
   }
   /** The repository, then ↻ (Herdr's own spinner while anything loads, as its tab bar shows a working agent). */
   header(overlay, context) {
@@ -11504,7 +11590,7 @@ var Panel = class {
    * The shown tab's groups, or what stands in their place. A missing repository (404), gh or Issues turned off is
    * the same for every group: said once, in the list's place. Any other failure stays in its own group.
    */
-  list() {
+  list(cx) {
     const t = colors();
     const list2 = this.tab === "issues" ? this.issues : this.pulls;
     const notice = listNotice({
@@ -11514,7 +11600,7 @@ var Panel = class {
       failure: this.failure ?? list2.notFound
     });
     const problem = (text3) => div9().p(8).text_size(12).text_color(t.blocked).child(text3);
-    return v_flex5().id(`gh-list-${this.tab}`).flex_1().min_h(0).overflow_y_scroll().p(6).gap(4).when(this.openFailure !== null, (el) => el.child(problem(this.openFailure ?? ""))).when(notice !== null, (el) => el.child(problem(notice ?? ""))).when(!notice && this.ready() !== null, (el) => el.children(list2.render())).when(!notice && !this.ready() && this.loading, (el) => el.child(div9().p(8).text_color(t.dim).child("\u2026")));
+    return v_flex5().id(`gh-list-${this.tab}`).flex_1().min_h(0).overflow_y_scroll().p(6).gap(4).when(this.openFailure !== null, (el) => el.child(problem(this.openFailure ?? ""))).when(notice !== null, (el) => el.child(problem(notice ?? ""))).when(!notice && this.ready() !== null, (el) => el.children(list2.render(cx))).when(!notice && !this.ready() && this.loading, (el) => el.child(div9().p(8).text_color(t.dim).child("\u2026")));
   }
 };
 
@@ -12025,7 +12111,8 @@ var Pull = class {
       }
     });
   }
-  render(layout2) {
+  render(cx, layout2) {
+    this.files?.sync(cx);
     const ref = this.ref;
     const entry = this.entry;
     if (!ref) return [detailEmpty("pr")];
@@ -12035,7 +12122,7 @@ var Pull = class {
         this.host,
         ref,
         { title: pull?.title, url: pull?.url, loading: Boolean(entry?.loading) },
-        (cx) => this.load(cx)
+        (cx2) => this.load(cx2)
       ),
       ...this.selected !== null ? [
         h_flex9().flex_none().px(24).pb(8).child(
@@ -12043,7 +12130,7 @@ var Pull = class {
             "pull-description",
             "Description",
             "Show pull request description",
-            (_e, cx) => this.select(cx, null)
+            (_e, cx2) => this.select(cx2, null)
           ).text_color(colors().accent)
         )
       ] : [],
@@ -12052,7 +12139,17 @@ var Pull = class {
   }
   fileView() {
     const file = this.files?.files?.find((f) => f.path === this.selected);
-    if (file) return this.diff.render(file);
+    if (file)
+      return v_flex8().flex_1().min_h(0).child(
+        h_flex9().px(16).gap(8).items_center().child(this.files.viewedButton(file)).child(
+          div12().text_size(12).child(file.viewed ? "Viewed" : "Not viewed")
+        ).when(
+          Boolean(this.files?.failure),
+          (el) => el.child(
+            div12().text_color(colors().blocked).child(this.files?.failure ?? "")
+          )
+        )
+      ).child(this.diff.render(file));
     const failure = this.files?.failure;
     const message = failure ?? (this.files?.loading ? "Loading changed files\u2026" : "This file is not in the changed-files list. Choose another file in the GitHub sidebar or refresh.");
     return v_flex8().flex_1().min_h(0).p(24).gap(8).child(
@@ -12185,7 +12282,7 @@ var Reader = class {
         this.layout = layout2;
         cx2.notify();
       }
-    }).children(kind === "pr" ? this.pull.render(this.layout) : this.issue.render(cx, this.layout));
+    }).children(kind === "pr" ? this.pull.render(cx, this.layout) : this.issue.render(cx, this.layout));
   }
 };
 

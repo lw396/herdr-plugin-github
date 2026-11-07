@@ -10,6 +10,8 @@ export interface Notice {
 	number: number;
 	comment?: Comment;
 	state?: IssueChange;
+	/** Re-read this PR's viewed-file state, only on the machine that performed the write. */
+	files?: { on: string | null };
 }
 
 /**

@@ -58,9 +58,9 @@ export function pullList(host: ListHost): GroupList<PullCategory, Pull, PullGrou
 				.px(2)
 				.flex_none();
 		},
-		expandedRow: (pull, key) => {
+		expandedRow: (pull, key, cx) => {
 			const state = disclosure(pull, key);
-			return state?.expanded ? div().pl(16).child(state.files.render()) : null;
+			return state?.expanded ? div().pl(16).child(state.files.render(cx)) : null;
 		},
 		cells: (pull) => {
 			const state = PULL_STATES[pull.state];

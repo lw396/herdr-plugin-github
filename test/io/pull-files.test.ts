@@ -7,6 +7,10 @@ import { machine, reset } from "../fake-herdr.ts";
 afterEach(reset);
 const stdout = readFileSync(new URL("../fixtures/pull-plugin-35-files.json", import.meta.url), "utf8");
 const command = "~$ gh api repos/lw396/herdr-plugin-github/pulls/35/files?per_page=100 --paginate --slurp";
+const viewedQuery =
+	"query($owner:String!,$repo:String!,$number:Int!,$after:String){repository(owner:$owner,name:$repo){pullRequest(number:$number){id files(first:100,after:$after){nodes{path viewerViewedState} pageInfo{hasNextPage endCursor}}}}}";
+const viewedCommand = `~$ gh api graphql -F number=35 -F after=null -f query=${viewedQuery} -f owner=lw396 -f repo=herdr-plugin-github`;
+const viewedStdout = readFileSync(new URL("../fixtures/pull-plugin-35-viewed.json", import.meta.url), "utf8");
 
 test("a missing remote gh never falls back to local changed files", async () => {
 	machine("center", {});
@@ -20,7 +24,7 @@ test("a failed page read is an error rather than an empty file list", async () =
 });
 
 test("all changed-file pages are read on the PR machine, including a rename with no patch", async () => {
-	machine("center", { [command]: { stdout } });
+	machine("center", { [command]: { stdout }, [viewedCommand]: { stdout: viewedStdout } });
 	const files = await readPullFiles("lw396/herdr-plugin-github", 35, "center");
 	expect(files.map((f) => [f.path, f.status, f.previousPath])).toEqual([
 		["docs/adr/0005-one-repository-renamed.md", "renamed", "docs/adr/0005-one-repository.md"],
@@ -28,6 +32,7 @@ test("all changed-file pages are read on the PR machine, including a rename with
 		["docs/pr-fixture.md", "added", null],
 		["src/github/core/time.ts", "modified", null],
 	]);
+	expect(files.filter((f) => f.viewed).map((f) => f.path)).toEqual(["docs/pr-fixture.md"]);
 	expect(files[0]).toMatchObject({ patch: null, additions: 0, deletions: 0 });
 	expect(files[2]).toMatchObject({
 		additions: 3,

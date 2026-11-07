@@ -3,8 +3,9 @@ import { h_flex, v_flex } from "gpui-base";
 import { type Context, div, type Element } from "gpui-kit";
 import type { DetailRef } from "../core/detail.ts";
 import { type ChangedFile, type FileNode, fileTree, flatFiles } from "../core/files.ts";
+import { Notices } from "../io/changes.ts";
 import { failureOf } from "../io/gh.ts";
-import { readPullFiles } from "../io/pulls.ts";
+import { readPullFiles, setPullFileViewed } from "../io/pulls.ts";
 import { button, colors, spinner, stop } from "./ui.ts";
 
 const STATUS = {
@@ -22,6 +23,10 @@ export class ChangedFiles {
 	loading = false;
 	failure: string | null = null;
 	private flat = false;
+	private hideViewed = false;
+	private filtered = false;
+	private notices = new Notices();
+	private writing = new Set<string>();
 	private folded = new Set<string>();
 	private latest = 0;
 	private source: ChangedFile[] | null = null;
@@ -60,12 +65,47 @@ export class ChangedFiles {
 		});
 	}
 
-	render(selected: string | null = null): Element {
+	/** Shared write notices carry no account-specific data: each view reads using its own gh. */
+	sync(cx: Context): void {
+		if (
+			this.notices
+				.take()
+				.some((n) => n.repo === this.ref.repo && n.number === this.ref.number && n.files?.on === this.on)
+		) {
+			this.load(cx, true);
+		}
+	}
+
+	viewedButton(file: ChangedFile): Element {
+		const pending = this.writing.has(file.path);
+		const label = file.viewed ? "Mark File As Not Viewed" : "Mark File As Viewed";
+		return button(`${this.id}-viewed-${file.path}`, pending ? "Saving…" : file.viewed ? "✓" : "○", label, (_e, cx) => {
+			if (this.writing.has(file.path) || this.loading) return;
+			this.writing.add(file.path);
+			this.failure = null;
+			cx.notify();
+			cx.spawn(async (cx) => {
+				try {
+					await setPullFileViewed(this.ref.repo, this.ref.number, file.path, !file.viewed, this.on);
+					this.sync(cx);
+				} catch (e) {
+					this.failure = failureOf(e).message;
+				} finally {
+					this.writing.delete(file.path);
+					cx.notify();
+				}
+			});
+		}).text_color(file.viewed ? colors().done : colors().dim);
+	}
+
+	render(cx: Context, selected: string | null = null): Element {
+		this.sync(cx);
 		const t = colors();
-		if (this.source !== this.files) {
+		if (this.source !== this.files || this.filtered !== this.hideViewed) {
 			this.source = this.files;
-			this.tree = fileTree(this.files ?? []);
-			this.list = flatFiles(this.files ?? []);
+			this.filtered = this.hideViewed;
+			this.tree = fileTree(this.files ?? [], this.hideViewed);
+			this.list = flatFiles(this.files ?? [], this.hideViewed);
 		}
 		return v_flex()
 			.min_w(0)
@@ -88,6 +128,17 @@ export class ChangedFiles {
 							this.flat ? "View as Tree" : "View as List",
 							(_e, cx) => {
 								this.flat = !this.flat;
+								cx.notify();
+							},
+						),
+					)
+					.child(
+						button(
+							`${this.id}-hide-viewed`,
+							this.hideViewed ? "Show" : "Hide",
+							"Toggle Hide Viewed Files",
+							(_e, cx) => {
+								this.hideViewed = !this.hideViewed;
 								cx.notify();
 							},
 						),
@@ -119,6 +170,9 @@ export class ChangedFiles {
 				),
 			)
 			.when(this.files?.length === 0, (el) => el.child(div().text_color(t.dim).child("No changed files")))
+			.when(Boolean(this.files?.length) && this.hideViewed && this.list.length === 0, (el) =>
+				el.child(div().text_color(t.dim).child("All files viewed")),
+			)
 			.children(this.nodes(this.flat ? this.list : this.tree, selected, 0));
 	}
 
@@ -162,6 +216,7 @@ export class ChangedFiles {
 						.child(folder ? (folded ? "▸" : "▾") : ""),
 				)
 				.child(div().flex_1().min_w(0).truncate().text_size(12).child(node.name))
+				.children(node.kind === "file" ? [this.viewedButton(node.file)] : [])
 				.when(status !== null, (el) =>
 					el.child(
 						div()

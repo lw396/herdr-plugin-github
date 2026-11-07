@@ -212,7 +212,7 @@ export class Panel implements Role {
 				.when(!overlay, (el) => el.rounded(10).border_1().border_color(t.border))
 				.child(this.header(overlay, where.cwd ?? "no folder"))
 				.when(noRemote, (el) => el.child(this.noRemote(where.cwd)))
-				.when(!noRemote, (el) => el.child(this.tabs()).child(this.list()))
+				.when(!noRemote, (el) => el.child(this.tabs()).child(this.list(cx)))
 				// A fixed sibling of the scrolling list: Herdr already shows the branch, so this says who gh is and how fresh.
 				.child(this.statusCard(where.on, where.cwd))
 		);
@@ -352,7 +352,7 @@ export class Panel implements Role {
 	 * The shown tab's groups, or what stands in their place. A missing repository (404), gh or Issues turned off is
 	 * the same for every group: said once, in the list's place. Any other failure stays in its own group.
 	 */
-	private list(): Element {
+	private list(cx: Context): Element {
 		const t = colors();
 		const list = this.tab === "issues" ? this.issues : this.pulls;
 		const notice = listNotice({
@@ -371,7 +371,7 @@ export class Panel implements Role {
 			.gap(4)
 			.when(this.openFailure !== null, (el) => el.child(problem(this.openFailure ?? "")))
 			.when(notice !== null, (el) => el.child(problem(notice ?? "")))
-			.when(!notice && this.ready() !== null, (el) => el.children(list.render()))
+			.when(!notice && this.ready() !== null, (el) => el.children(list.render(cx)))
 			.when(!notice && !this.ready() && this.loading, (el) => el.child(div().p(8).text_color(t.dim).child("…")));
 	}
 }

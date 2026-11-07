@@ -96,6 +96,6 @@ export class Reader implements Role {
 					cx.notify();
 				}
 			})
-			.children(kind === "pr" ? this.pull.render(this.layout) : this.issue.render(cx, this.layout));
+			.children(kind === "pr" ? this.pull.render(cx, this.layout) : this.issue.render(cx, this.layout));
 	}
 }

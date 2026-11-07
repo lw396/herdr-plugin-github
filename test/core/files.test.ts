@@ -4,6 +4,21 @@ import pages from "../fixtures/pull-plugin-35-files.json";
 
 const files = parseFiles(pages.flat());
 
+test("hiding viewed files removes empty directories in both layouts without changing the source", () => {
+	const marked = files.map((f) => ({ ...f, viewed: f.path !== "src/github/core/time.ts" }));
+	expect(flatFiles(marked, true).map((n) => n.path)).toEqual(["src/github/core/time.ts"]);
+	expect(fileTree(marked, true)).toMatchObject([
+		{ kind: "directory", name: "src/github/core", children: [{ kind: "file", name: "time.ts" }] },
+	]);
+	expect(flatFiles(marked)).toHaveLength(4);
+	expect(
+		fileTree(
+			marked.map((f) => ({ ...f, viewed: true })),
+			true,
+		),
+	).toEqual([]);
+});
+
 test("directory trees merge single-child folders without swallowing the filename", () => {
 	const tree = fileTree(files);
 	expect(tree.map((n) => [n.kind, n.name, n.path])).toEqual([

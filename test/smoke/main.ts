@@ -40,7 +40,7 @@ export default class Smoke extends View {
 			reader.layout = "wide";
 		}
 
-		const files = parseFiles(filePages.flat());
+		const files = parseFiles(filePages.flat()).map((file, index) => ({ ...file, viewed: index === 0 }));
 		const fileRef = { kind: "pr", repo: "lw396/herdr-plugin-github", number: 35 } as const;
 		for (const path of ["src/github/core/time.ts", "docs/adr/0005-one-repository-renamed.md"]) {
 			const reader = new Reader();
@@ -145,7 +145,7 @@ export default class Smoke extends View {
 			.size_full()
 			.children(this.readers.map((reader) => div().flex_1().child(reader.render(cx))))
 			.children(this.metadataSamples())
-			.child(this.files?.render() ?? div())
+			.child(this.files?.render(cx) ?? div())
 			.child(
 				HoverCard.new("smoke-hover")
 					.open_delay(PREVIEW_OPEN_MS)
