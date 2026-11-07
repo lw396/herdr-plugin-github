@@ -10325,6 +10325,81 @@ function parsePullDetail(pull, issue, comments, reviews) {
   };
 }
 
+// src/github/core/pull-timeline.ts
+function pullTimeline(comments, events, reviews, inline, url) {
+  const result = comments.map((c) => ({ ...c, verb: "commented", discussion: [] }));
+  for (const r of reviews) {
+    if (!r.submitted_at || r.state === "PENDING") continue;
+    const all2 = inline;
+    const roots = all2.filter((c) => !c.in_reply_to_id && c.pull_request_review_id === r.id).sort((a, b) => a.created_at.localeCompare(b.created_at) || a.id - b.id);
+    const discussion = roots.flatMap((root) => [
+      root,
+      ...all2.filter((c) => c.in_reply_to_id === root.id).sort((a, b) => a.created_at.localeCompare(b.created_at) || a.id - b.id)
+    ]).map((c) => ({ comment: parseComment(c, url), path: c.path, snippet: c.in_reply_to_id ? "" : c.diff_hunk }));
+    const verbs = {
+      APPROVED: "approved these changes",
+      CHANGES_REQUESTED: "requested changes",
+      COMMENTED: "reviewed",
+      DISMISSED: "review dismissed"
+    };
+    result.push({
+      ...parseComment({ id: r.id, user: r.user, body: r.body, created_at: r.submitted_at }, url),
+      verb: verbs[r.state] ?? "reviewed",
+      discussion
+    });
+  }
+  for (const e of events) {
+    let verb = "";
+    let body = "";
+    const activity = parseActivity([e])[0];
+    if (activity) {
+      verb = activityText(activity);
+      body = "labels" in activity ? activity.labels.map((l) => l.name).join(", ") : "";
+    } else if (e.event === "committed") {
+      verb = "committed";
+      body = `${e.sha?.slice(0, 7) ?? ""} ${e.message ?? ""}`;
+    } else if (e.event === "head_ref_force_pushed") {
+      verb = "force-pushed the branch";
+      body = e.commit_id?.slice(0, 7) ?? "";
+    } else if (e.event === "merged") {
+      verb = "merged this";
+      body = e.commit_id?.slice(0, 7) ?? "";
+    } else if (e.event === "closed") verb = "closed this";
+    else if (e.event === "reopened") verb = "reopened this";
+    else continue;
+    result.push({
+      id: e.id ?? result.length,
+      author: e.actor ? login(e.actor) : e.author?.name ?? "deleted user",
+      createdAt: e.created_at ?? e.author?.date ?? "",
+      body,
+      markdown: readerMarkdown(body, url),
+      reactions: [],
+      verb,
+      discussion: []
+    });
+  }
+  return result.sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id - b.id);
+}
+function parseChecks(pages, statuses) {
+  const checks = pages.flatMap((p) => p.check_runs).map((c) => {
+    const seconds = c.started_at && c.completed_at ? Math.max(0, Math.floor((Date.parse(c.completed_at) - Date.parse(c.started_at)) / 1e3)) : null;
+    return {
+      id: `check-${c.id}`,
+      name: c.name,
+      status: c.conclusion ?? c.status,
+      duration: seconds === null ? "\u2014" : `${Math.floor(seconds / 60)}m ${seconds % 60}s`,
+      url: c.html_url
+    };
+  });
+  const seen = /* @__PURE__ */ new Set();
+  for (const s of statuses) {
+    if (seen.has(s.context)) continue;
+    seen.add(s.context);
+    checks.push({ id: `status-${s.id}`, name: s.context, status: s.state, duration: "\u2014", url: s.target_url ?? "" });
+  }
+  return checks;
+}
+
 // src/github/io/pulls.ts
 async function pullPage(kind, remote2, login2, on, after) {
   return parsePullGroup(await graphql(pullGroupQuery(kind, remote2, login2, after), on));
@@ -10337,7 +10412,23 @@ async function readPull(repo, number, on) {
     api(`repos/${repo}/issues/${number}/comments?per_page=100`, { on, paginate: true }),
     api(`repos/${repo}/pulls/${number}/reviews?per_page=100`, { on, paginate: true })
   ]);
-  return parsePullDetail(pull, issue, comments, reviews);
+  const detail = parsePullDetail(pull, issue, comments, reviews);
+  const sha = pull.head.sha;
+  const [events, inline, checks, statuses] = await Promise.all([
+    api(`repos/${repo}/issues/${number}/timeline?per_page=100`, { on, paginate: true }),
+    api(`repos/${repo}/pulls/${number}/comments?per_page=100`, { on, paginate: true }),
+    api(`repos/${repo}/commits/${sha}/check-runs?per_page=100`, { on, paginate: true }),
+    api(`repos/${repo}/commits/${sha}/statuses?per_page=100`, { on, paginate: true })
+  ]);
+  detail.timeline = pullTimeline(
+    detail.comments,
+    events,
+    reviews,
+    inline,
+    detail.url
+  );
+  detail.checks = parseChecks(Array.isArray(checks) ? checks : [checks], statuses);
+  return detail;
 }
 async function localPulls(remote2, { branches, head }, on) {
   if (branches.length === 0) return [];
@@ -11441,7 +11532,18 @@ var Pull = class {
       ],
       [
         postCard("pull-body", pull, "opened this pull request", onLink),
-        ...pull.comments.map((comment) => postCard(`pull-comment-${comment.id}`, comment, "commented", onLink))
+        ...(pull.timeline ?? []).map(
+          (item, index2) => v_flex5().gap(8).child(postCard(`pull-event-${index2}`, item, item.verb, onLink)).children(
+            item.discussion.map(
+              (d) => v_flex5().gap(6).child(div9().text_size(12).child(d.path)).when(Boolean(d.snippet), (el) => el.child(div9().text_size(12).child(d.snippet))).child(postCard(`inline-${d.comment.id}`, d.comment, "commented", onLink))
+            )
+          )
+        ),
+        v_flex5().gap(10).child(div9().font_semibold().child("Checks")).children(
+          (pull.checks ?? []).map(
+            (c) => c.url ? link(c.id, c.url, `${c.name} \xB7 ${c.status} \xB7 ${c.duration}`).text_color(t.accent) : quiet(`${c.name} \xB7 ${c.status} \xB7 ${c.duration}`)
+          )
+        )
       ],
       [
         ["Reviewers", this.reviewers(pull)],

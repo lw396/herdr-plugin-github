@@ -2,6 +2,7 @@
 import { type Comment, login, parseComments, parseReactions, type Reaction } from "./discussion.ts";
 import { type Label, parseLabel } from "./labels.ts";
 import { readerMarkdown } from "./markdown.ts";
+import type { PullCheck, PullTimelineItem } from "./pull-timeline.ts";
 import type { PullState } from "./pulls.ts";
 
 export type ReviewState = "requested" | "approved" | "changes_requested" | "commented" | "dismissed";
@@ -27,6 +28,8 @@ export interface PullDetail {
 	markdown: string;
 	reactions: Reaction[];
 	comments: Comment[];
+	timeline?: PullTimelineItem[];
+	checks?: PullCheck[];
 	reviewers: Reviewer[];
 }
 
