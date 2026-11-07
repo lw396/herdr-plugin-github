@@ -205,7 +205,8 @@ export class Pull {
 									.rounded(4)
 									.text_color(t.accent)
 									.hover((s) => s.bg(t.hover))
-									.tooltip(`Open ${ref.repo} #${ref.number} in browser`),
+									.tooltip(`Open ${ref.repo} #${ref.number} in browser`)
+									.accessibility_label(`Open #${ref.number} in browser`),
 							)
 							.child(
 								button("pull-copy", svg("mods/github/assets/copy.svg").size(16), "Copy pull request link", (_e, cx) =>

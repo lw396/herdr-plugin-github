@@ -1,12 +1,23 @@
 // Real gh 2.96 REST replies captured on center, 2026-11-07.
 import { afterEach, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
-import { PROJECTS_QUERY } from "../../src/github/core/projects.ts";
 import * as pulls from "../../src/github/io/pulls.ts";
 import { machine, reset } from "../fake-herdr.ts";
 
 afterEach(reset);
 const fixture = (name: string) => readFileSync(new URL(`../fixtures/${name}`, import.meta.url), "utf8");
+// Independent query specification: do not derive this from the issue query like production does.
+// https://docs.github.com/en/graphql/reference/objects#pullrequest
+const projectsQuery = `query($owner: String!, $name: String!, $number: Int!, $after: String) {
+  repository(owner: $owner, name: $name) {
+    pullRequest(number: $number) {
+      projectItems(first: 100, after: $after, includeArchived: true) {
+        pageInfo { hasNextPage endCursor }
+        nodes { project { title url } }
+      }
+    }
+  }
+}`;
 
 function replies(number: number) {
 	const prefix = `pull-cli-${number}`;
@@ -23,7 +34,7 @@ function replies(number: number) {
 }
 
 test("PR Projects load every page through the reader's machine", async () => {
-	const query = PROJECTS_QUERY.replace("issue(number:", "pullRequest(number:");
+	const query = projectsQuery;
 	const first = `~$ gh api graphql -F number=35 -F after=null -f query=${query} -f owner=lw396 -f name=herdr-plugin-github`;
 	const next = `~$ gh api graphql -F number=35 -f query=${query} -f owner=lw396 -f name=herdr-plugin-github -f after=next`;
 	// Schema-shaped: the live account lacks read:project (the next test records that failure).
@@ -51,7 +62,7 @@ test("PR Projects load every page through the reader's machine", async () => {
 });
 
 test("PR Projects use pullRequest, not an issue query, and lack of scope stays optional", async () => {
-	const query = PROJECTS_QUERY.replace("issue(number:", "pullRequest(number:");
+	const query = projectsQuery;
 	const asked = `~$ gh api graphql -F number=35 -F after=null -f query=${query} -f owner=lw396 -f name=herdr-plugin-github`;
 	machine("center", { [asked]: JSON.parse(fixture("projects-denied.json")) });
 	expect(await pulls.readPullProjects("lw396/herdr-plugin-github", 35, "center")).toEqual({

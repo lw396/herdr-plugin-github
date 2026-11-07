@@ -18,7 +18,7 @@ The mod uses GitHub CLI (`gh`) on the machine hosting the repository, so local a
 - **Comment, close and reopen** — post a new comment (⌘/Ctrl+Enter) or close and reopen an issue from its tab; the sidebar's groups update at once.
 - **Issue and PR metadata** — view colored labels, assignees, linked Projects, and milestones. PR descriptions also show reviewers with their review states and the source and target branches.
 - **Activity timeline** — see label and assignment changes between comments in chronological order.
-- **Quick actions** — refresh an issue, copy its URL, or open it in your browser.
+- **Quick actions** — refresh an issue or PR, copy its URL, or open it in your browser.
 
 ## Requirements
 
@@ -45,13 +45,13 @@ Then switch to the included layout:
 herdr-app do layout.switch '{"name":"github"}'
 ```
 
-Focus a terminal in your repository, select **GitHub** in the sidebar, and click an issue to open its discussion. The included layout adds the GitHub sidebar tab and GitHub-aware pane headers.
+Focus a terminal in your repository, select **GitHub** in the sidebar, and click an issue to open its discussion, or switch to **Pull Requests** and select a PR to read its description. The included layout adds the GitHub sidebar tab and GitHub-aware pane headers.
 
 ## Current scope
 
 Issues can be read, commented on, closed and reopened. Pull requests can be listed and their descriptions and comments read; diff and review are in progress. Creating or editing issues and pull requests is left to the browser or to `gh`.
 
-Images are shown as browser links rather than loaded automatically. Open issue contents are session-only: after restarting Herdr or hot-reloading the mod, select an issue from the sidebar to load it again.
+Images are shown as browser links rather than loaded automatically. Open issue and PR contents are session-only: after restarting Herdr or hot-reloading the mod, select the item from the sidebar to load it again.
 
 Linked Projects require the appropriate GitHub permissions. If Projects cannot be read, the reader displays `None yet`, with the reason available in its tooltip.
 

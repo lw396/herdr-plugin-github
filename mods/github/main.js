@@ -11582,7 +11582,7 @@ var Pull = class {
         div8().min_w(0).font_semibold().child(this.entry?.pull?.title ?? "Pull request details")
       ).child(
         h_flex6().gap(2).items_center().flex_none().child(
-          link("pull-browser", url, `#${ref.number}`).px(2).rounded(4).text_color(t.accent).hover((s) => s.bg(t.hover)).tooltip(`Open ${ref.repo} #${ref.number} in browser`)
+          link("pull-browser", url, `#${ref.number}`).px(2).rounded(4).text_color(t.accent).hover((s) => s.bg(t.hover)).tooltip(`Open ${ref.repo} #${ref.number} in browser`).accessibility_label(`Open #${ref.number} in browser`)
         ).child(
           button(
             "pull-copy",
