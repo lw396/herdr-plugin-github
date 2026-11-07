@@ -1,5 +1,7 @@
 // The Pull Requests tab: its groups (the VS Code extension's categories), their rows and pages.
 
+import type { RemoteRepo } from "./remote.ts";
+
 export type PullState = "open" | "draft" | "merged" | "closed";
 
 /** One row: `#number title` (draft in italics) `by @author`, with a state icon. */
@@ -13,8 +15,8 @@ export interface Pull {
 	url: string;
 }
 
-/** The groups, in the extension's order; more join with #23 and #24. */
-export type PullGroupKind = "all";
+/** The groups: Waiting For My Review, Created By Me, All Open (Local Pull Request Branches joins with #24). */
+export type PullGroupKind = "review" | "mine" | "all";
 
 /** A group's loaded pages, and where the next page starts. */
 export interface PullGroup {
@@ -27,19 +29,44 @@ export interface PullGroup {
 /** Rows per page: the first page, and each Load more. */
 const PAGE = 30;
 
+const ROW = "number title url updatedAt isDraft state author { login }";
+
 /** All Open: the repository's open PRs, most recently updated first (no search request: ADR 0006). */
 export const ALL_OPEN_QUERY = `query($owner: String!, $name: String!, $after: String) {
   repository(owner: $owner, name: $name) {
     pullRequests(first: ${PAGE}, after: $after, states: OPEN, orderBy: {field: UPDATED_AT, direction: DESC}) {
       totalCount
       pageInfo { hasNextPage endCursor }
-      nodes { number title url updatedAt isDraft state author { login } }
+      nodes { ${ROW} }
     }
   }
 }`;
 
-/** Each group's query: a group without one cannot be asked by mistake. */
-export const PULL_QUERIES: Record<PullGroupKind, string> = { all: ALL_OPEN_QUERY };
+/** The groups that depend on the account: a search, as the extension's categories are (one request per page). */
+export const SEARCH_QUERY = `query($q: String!, $after: String) {
+  search(query: $q, type: ISSUE, first: ${PAGE}, after: $after) {
+    issueCount
+    pageInfo { hasNextPage endCursor }
+    nodes { ... on PullRequest { ${ROW} } }
+  }
+}`;
+
+/** The extension's queries for its categories, with the gh account's login for ${user}. */
+export function pullSearch(kind: "review" | "mine", remote: RemoteRepo, login: string): string {
+	const who = kind === "review" ? `review-requested:${login}` : `author:${login}`;
+	return `repo:${remote.owner}/${remote.repo} is:pr is:open ${who} sort:updated-desc`;
+}
+
+/** A group's page request: its query and variables (`after` null: the first page). */
+export function pullRequest(
+	kind: PullGroupKind,
+	remote: RemoteRepo,
+	login: string,
+	after: string | null,
+): { query: string; variables: Record<string, string | null> } {
+	if (kind === "all") return { query: ALL_OPEN_QUERY, variables: { owner: remote.owner, name: remote.repo, after } };
+	return { query: SEARCH_QUERY, variables: { q: pullSearch(kind, remote, login), after } };
+}
 
 interface PullNode {
 	number: number;
@@ -51,15 +78,15 @@ interface PullNode {
 	author: { login: string } | null;
 }
 
-interface PullsData {
-	repository: {
-		pullRequests: {
-			totalCount: number;
-			pageInfo: { hasNextPage: boolean; endCursor: string | null };
-			nodes: PullNode[];
-		};
-	};
+interface Connection {
+	pageInfo: { hasNextPage: boolean; endCursor: string | null };
+	nodes: PullNode[];
 }
+
+/** All Open's reply, or a search's. */
+type PullsData =
+	| { repository: { pullRequests: Connection & { totalCount: number } } }
+	| { search: Connection & { issueCount: number } };
 
 function stateOf(n: PullNode): PullState {
 	if (n.state === "MERGED") return "merged";
@@ -69,12 +96,14 @@ function stateOf(n: PullNode): PullState {
 
 /** A group query's `data` as rows. */
 export function parsePullGroup(data: unknown): PullGroup {
-	const { pullRequests } = (data as PullsData).repository;
+	const d = data as PullsData;
+	const [list, total] =
+		"search" in d ? [d.search, d.search.issueCount] : [d.repository.pullRequests, d.repository.pullRequests.totalCount];
 	return {
-		total: pullRequests.totalCount,
-		more: pullRequests.pageInfo.hasNextPage,
-		cursor: pullRequests.pageInfo.endCursor,
-		pulls: pullRequests.nodes.map((n) => ({
+		total,
+		more: list.pageInfo.hasNextPage,
+		cursor: list.pageInfo.endCursor,
+		pulls: list.nodes.map((n) => ({
 			number: n.number,
 			title: n.title,
 			author: n.author?.login ?? null,

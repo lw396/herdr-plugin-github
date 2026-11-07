@@ -3,7 +3,7 @@
 import { expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { appendPullPage, parsePullGroup } from "../../src/github/core/pulls.ts";
+import { appendPullPage, parsePullGroup, pullSearch } from "../../src/github/core/pulls.ts";
 
 const data = (name: string): unknown =>
 	(JSON.parse(readFileSync(join(import.meta.dir, "../fixtures", name), "utf8")) as { data: unknown }).data;
@@ -43,4 +43,23 @@ test("Load more appends the next page; a PR that moved up between loads is not s
 	expect(both.more).toBe(false);
 	const again = appendPullPage(first, { ...second, pulls: [first.pulls[0]!, ...second.pulls] });
 	expect(again.pulls).toHaveLength(59);
+});
+
+test("Waiting For My Review and Created By Me search the repository's open PRs for the gh account, newest update first", () => {
+	const r = { remote: "upstream", host: "github.com", owner: "cli", repo: "cli" };
+	expect(pullSearch("review", r, "babakks")).toBe(
+		"repo:cli/cli is:pr is:open review-requested:babakks sort:updated-desc",
+	);
+	expect(pullSearch("mine", r, "lw396")).toBe("repo:cli/cli is:pr is:open author:lw396 sort:updated-desc");
+});
+
+test("a search reply parses into the same rows as a repository list", () => {
+	expect(parsePullGroup(data("pulls-mine-plugin.json"))).toMatchObject({
+		total: 2,
+		more: false,
+		pulls: [
+			{ number: 36, state: "draft", author: "lw396" },
+			{ number: 35, state: "open", author: "lw396" },
+		],
+	});
 });

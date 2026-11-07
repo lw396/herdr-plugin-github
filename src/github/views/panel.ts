@@ -22,11 +22,12 @@ import * as gh from "../io/gh.ts";
 import { listChanges } from "../io/issues.ts";
 import * as known from "../io/known.ts";
 import { sidebarVisible } from "../io/visibility.ts";
-import { PullList } from "./pulls.ts";
+import { GroupList, type GroupSpec, type Ready } from "./groups.ts";
+import { pullList } from "./pulls.ts";
 import { button, colors, type Role, spinner, stop } from "./ui.ts";
 
 /** The Issues tab's groups, in order: title, and what an empty one says. */
-const GROUPS: { kind: GroupKind; title: string; empty: string }[] = [
+const GROUPS: GroupSpec<GroupKind>[] = [
 	// One word like the others; the empty text says whose.
 	{ kind: "assigned", title: "Assigned", empty: "No open issues assigned to you." },
 	{ kind: "open", title: "Open", empty: "No open issues." },
@@ -40,15 +41,6 @@ const TABS: { id: SidebarTab; label: string }[] = [
 	{ id: "prs", label: "Pull Requests" },
 ];
 
-/** One group as the sidebar shows it: folded or not, and this place's loaded pages. */
-interface Group {
-	expanded: boolean;
-	page: IssueGroup | undefined;
-	loading: boolean;
-	loadingMore: boolean;
-	failure: Failure | undefined;
-}
-
 export class Panel implements Role {
 	/** The place shown (locationKey()), and which refresh is the latest: older ones drop their results. */
 	context: string | null = null;
@@ -58,22 +50,35 @@ export class Panel implements Role {
 	remote: RemoteRepo | null | undefined;
 	failure: Failure | undefined;
 	loading = false;
-	/** Folded groups ask for nothing; which are expanded stays as the place changes. */
-	groups: Record<GroupKind, Group> = {
-		assigned: { expanded: true, page: undefined, loading: false, loadingMore: false, failure: undefined },
-		open: { expanded: false, page: undefined, loading: false, loadingMore: false, failure: undefined },
-		closed: { expanded: false, page: undefined, loading: false, loadingMore: false, failure: undefined },
-	};
-	/** The tab shown; each keeps its own state (Issues' folded groups and pages) while the other is shown. */
+	/** The tab shown; each keeps its own state (folded groups and pages) while the other is shown. */
 	tab: SidebarTab = "issues";
-	/** The row under the pointer ("<kind>#<number>"): it shows its actions. */
-	hovered: string | null = null;
 	details = new DetailTabs();
 	openFailure: string | null = null;
-	/** The Pull Requests tab's groups; they load only while that tab is shown. */
-	pulls = new PullList({
+	/** The Issues tab's groups. Folded groups ask for nothing; which are expanded stays as the place changes. */
+	issues = new GroupList<GroupKind, IssueGroup, Issue>({
+		id: "issue",
+		groups: GROUPS,
+		expanded: ["assigned"],
 		ready: () => this.ready(),
 		run: () => this.latest,
+		asking: () => this.isVisible(),
+		peek: (kind, r) => known.peekGroup(kind, r.remote, r.login, r.on),
+		ask: (kind, r, force) => known.group(kind, r.remote, r.login, r.on, force),
+		more: (kind, r, loaded) => known.more(kind, r.remote, r.login, r.on, loaded),
+		rows: (page) => page.issues,
+		key: (issue) => issue.number,
+		open: (cx, issue) => this.openIssue(cx, issue),
+		cells: (kind, issue, hovered) => issueCells(kind, issue, hovered),
+		// Retry a failed refresh next tick even if the list itself has not changed.
+		failed: () => {
+			this.etag = null;
+		},
+	});
+	/** The Pull Requests tab's groups; they load only while that tab is shown. */
+	pulls = pullList({
+		ready: () => this.ready(),
+		run: () => this.latest,
+		asking: () => this.isVisible(),
 		details: this.details,
 		openFailed: (message) => {
 			this.openFailure = message;
@@ -102,7 +107,7 @@ export class Panel implements Role {
 	}
 
 	/** Only a changed list re-asks expanded groups. A shown/explicit refresh asks even on 304. */
-	private check(cx: Context, refresh = false): void {
+	private check(cx: Context, refresh = false, asked = false): void {
 		const r = this.ready(),
 			run = this.latest;
 		if (!r || !this.isVisible() || this.checking) return;
@@ -124,11 +129,11 @@ export class Panel implements Role {
 				if (current()) this.failure = gh.failureOf(e);
 			} finally {
 				if (current()) {
-					if (changed || refresh) {
-						for (const { kind } of GROUPS) this.load(cx, kind, true);
-					}
+					if (changed || refresh) this.issues.load(cx, true);
 					// PR lists have their own change check later (#34); a refresh asks the shown tab's groups now.
-					if (refresh && this.tab === "prs") this.pulls.load(cx, true);
+					// Two of them are searches (30 a minute for the whole account, ADR 0006): kept pages under a minute
+					// old are reused, and only ↻ asks them all again.
+					if (refresh && this.tab === "prs") this.pulls.load(cx, asked);
 					// Every finished check redraws: the footer shows a failed check and its recovery.
 					cx.notify();
 				}
@@ -138,7 +143,7 @@ export class Panel implements Role {
 	}
 
 	/** The gh account's login on the folder's machine and the remote, once both are known and usable. */
-	ready(): { remote: RemoteRepo; login: string; on: string | null } | null {
+	ready(): Ready | null {
 		const status = this.account?.status;
 		return this.remote && status?.ok && this.account
 			? { remote: this.remote, login: status.user, on: this.account.on }
@@ -146,14 +151,14 @@ export class Panel implements Role {
 	}
 
 	/** Shows what is known about the focused place at once, then asks for what is stale (all of it when `force`, ↻). */
-	refresh(cx: Context, force = false): void {
+	refresh(cx: Context, force = false, asked = false): void {
 		const where = location(),
 			run = ++this.latest,
 			current = () => run === this.latest,
 			context = JSON.stringify(where);
 		// Another place has other rows: the pointer is over none of them until it moves.
 		if (context !== this.context) {
-			this.hovered = null;
+			this.issues.hovered = this.pulls.hovered = null;
 			this.etag = null;
 			this.checkedAt = null;
 		}
@@ -163,7 +168,7 @@ export class Panel implements Role {
 		this.account = known.peekAccount(where.on);
 		this.remote = known.peekRemote(where);
 		this.failure = undefined;
-		for (const { kind } of GROUPS) this.show(kind);
+		this.issues.show();
 		this.pulls.show();
 		this.loading = true;
 		cx.spawn(async (cx) => {
@@ -178,84 +183,12 @@ export class Panel implements Role {
 				]);
 				if (!current()) return;
 				this.remote = remote;
-				this.check(cx, true);
+				this.check(cx, true, asked);
 			} catch (e) {
 				if (current()) this.failure = gh.failureOf(e);
 			} finally {
 				if (current()) {
 					this.loading = false;
-					cx.notify();
-				}
-			}
-		});
-	}
-
-	/** The group's kept pages for this place, or nothing yet. */
-	show(kind: GroupKind): void {
-		const g = this.groups[kind],
-			r = this.ready();
-		g.page = r ? known.peekGroup(kind, r.remote, r.login, r.on) : undefined;
-		g.failure = undefined;
-		g.loading = g.loadingMore = false;
-	}
-
-	/** Asks for the group's first page (an expanded group only). */
-	load(cx: Context, kind: GroupKind, force = false): void {
-		const g = this.groups[kind],
-			r = this.ready(),
-			run = this.latest;
-		if (!r || !g.expanded || !this.isVisible()) return;
-		g.loading = true;
-		g.failure = undefined;
-		cx.spawn(async (cx) => {
-			try {
-				const page = await known.group(kind, r.remote, r.login, r.on, force);
-				// What is kept wins: a change from a reader may have replaced this answer while it was out.
-				if (run === this.latest) g.page = known.peekGroup(kind, r.remote, r.login, r.on) ?? page;
-			} catch (e) {
-				if (run === this.latest) {
-					g.failure = gh.failureOf(e);
-					// Retry a failed refresh next tick even if the list itself has not changed.
-					this.etag = null;
-				}
-			} finally {
-				if (run === this.latest) {
-					g.loading = false;
-					cx.notify();
-				}
-			}
-		});
-	}
-
-	/** Folds or unfolds a group; unfolding shows what is kept and asks for what is stale. */
-	toggle(cx: Context, kind: GroupKind): void {
-		const g = this.groups[kind];
-		g.expanded = !g.expanded;
-		if (g.expanded) {
-			this.show(kind);
-			this.load(cx, kind);
-		}
-		cx.notify();
-	}
-
-	/** Load more: the next 30 rows of the group. */
-	more(cx: Context, kind: GroupKind): void {
-		const g = this.groups[kind],
-			r = this.ready(),
-			run = this.latest,
-			loaded = g.page;
-		if (!r || !loaded?.more || g.loadingMore) return;
-		g.loadingMore = true;
-		cx.notify();
-		cx.spawn(async (cx) => {
-			try {
-				const page = await known.more(kind, r.remote, r.login, r.on, loaded);
-				if (run === this.latest) g.page = page;
-			} catch (e) {
-				if (run === this.latest) g.failure = gh.failureOf(e);
-			} finally {
-				if (run === this.latest) {
-					g.loadingMore = false;
 					cx.notify();
 				}
 			}
@@ -273,10 +206,8 @@ export class Panel implements Role {
 			.flatMap((n) => (n.state ? [n.state] : []));
 		if (changes.length === 0) return;
 		changes.forEach(known.issueChanged);
-		for (const { kind } of GROUPS) {
-			this.show(kind);
-			this.load(cx, kind);
-		}
+		this.issues.show();
+		this.issues.load(cx);
 	}
 
 	render(cx: Context): Element {
@@ -315,12 +246,9 @@ export class Panel implements Role {
 	/** The repository, then ↻ (Herdr's own spinner while anything loads, as its tab bar shows a working agent). */
 	private header(overlay: string | undefined, context: string): Element {
 		const t = colors();
-		const busy =
-			this.loading ||
-			this.pulls.busy ||
-			GROUPS.some(({ kind }) => this.groups[kind].loading || this.groups[kind].loadingMore);
+		const busy = this.loading || this.issues.busy || this.pulls.busy;
 		const refresh = button("gh-refresh", "↻", "Refresh", (_e, cx) => {
-			this.refresh(cx, true);
+			this.refresh(cx, true, true);
 			cx.notify(); // a click doesn't redraw by itself: show the spinner now, not when it's done
 		});
 		return h_flex()
@@ -466,7 +394,7 @@ export class Panel implements Role {
 			.gap(4)
 			.when(this.openFailure, (el) => el.child(problem(this.openFailure ?? "")))
 			.when(notice, (el) => el.child(problem(notice ?? "")))
-			.when(!notice && this.ready(), (el) => el.child(this.pulls.render()))
+			.when(!notice && this.ready(), (el) => el.children(this.pulls.render()))
 			.when(!notice && !this.ready() && this.loading, (el) => el.child(div().p(8).text_color(t.dim).child("…")));
 	}
 
@@ -476,12 +404,11 @@ export class Panel implements Role {
 	 */
 	private list(): Element {
 		const t = colors();
-		const loaded = GROUPS.map(({ kind }) => this.groups[kind]);
 		const notice = issuesNotice({
 			account: this.account,
 			remote: this.remote,
-			group: loaded.find((g) => g.page)?.page,
-			failure: this.failure ?? loaded.find((g) => g.failure?.notFound)?.failure,
+			group: this.issues.anyPage,
+			failure: this.failure ?? this.issues.notFound,
 		});
 		const problem = (text: string) => div().p(8).text_size(12).text_color(t.blocked).child(text);
 		return v_flex()
@@ -493,152 +420,49 @@ export class Panel implements Role {
 			.gap(4)
 			.when(this.openFailure, (el) => el.child(problem(this.openFailure ?? "")))
 			.when(notice, (el) => el.child(problem(notice ?? "")))
-			.when(!notice && this.ready(), (el) => el.children(GROUPS.map((g) => this.group(g))))
+			.when(!notice && this.ready(), (el) => el.children(this.issues.render()))
 			.when(!notice && !this.ready() && this.loading, (el) => el.child(div().p(8).text_color(t.dim).child("…")));
 	}
 
-	/** A foldable group: its title and count, then (unfolded) why it failed, its rows and Load more. */
-	private group({ kind, title, empty }: (typeof GROUPS)[number]): Element {
-		const t = colors();
-		const g = this.groups[kind];
-		const page = g.page;
-		const heading = h_flex()
-			.id(`group-${kind}`)
-			.h(26)
-			.px(8)
-			.gap(6)
-			.items_center()
-			.rounded(6)
-			.text_size(12)
-			.text_color(t.dim)
-			.cursor_pointer()
-			.hover((s) => s.bg(t.hover))
-			.on_mouse_down("left", stop)
-			.on_click((_e, cx) => this.toggle(cx, kind))
-			.accessibility_label(`${g.expanded ? "Fold" : "Unfold"} ${title}`)
-			.child(
-				div()
-					.w(10)
-					.flex_none()
-					.child(g.expanded ? "▾" : "▸"),
-			)
-			.child(div().font_medium().child(title))
-			.child(div().child(page ? String(page.total) : ""))
-			.when(g.expanded && g.loading, (el) => el.child(spinner()));
-		// A group that failed says why, quietly, with a way to ask again; the other groups stay.
-		const failure = h_flex()
-			.px(8)
-			.pl(22)
-			.py(2)
-			.gap(6)
-			.items_center()
-			.text_size(12)
-			.child(div().flex_none().size(6).rounded(3).bg(t.blocked))
-			.child(
-				div()
-					.flex_1()
-					.min_w(0)
-					.text_color(t.dim)
-					.child(g.failure?.message ?? ""),
-			)
-			.when(!g.loading, (el) =>
-				el.child(
-					button(`retry-${kind}`, "Retry", `Load ${title} again`, (_e, cx) => {
-						this.load(cx, kind, true);
-						cx.notify();
-					}),
-				),
-			);
-		const left = (page?.total ?? 0) - (page?.issues.length ?? 0);
-		// Load more only while another page follows.
-		const more = h_flex()
-			.id(`more-${kind}`)
-			.h(26)
-			.px(8)
-			.pl(22)
-			.gap(6)
-			.items_center()
-			.rounded(6)
-			.text_size(12)
-			.text_color(t.dim)
-			.cursor_pointer()
-			.hover((s) => s.bg(t.hover).text_color(t.foreground))
-			.on_mouse_down("left", stop)
-			.on_click((_e, cx) => this.more(cx, kind))
-			.child(g.loadingMore ? "Loading…" : `Load more (${left} left)`)
-			.when(g.loadingMore, (el) => el.child(spinner()));
-		return v_flex()
-			.gap(1)
-			.child(heading)
-			.when(g.expanded, (el) =>
-				el
-					.when(g.failure, (el) => el.child(failure))
-					.when(page?.issues.length === 0, (el) =>
-						el.child(div().px(8).pl(22).py(4).text_size(12).text_color(t.dim).child(empty)),
-					)
-					.children((page?.issues ?? []).map((issue) => this.row(kind, issue)))
-					.when(page?.more, (el) => el.child(more)),
-			);
-	}
-
-	/** One issue: click opens its tab; hovering swaps assignees and age for Copy and Open in browser. */
-	private row(kind: GroupKind, issue: Issue): Element {
-		const t = colors();
-		const key = `${kind}#${issue.number}`;
-		const hovered = this.hovered === key;
+	/** A click on an issue row opens (or selects) its tab. */
+	private openIssue(cx: Context, issue: Issue): void {
+		this.openFailure = null;
 		const repo = this.repo();
-		return h_flex()
-			.id(`issue-${kind}-${issue.number}`)
-			.h(28)
-			.px(8)
-			.pl(22)
-			.gap(8)
-			.items_center()
-			.rounded(6)
-			.cursor_pointer()
-			.hover((s) => s.bg(t.hover))
-			.on_mouse_down("left", stop)
-			.on_click((_e, cx) => {
-				this.openFailure = null;
-				cx.spawn(async (cx) => {
-					try {
-						await this.details.open({ kind: "issue", repo, number: issue.number });
-					} catch (e) {
-						this.openFailure = e instanceof Error ? e.message : String(e);
-					}
-					cx.notify();
-				});
-			})
-			.on_hover((h, cx) => {
-				if (h) this.hovered = key;
-				else if (this.hovered === key) this.hovered = null;
-				cx.notify();
-			})
-			.child(div().flex_none().text_color(t.dim).child(`#${issue.number}`))
-			.child(div().flex_1().min_w(0).truncate().child(issue.title))
-			.when(!hovered, (el) =>
-				el
-					.child(
-						div().flex_none().max_w(90).truncate().text_size(12).text_color(t.dim).child(issue.assignees.join(", ")),
-					)
-					.child(
-						div()
-							.flex_none()
-							.w(28)
-							.text_right()
-							.text_size(12)
-							.text_color(t.dim)
-							.child(relativeTime(issue.updatedAt, Date.now())),
-					),
-			)
-			.when(hovered, (el) =>
-				el
-					.child(
-						button(`copy-${kind}-${issue.number}`, "#", `Copy #${issue.number}`, (_e, cx) =>
-							cx.write_to_clipboard(`#${issue.number}`),
-						),
-					)
-					.child(button(`open-${kind}-${issue.number}`, "↗", "Open in browser", (_e, cx) => cx.open_url(issue.url))),
-			);
+		cx.spawn(async (cx) => {
+			try {
+				await this.details.open({ kind: "issue", repo, number: issue.number });
+			} catch (e) {
+				this.openFailure = e instanceof Error ? e.message : String(e);
+			}
+			cx.notify();
+		});
 	}
+}
+
+/** One issue: number and title; assignees and age, which hovering swaps for Copy and Open in browser. */
+function issueCells(kind: GroupKind, issue: Issue, hovered: boolean): Element[] {
+	const t = colors();
+	const start = [
+		div().flex_none().text_color(t.dim).child(`#${issue.number}`),
+		div().flex_1().min_w(0).truncate().child(issue.title),
+	];
+	if (hovered)
+		return [
+			...start,
+			button(`copy-${kind}-${issue.number}`, "#", `Copy #${issue.number}`, (_e, cx) =>
+				cx.write_to_clipboard(`#${issue.number}`),
+			),
+			button(`open-${kind}-${issue.number}`, "↗", "Open in browser", (_e, cx) => cx.open_url(issue.url)),
+		];
+	return [
+		...start,
+		div().flex_none().max_w(90).truncate().text_size(12).text_color(t.dim).child(issue.assignees.join(", ")),
+		div()
+			.flex_none()
+			.w(28)
+			.text_right()
+			.text_size(12)
+			.text_color(t.dim)
+			.child(relativeTime(issue.updatedAt, Date.now())),
+	];
 }

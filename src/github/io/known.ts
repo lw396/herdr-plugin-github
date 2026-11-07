@@ -136,7 +136,7 @@ export const pullGroup = (
 	login: string,
 	on: string | null,
 	force = false,
-): Promise<PullGroup> => pullGroups.look(pullKey(kind, r, login, on), force, () => pullPage(kind, r, on, null));
+): Promise<PullGroup> => pullGroups.look(pullKey(kind, r, login, on), force, () => pullPage(kind, r, login, on, null));
 /** What is kept for the PR group: its first page, and any pages Load more added. */
 export const peekPullGroup = (
 	kind: PullGroupKind,
@@ -154,7 +154,7 @@ export async function morePulls(
 	loaded: PullGroup,
 ): Promise<PullGroup> {
 	const key = pullKey(kind, r, login, on);
-	const both = appendPullPage(loaded, await pullPage(kind, r, on, loaded.cursor));
+	const both = appendPullPage(loaded, await pullPage(kind, r, login, on, loaded.cursor));
 	if (pullGroups.peek(key) === loaded) pullGroups.put(key, both);
 	return both;
 }

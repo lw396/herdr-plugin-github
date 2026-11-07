@@ -3,7 +3,7 @@
 import { afterEach, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { ALL_OPEN_QUERY } from "../../src/github/core/pulls.ts";
+import { ALL_OPEN_QUERY, SEARCH_QUERY } from "../../src/github/core/pulls.ts";
 import { failureOf } from "../../src/github/io/gh.ts";
 import * as pulls from "../../src/github/io/pulls.ts";
 import { machine, reset } from "../fake-herdr.ts";
@@ -19,7 +19,7 @@ const asked = (owner: string, name: string, after: string | null): string =>
 
 test("All Open's first page is asked with the gh on the folder's machine", async () => {
 	machine("center", { [asked("lw396", "herdr-plugin-github", null)]: { stdout: fixture("pulls-all-plugin.json") } });
-	const page = await pulls.pullPage("all", remote("lw396", "herdr-plugin-github"), "center", null);
+	const page = await pulls.pullPage("all", remote("lw396", "herdr-plugin-github"), "lw396", "center", null);
 	expect(page.pulls.map((p) => [p.number, p.state])).toEqual([
 		[36, "draft"],
 		[35, "open"],
@@ -30,13 +30,52 @@ test("All Open's first page is asked with the gh on the folder's machine", async
 test("Load more asks for the page after the last cursor", async () => {
 	const cursor = "Y3Vyc29yOnYyOpK0MjAyNi0wOS0wN1QxNToxMDo0OFrO1-HpJQ==";
 	machine(null, { [asked("cli", "cli", cursor)]: { stdout: fixture("pulls-all-cli-2.json") } });
-	const page = await pulls.pullPage("all", remote("cli", "cli"), null, cursor);
+	const page = await pulls.pullPage("all", remote("cli", "cli"), "lw396", null, cursor);
 	expect(page).toMatchObject({ total: 59, more: false });
 	expect(page.pulls).toHaveLength(29);
 });
 
 test("a repository that isn't there (or can't be seen) is a not-found failure", async () => {
 	machine(null, { [asked("lw396", "does-not-exist-for-pr-test", null)]: JSON.parse(fixture("pulls-all-404.json")) });
-	const error = await pulls.pullPage("all", remote("lw396", "does-not-exist-for-pr-test"), null, null).catch((e) => e);
+	const error = await pulls
+		.pullPage("all", remote("lw396", "does-not-exist-for-pr-test"), "lw396", null, null)
+		.catch((e) => e);
 	expect(failureOf(error)).toMatchObject({ notFound: true });
+});
+
+const searched = (q: string): string => `~$ gh api graphql -F after=null -f query=${SEARCH_QUERY} -f q=${q}`;
+
+test("Waiting For My Review searches for PRs asking the gh account for review", async () => {
+	machine(null, {
+		[searched("repo:cli/cli is:pr is:open review-requested:babakks sort:updated-desc")]: {
+			stdout: fixture("pulls-review-cli.json"),
+		},
+	});
+	const page = await pulls.pullPage("review", remote("cli", "cli"), "babakks", null, null);
+	expect(page).toMatchObject({ total: 26, more: false });
+	expect(page.pulls[0]).toMatchObject({ number: 14964, state: "open", author: "dependabot" });
+});
+
+test("nobody asked: an empty group, not a failure", async () => {
+	machine(null, {
+		[searched("repo:lw396/herdr-plugin-github is:pr is:open review-requested:lw396 sort:updated-desc")]: {
+			stdout: fixture("pulls-review-plugin.json"),
+		},
+	});
+	expect(await pulls.pullPage("review", remote("lw396", "herdr-plugin-github"), "lw396", null, null)).toEqual({
+		total: 0,
+		more: false,
+		cursor: null,
+		pulls: [],
+	});
+});
+
+test("Created By Me searches for the gh account's open PRs on the folder's machine", async () => {
+	machine("center", {
+		[searched("repo:lw396/herdr-plugin-github is:pr is:open author:lw396 sort:updated-desc")]: {
+			stdout: fixture("pulls-mine-plugin.json"),
+		},
+	});
+	const page = await pulls.pullPage("mine", remote("lw396", "herdr-plugin-github"), "lw396", "center", null);
+	expect(page.pulls.map((p) => p.number)).toEqual([36, 35]);
 });
