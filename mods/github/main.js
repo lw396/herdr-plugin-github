@@ -90,8 +90,8 @@ var Pane = class {
 };
 
 // src/github/views/panel.ts
-import { h_flex as h_flex4, v_flex as v_flex3 } from "gpui-base";
-import { div as div7, svg as svg4 } from "gpui-kit";
+import { h_flex as h_flex6, v_flex as v_flex5 } from "gpui-base";
+import { div as div9, svg as svg6 } from "gpui-kit";
 import { closeOverlay, props as props2 } from "herdr";
 
 // src/github/core/gh.ts
@@ -9865,6 +9865,18 @@ function detailLink(href, base) {
   const number = Number(path[3]);
   return Number.isSafeInteger(number) ? { kind: path[2] === "pull" ? "pr" : "issue", repo, number } : null;
 }
+function markdownSummary(markdown) {
+  function text3(node2) {
+    if (node2.type === "text" || node2.type === "inlineCode" || node2.type === "code") return node2.value;
+    if (node2.type === "image" || node2.type === "imageReference") return node2.alt ?? "";
+    if (!("children" in node2)) return "";
+    const separator = node2.type === "paragraph" || node2.type === "heading" ? "" : " ";
+    return node2.children.map(text3).join(separator);
+  }
+  const plain = text3(fromMarkdown(markdown)).replace(/\s+/g, " ").trim();
+  const characters = [...plain];
+  return characters.length > 350 ? `${characters.slice(0, 350).join("")}\u2026` : plain;
+}
 var link2 = (text3, url) => `[${text3}](<${url.replace(/</g, "%3C").replace(/>/g, "%3E")}>)`;
 function readerMarkdown(body, url) {
   return links(body || "_No text._", url);
@@ -10148,6 +10160,9 @@ var Cache = class {
     const entry = this.entries.get(key);
     return entry !== void 0 && now - entry.at < maxAge;
   }
+  delete(key) {
+    this.entries.delete(key);
+  }
   clear() {
     this.entries.clear();
   }
@@ -10159,6 +10174,9 @@ var Cache = class {
 };
 
 // src/github/core/pulls.ts
+function pullState(state, draft) {
+  return state === "open" && draft ? "draft" : state;
+}
 var ROW = "number title url updatedAt isDraft state author { login }";
 var ALL_OPEN_QUERY = `query($owner: String!, $name: String!, $after: String) {
   repository(owner: $owner, name: $name) {
@@ -10210,7 +10228,7 @@ function pullRow(n) {
     number: n.number,
     title: n.title,
     author: n.author?.login ?? null,
-    state: n.state === "MERGED" ? "merged" : n.state === "CLOSED" ? "closed" : n.isDraft ? "draft" : "open",
+    state: pullState(n.state.toLowerCase(), n.isDraft),
     updatedAt: n.updatedAt,
     url: n.url
   };
@@ -10364,7 +10382,7 @@ function parsePullDetail(pull, issue, comments, reviews) {
   return {
     number: p.number,
     title: p.title,
-    state: p.merged ? "merged" : p.state === "closed" ? "closed" : p.draft ? "draft" : "open",
+    state: pullState(p.merged ? "merged" : p.state, p.draft),
     author: login(p.user),
     createdAt: p.created_at,
     url: p.html_url,
@@ -10606,7 +10624,7 @@ async function morePulls(kind, r, loaded) {
 }
 
 // src/github/views/issues.ts
-import { div as div4 } from "gpui-kit";
+import { div as div6 } from "gpui-kit";
 
 // src/github/core/time.ts
 var MINUTE = 6e4;
@@ -10623,14 +10641,278 @@ function relativeTime(iso, now) {
 }
 
 // src/github/views/groups.ts
-import { h_flex as h_flex2, v_flex } from "gpui-base";
-import { div as div3 } from "gpui-kit";
+import { h_flex as h_flex4, v_flex as v_flex3 } from "gpui-base";
+import { div as div5 } from "gpui-kit";
+
+// src/github/core/preview.ts
+var PREVIEW_DWELL_MS = 200;
+var PREVIEW_OPEN_MS = 500;
+var PREVIEW_CLOSE_MS = 200;
+function previewKey(ref, on, login2) {
+  return JSON.stringify([on, login2, detailKey(ref)]);
+}
+var PreviewIntent = class {
+  active = null;
+  enter(row) {
+    this.active = { row };
+    return this.active;
+  }
+  leave(row) {
+    if (this.active?.row !== row) return false;
+    this.active = null;
+    return true;
+  }
+  current(ticket) {
+    return this.active === ticket;
+  }
+};
+function parsePreview(data, kind) {
+  const item = data;
+  const state = kind === "pr" ? pullState(item.merged_at ? "merged" : item.state, item.draft ?? false) : item.state;
+  return {
+    title: item.title,
+    author: item.user?.login ?? null,
+    createdAt: item.created_at,
+    state,
+    summary: markdownSummary(item.body ?? ""),
+    labels: item.labels.map(parseLabel)
+  };
+}
+
+// src/github/views/preview.ts
+import { HoverCard, h_flex as h_flex3, v_flex as v_flex2 } from "gpui-base";
+import { div as div4, svg as svg4 } from "gpui-kit";
+
+// src/github/io/preview.ts
+var Previews = class {
+  cache = new Cache(100);
+  pending = /* @__PURE__ */ new Map();
+  peek(ref, on, login2) {
+    return this.cache.get(previewKey(ref, on, login2));
+  }
+  load(ref, on, login2) {
+    const key = previewKey(ref, on, login2);
+    if (this.cache.fresh(key, 6e4, Date.now())) return Promise.resolve(this.cache.get(key));
+    const pending = this.pending.get(key);
+    if (pending) return pending;
+    const path = `repos/${ref.repo}/${ref.kind === "pr" ? "pulls" : "issues"}/${ref.number}`;
+    const request = api(path, { on }).then((data) => {
+      const preview = parsePreview(data, ref.kind);
+      this.cache.set(key, preview, Date.now());
+      return preview;
+    }).finally(() => this.pending.delete(key));
+    this.pending.set(key, request);
+    return request;
+  }
+};
+
+// src/github/views/detail.ts
+import { h_flex as h_flex2, TextView, v_flex } from "gpui-base";
+import { div as div3, svg as svg3 } from "gpui-kit";
+var NOUN = { issue: "issue", pr: "pull request" };
+var Noun = (kind) => NOUN[kind].charAt(0).toUpperCase() + NOUN[kind].slice(1);
+function openLink(cx, host, url, page) {
+  const ref = detailLink(url, page);
+  if (ref) host.follow(cx, ref);
+  else {
+    const external = browserUrl(url, page);
+    if (external) cx.open_url(external);
+  }
+}
+function detailEmpty(_kind) {
+  return div3().flex_1();
+}
+function detailHeader(host, ref, shown, refresh) {
+  const t = colors();
+  const url = shown.url ?? detailUrl(ref);
+  const previous3 = host.previous();
+  const number = link(`${ref.kind}-browser`, url, `#${ref.number}`).px(2).rounded(4).text_color(t.accent).hover((s) => s.bg(t.hover)).tooltip(`Open ${ref.repo} #${ref.number} in browser`).accessibility_label(`Open #${ref.number} in browser`);
+  const copy = button(
+    `${ref.kind}-copy`,
+    svg3("mods/github/assets/copy.svg").size(16),
+    `Copy ${NOUN[ref.kind]} link`,
+    (_e, cx) => cx.write_to_clipboard(url)
+  );
+  return h_flex2().flex_none().px(24).pt(18).pb(12).gap(12).items_start().when(
+    previous3 !== null,
+    (el) => el.child(
+      square(button(`${ref.kind}-back`, "\u2190", `Back to #${previous3?.number}`, (_e, cx) => host.back(cx))).text_size(
+        22
+      )
+    )
+  ).child(
+    h_flex2().flex_1().min_w(0).gap(8).items_center().flex_wrap().text_size(22).child(
+      div3().min_w(0).font_semibold().child(shown.title ?? `${Noun(ref.kind)} details`)
+    ).child(h_flex2().gap(2).items_center().flex_none().child(number).child(copy))
+  ).child(
+    shown.loading ? square(div3()).child(spinner(18)) : square(
+      button(`${ref.kind}-refresh`, "\u21BB", `Refresh ${NOUN[ref.kind]}`, (_e, cx) => {
+        refresh(cx);
+        cx.notify();
+      })
+    ).text_size(22)
+  );
+}
+function detailBody(ref, loading, failure, document3) {
+  const t = colors();
+  return v_flex().id(`${ref.kind}-scroll-${detailKey(ref)}`).flex_1().min_h(0).overflow_y_scroll().px(24).pb(18).gap(12).when(loading, (el) => el.child(div3().text_size(12).text_color(t.dim).child(`Loading ${NOUN[ref.kind]}\u2026`))).when(
+    failure !== void 0,
+    (el) => el.child(
+      div3().text_color(t.blocked).child(failure ?? "")
+    )
+  ).when(document3 !== null, (el) => el.child(document3 ?? div3()));
+}
+var DetailMetadata = class {
+  expanded = false;
+  render(layout2, sections) {
+    const t = colors();
+    const wide = layout2 === "wide";
+    const fields = () => sections.map(
+      ([title, value]) => v_flex().min_w(0).gap(10).py(16).border_b(1).border_color(t.border).when(layout2 === "narrow", (el) => el.w(180).min_w(140).flex_grow(1)).when(layout2 === "compact", (el) => el.w_full().flex_none()).child(div3().text_size(13).font_semibold().child(title)).child(value)
+    );
+    if (wide) return v_flex().w(220).flex_none().children(fields());
+    const labels2 = sections.find(([title]) => title === "Labels");
+    const summary = () => h_flex2().min_w(0).gap(10).py(16).items_center().flex_wrap().child(div3().text_size(13).font_semibold().child("Labels")).child(layout2 === "compact" ? quiet(String(labels2?.[2] ?? 0)) : labels2?.[1] ?? quiet("None yet"));
+    let content3;
+    if (!this.expanded) content3 = summary();
+    else if (layout2 === "compact") content3 = v_flex().children(fields());
+    else content3 = h_flex2().gap(20).items_start().flex_wrap().children(fields());
+    const label = this.expanded ? "See less" : "See more";
+    return v_flex().min_w(0).gap(12).pb(16).border_b(1).border_color(t.border).child(content3).child(
+      h_flex2().child(
+        button("detail-metadata-toggle", label, label, (_e, cx) => {
+          this.expanded = !this.expanded;
+          cx.notify();
+        }).text_color(t.accent)
+      )
+    );
+  }
+};
+function detailDocument(layout2, heading, timeline, sections, metadata) {
+  const wide = layout2 === "wide";
+  const posts = v_flex().min_w(0).gap(20).when(wide, (el) => el.flex_1()).when(!wide, (el) => el.w_full().flex_none()).children(timeline);
+  const side = metadata.render(layout2, sections);
+  return v_flex().gap(18).child(h_flex2().gap(10).pb(4).items_center().flex_wrap().children(heading)).child(wide ? h_flex2().gap(24).items_start().child(posts).child(side) : v_flex().gap(20).child(side).child(posts));
+}
+function stateBadge(label, color, icon2) {
+  return h_flex2().gap(6).items_center().px(10).py(4).rounded(14).bg(`${color}26`).text_size(13).font_semibold().text_color(color).when(icon2 !== void 0, (el) => el.child(svg3(icon2 ?? "").size(14))).child(label);
+}
+function postCard(id, post, verb, onLink) {
+  const t = colors();
+  const reactions = post.reactions ?? [];
+  const heading = h_flex2().px(16).py(10).gap(8).items_center().flex_wrap().bg(t.raised).border_b(1).border_color(t.border).text_size(12).child(div3().font_semibold().child(post.author)).child(div3().text_color(t.dim).child(verb)).child(div3().flex_1()).child(div3().text_color(t.dim).tooltip(post.createdAt).child(relativeTime(post.createdAt, Date.now())));
+  const text3 = TextView.markdown(id, post.markdown).selectable(true).scrollable(false).on_link_click(onLink);
+  return v_flex().id(`${id}-card`).min_w(0).w_full().overflow_hidden().rounded(8).border_1().border_color(t.border).bg(t.background).child(heading).child(
+    v_flex().min_w(0).px(16).py(16).gap(12).child(text3).when(
+      reactions.length > 0,
+      (el) => el.child(
+        h_flex2().gap(6).flex_wrap().children(reactions.map((r) => chip(`${r.emoji} ${r.count}`, t.border, t.raised)))
+      )
+    )
+  );
+}
+var quiet = (text3) => div3().text_size(12).text_color(colors().dim).child(text3);
+function people(logins, none) {
+  if (logins.length === 0) return quiet(none);
+  return v_flex().gap(8).children(logins.map((login2) => div3().text_size(13).font_medium().child(login2)));
+}
+function labelChip(label) {
+  const t = colors();
+  return chip(label.name, label.color ?? t.input, label.color ? `${label.color}26` : t.raised).text_color(t.foreground);
+}
+function labels(list2) {
+  if (list2.length === 0) return quiet("None yet");
+  return h_flex2().gap(6).flex_wrap().children(list2.map(labelChip));
+}
+var milestone = (title) => title ? div3().text_size(13).child(title) : quiet("No milestone");
+function projects(list2, loading) {
+  const t = colors();
+  if (!list2) return quiet(loading ? "Loading Projects\u2026" : "Projects not loaded.");
+  if (!list2.ok) return quiet("None yet").tooltip(list2.message);
+  if (list2.projects.length === 0) return quiet("None yet");
+  return v_flex().gap(8).children(
+    list2.projects.map(
+      (project) => link(`project-${project.url}`, project.url, project.title).text_size(13).text_color(t.accent).tooltip(project.url)
+    )
+  );
+}
+
+// src/github/views/preview.ts
+function previewCard(ref, preview, failure) {
+  const t = colors();
+  const state = preview ? PULL_STATES[preview.state] : null;
+  const icon2 = state && (ref.kind === "pr" ? svg4(state.icon).size(14).text_color(state.color(t)) : div4().text_color(state.color(t)).child(preview?.state === "closed" ? "\u2299" : "\u25CB"));
+  return v_flex2().w(480).p(14).gap(10).rounded(8).border_1().border_color(t.border).bg(t.surface).text_color(t.foreground).text_size(13).on_mouse_down("left", stop).child(
+    h_flex3().gap(8).items_center().child(div4().min_w(0).flex_1().truncate().text_color(t.accent).child(ref.repo)).when(
+      Boolean(preview),
+      (el) => el.child(
+        div4().flex_none().text_color(t.dim).child(preview?.createdAt.slice(0, 10) ?? "")
+      )
+    )
+  ).when(
+    Boolean(preview),
+    (el) => el.child(
+      h_flex3().gap(8).items_start().child(
+        div4().flex_none().accessibility_label(state?.label ?? "").children(icon2 ? [icon2] : [])
+      ).child(
+        div4().flex_1().min_w(0).max_h(64).overflow_hidden().font_semibold().child(`${preview?.title} #${ref.number}`)
+      )
+    ).child(
+      div4().text_size(12).text_color(t.dim).child(`${state?.label} \xB7 ${preview?.author ? `@${preview.author}` : "ghost"}`)
+    ).child(
+      div4().max_h(120).overflow_hidden().child(preview?.summary || "No description provided.")
+    ).when(
+      Boolean(preview?.labels.length),
+      (el2) => el2.child(div4().max_h(64).overflow_hidden().child(labels(preview.labels)))
+    )
+  ).when(
+    !preview,
+    (el) => el.child(
+      failure ? div4().text_color(t.blocked).child(`Preview unavailable: ${failure}`) : h_flex3().gap(8).items_center().child(spinner()).child("Loading preview\u2026")
+    )
+  );
+}
+var RowPreviews = class {
+  previews = new Previews();
+  timer = null;
+  failures = new Cache(100);
+  intent = new PreviewIntent();
+  hover(cx, row, ref, r, current) {
+    if (!ref && !this.intent.leave(row)) return;
+    this.timer?.cancel();
+    this.timer = null;
+    if (!ref || !r) return;
+    const ticket = this.intent.enter(row);
+    const key = previewKey(ref, r.on, r.login);
+    this.failures.delete(key);
+    this.timer = cx.timer.after(PREVIEW_DWELL_MS, (cx2) => {
+      if (!this.intent.current(ticket) || !current()) return;
+      cx2.spawn(async (cx3) => {
+        try {
+          await this.previews.load(ref, r.on, r.login);
+        } catch (e) {
+          this.failures.set(key, failureOf(e).message, Date.now());
+        }
+        cx3.notify();
+      });
+    });
+  }
+  wrap(id, trigger, ref, r) {
+    const preview = this.previews.peek(ref, r.on, r.login);
+    const key = previewKey(ref, r.on, r.login);
+    const failure = this.failures.get(key);
+    return HoverCard.new(`preview-${id}-${key}`).w_full().open_delay(PREVIEW_OPEN_MS).close_delay(PREVIEW_CLOSE_MS).trigger(trigger).content(previewCard(ref, preview, failure));
+  }
+};
+
+// src/github/views/groups.ts
 var GroupList = class {
   /** The row under the pointer ("<kind>#<number>"): it shows its actions. */
   hovered = null;
   groups;
   host;
   source;
+  previews = new RowPreviews();
   constructor(host, source) {
     this.host = host;
     this.source = source;
@@ -10738,11 +11020,11 @@ var GroupList = class {
     const g = this.groups[kind];
     const page = g.page;
     const rows = page?.rows ?? [];
-    const heading = h_flex2().id(`${id}-group-${kind}`).h(26).px(8).gap(6).items_center().rounded(6).text_size(12).text_color(t.dim).cursor_pointer().hover((s) => s.bg(t.hover)).on_mouse_down("left", stop).on_click((_e, cx) => this.toggle(cx, kind)).accessibility_label(`${g.expanded ? "Fold" : "Unfold"} ${title}`).child(
-      div3().w(10).flex_none().child(g.expanded ? "\u25BE" : "\u25B8")
-    ).child(div3().font_medium().child(title)).child(div3().child(page ? String(page.total) : "")).when(g.expanded && g.loading, (el) => el.child(spinner()));
-    const failure = h_flex2().px(8).pl(22).py(2).gap(6).items_center().text_size(12).child(div3().flex_none().size(6).rounded(3).bg(t.blocked)).child(
-      div3().flex_1().min_w(0).text_color(t.dim).child(g.failure?.message ?? "")
+    const heading = h_flex4().id(`${id}-group-${kind}`).h(26).px(8).gap(6).items_center().rounded(6).text_size(12).text_color(t.dim).cursor_pointer().hover((s) => s.bg(t.hover)).on_mouse_down("left", stop).on_click((_e, cx) => this.toggle(cx, kind)).accessibility_label(`${g.expanded ? "Fold" : "Unfold"} ${title}`).child(
+      div5().w(10).flex_none().child(g.expanded ? "\u25BE" : "\u25B8")
+    ).child(div5().font_medium().child(title)).child(div5().child(page ? String(page.total) : "")).when(g.expanded && g.loading, (el) => el.child(spinner()));
+    const failure = h_flex4().px(8).pl(22).py(2).gap(6).items_center().text_size(12).child(div5().flex_none().size(6).rounded(3).bg(t.blocked)).child(
+      div5().flex_1().min_w(0).text_color(t.dim).child(g.failure?.message ?? "")
     ).when(
       !g.loading,
       (el) => el.child(
@@ -10752,12 +11034,12 @@ var GroupList = class {
         })
       )
     );
-    const more = h_flex2().id(`${id}-more-${kind}`).h(26).px(8).pl(22).gap(6).items_center().rounded(6).text_size(12).text_color(t.dim).cursor_pointer().hover((s) => s.bg(t.hover).text_color(t.foreground)).on_mouse_down("left", stop).on_click((_e, cx) => this.more(cx, kind)).child(g.loadingMore ? "Loading\u2026" : `Load more (${(page?.total ?? 0) - rows.length} left)`).when(g.loadingMore, (el) => el.child(spinner()));
-    return v_flex().gap(1).child(heading).when(
+    const more = h_flex4().id(`${id}-more-${kind}`).h(26).px(8).pl(22).gap(6).items_center().rounded(6).text_size(12).text_color(t.dim).cursor_pointer().hover((s) => s.bg(t.hover).text_color(t.foreground)).on_mouse_down("left", stop).on_click((_e, cx) => this.more(cx, kind)).child(g.loadingMore ? "Loading\u2026" : `Load more (${(page?.total ?? 0) - rows.length} left)`).when(g.loadingMore, (el) => el.child(spinner()));
+    return v_flex3().gap(1).child(heading).when(
       g.expanded,
       (el) => el.when(g.failure !== void 0 && !g.failure.notFound, (el2) => el2.child(failure)).when(
         page !== void 0 && rows.length === 0,
-        (el2) => el2.child(div3().px(8).pl(22).py(4).text_size(12).text_color(t.dim).child(empty))
+        (el2) => el2.child(div5().px(8).pl(22).py(4).text_size(12).text_color(t.dim).child(empty))
       ).children(rows.map((row) => this.row(kind, row))).when(Boolean(page?.more), (el2) => el2.child(more))
     );
   }
@@ -10766,6 +11048,9 @@ var GroupList = class {
     const t = colors();
     const id = this.source.kind;
     const key = `${kind}#${row.number}`;
+    const ready = this.host.ready();
+    const ref = ready ? { kind: id, repo: `${ready.remote.owner}/${ready.remote.repo}`, number: row.number } : null;
+    const contextKey = ready && ref ? previewKey(ref, ready.on, ready.login) : null;
     const actions = [
       button(
         `${id}-copy-${kind}-${row.number}`,
@@ -10776,16 +11061,23 @@ var GroupList = class {
       button(`${id}-open-${kind}-${row.number}`, "\u2197", "Open in browser", (_e, cx) => cx.open_url(row.url))
     ];
     const disclosure = this.source.disclosure?.(row, key);
-    const frame = h_flex2().id(`${id}-${kind}-${row.number}`).h(28).px(8).pl(disclosure ? 14 : 22).gap(disclosure ? 6 : 8).items_center().rounded(6).cursor_pointer().hover((s) => s.bg(t.hover)).on_mouse_down("left", stop).on_click((_e, cx) => {
+    const frame = h_flex4().id(`${id}-${kind}-${row.number}`).h(28).px(8).pl(disclosure ? 14 : 22).gap(disclosure ? 6 : 8).items_center().rounded(6).cursor_pointer().hover((s) => s.bg(t.hover)).on_mouse_down("left", stop).on_click((_e, cx) => {
       const r = this.host.ready();
       if (r) this.host.open(cx, { kind: id, repo: `${r.remote.owner}/${r.remote.repo}`, number: row.number });
     }).on_hover((h, cx) => {
       if (h) this.hovered = key;
       else if (this.hovered === key) this.hovered = null;
+      this.previews.hover(cx, `${key}-${contextKey}`, h ? ref : null, ready, () => {
+        const live = this.host.ready();
+        if (!live || !ref || this.hovered !== key || !this.host.asking()) return false;
+        const target = { ...ref, repo: `${live.remote.owner}/${live.remote.repo}` };
+        return previewKey(target, live.on, live.login) === contextKey;
+      });
       cx.notify();
     }).children(disclosure ? [disclosure] : []).children([...this.source.cells(row), ...this.hovered === key ? actions : this.source.idle(row)]);
+    const card = ready && ref ? this.previews.wrap(`${id}-${key}`, frame, ref, ready) : frame;
     const expanded = this.source.expandedRow?.(row, key);
-    return expanded ? v_flex().child(frame).child(expanded) : frame;
+    return expanded ? v_flex3().child(card).child(expanded) : card;
   }
 };
 
@@ -10805,25 +11097,25 @@ function issueList(host, failed) {
     more: moreIssues,
     failed,
     cells: (issue) => [
-      div4().flex_none().text_color(colors().dim).child(`#${issue.number}`),
-      div4().flex_1().min_w(0).truncate().child(issue.title)
+      div6().flex_none().text_color(colors().dim).child(`#${issue.number}`),
+      div6().flex_1().min_w(0).truncate().child(issue.title)
     ],
     idle: (issue) => {
       const t = colors();
       return [
-        div4().flex_none().max_w(90).truncate().text_size(12).text_color(t.dim).child(issue.assignees.join(", ")),
-        div4().flex_none().w(28).text_right().text_size(12).text_color(t.dim).child(relativeTime(issue.updatedAt, Date.now()))
+        div6().flex_none().max_w(90).truncate().text_size(12).text_color(t.dim).child(issue.assignees.join(", ")),
+        div6().flex_none().w(28).text_right().text_size(12).text_color(t.dim).child(relativeTime(issue.updatedAt, Date.now()))
       ];
     }
   });
 }
 
 // src/github/views/pulls.ts
-import { div as div6, svg as svg3 } from "gpui-kit";
+import { div as div8, svg as svg5 } from "gpui-kit";
 
 // src/github/views/files.ts
-import { h_flex as h_flex3, v_flex as v_flex2 } from "gpui-base";
-import { div as div5 } from "gpui-kit";
+import { h_flex as h_flex5, v_flex as v_flex4 } from "gpui-base";
+import { div as div7 } from "gpui-kit";
 var STATUS = {
   added: { mark: "A", label: "Added", color: "done" },
   removed: { mark: "D", label: "Deleted", color: "blocked" },
@@ -10879,9 +11171,9 @@ var ChangedFiles = class {
       this.tree = fileTree(this.files ?? []);
       this.list = flatFiles(this.files ?? []);
     }
-    return v_flex2().min_w(0).gap(2).child(
-      h_flex3().gap(6).items_center().child(
-        div5().flex_1().text_size(12).text_color(t.dim).child(`Files changed${this.files ? ` (${this.files.length})` : ""}`)
+    return v_flex4().min_w(0).gap(2).child(
+      h_flex5().gap(6).items_center().child(
+        div7().flex_1().text_size(12).text_color(t.dim).child(`Files changed${this.files ? ` (${this.files.length})` : ""}`)
       ).child(
         button(
           `${this.id}-mode`,
@@ -10898,11 +11190,11 @@ var ChangedFiles = class {
           cx.notify();
         })
       )
-    ).when(this.loading, (el) => el.child(h_flex3().gap(6).child(spinner()).child("Loading changed files\u2026"))).when(
+    ).when(this.loading, (el) => el.child(h_flex5().gap(6).child(spinner()).child("Loading changed files\u2026"))).when(
       this.failure !== null,
       (el) => el.child(
-        v_flex2().gap(4).child(
-          div5().text_size(12).text_color(t.blocked).child(this.failure ?? "")
+        v_flex4().gap(4).child(
+          div7().text_size(12).text_color(t.blocked).child(this.failure ?? "")
         ).child(
           button(`${this.id}-retry`, "Retry", "Load changed files again", (_e, cx) => {
             this.load(cx, true);
@@ -10910,7 +11202,7 @@ var ChangedFiles = class {
           })
         )
       )
-    ).when(this.files?.length === 0, (el) => el.child(div5().text_color(t.dim).child("No changed files"))).children(this.nodes(this.flat ? this.list : this.tree, selected, 0));
+    ).when(this.files?.length === 0, (el) => el.child(div7().text_color(t.dim).child("No changed files"))).children(this.nodes(this.flat ? this.list : this.tree, selected, 0));
   }
   nodes(nodes, selected, depth) {
     const t = colors();
@@ -10919,7 +11211,7 @@ var ChangedFiles = class {
       const folded = this.folded.has(node2.path);
       const status2 = node2.kind === "file" ? STATUS[node2.file.status] ?? STATUS.changed : null;
       const tip = node2.kind === "file" ? `${node2.path}${node2.file.previousPath ? ` \u2190 ${node2.file.previousPath}` : ""} \xB7 ${status2?.label} \xB7 +${node2.file.additions} \u2212${node2.file.deletions}` : node2.path;
-      const row = h_flex3().id(`${this.id}-${node2.kind}-${node2.path}`).h(26).min_w(0).pl(4 + depth * 8).pr(6).gap(4).items_center().cursor_pointer().hover((s) => s.bg(t.hover)).when(!folder2 && selected === node2.path, (el) => el.bg(t.selected)).tooltip(tip).accessibility_label(tip).on_mouse_down("left", stop).on_click((_e, cx) => {
+      const row = h_flex5().id(`${this.id}-${node2.kind}-${node2.path}`).h(26).min_w(0).pl(4 + depth * 8).pr(6).gap(4).items_center().cursor_pointer().hover((s) => s.bg(t.hover)).when(!folder2 && selected === node2.path, (el) => el.bg(t.selected)).tooltip(tip).accessibility_label(tip).on_mouse_down("left", stop).on_click((_e, cx) => {
         cx.stop_propagation();
         if (folder2) {
           if (folded) this.folded.delete(node2.path);
@@ -10927,14 +11219,14 @@ var ChangedFiles = class {
           cx.notify();
         } else this.open(cx, node2.path);
       }).child(
-        div5().w(12).flex_none().text_color(t.dim).child(folder2 ? folded ? "\u25B8" : "\u25BE" : "")
-      ).child(div5().flex_1().min_w(0).truncate().text_size(12).child(node2.name)).when(
+        div7().w(12).flex_none().text_color(t.dim).child(folder2 ? folded ? "\u25B8" : "\u25BE" : "")
+      ).child(div7().flex_1().min_w(0).truncate().text_size(12).child(node2.name)).when(
         status2 !== null,
         (el) => el.child(
-          div5().flex_none().text_size(12).text_color(t[status2?.color ?? "dim"]).child(status2?.mark ?? "")
+          div7().flex_none().text_size(12).text_color(t[status2?.color ?? "dim"]).child(status2?.mark ?? "")
         )
       );
-      return node2.kind === "directory" && !folded ? v_flex2().child(row).children(this.nodes(node2.children, selected, depth + 1)) : row;
+      return node2.kind === "directory" && !folded ? v_flex4().child(row).children(this.nodes(node2.children, selected, depth + 1)) : row;
     });
   }
 };
@@ -10988,17 +11280,17 @@ function pullList(host) {
     },
     expandedRow: (pull, key) => {
       const state = disclosure(pull, key);
-      return state?.expanded ? div6().pl(16).child(state.files.render()) : null;
+      return state?.expanded ? div8().pl(16).child(state.files.render()) : null;
     },
     cells: (pull) => {
       const state = PULL_STATES[pull.state];
       return [
-        svg3(state.icon).size(14).flex_none().text_color(state.color(colors())).accessibility_label(state.label),
-        div6().flex_1().min_w(0).truncate().child(`#${pull.number} ${pull.title}`).when(pull.state === "draft", (el) => el.italic())
+        svg5(state.icon).size(14).flex_none().text_color(state.color(colors())).accessibility_label(state.label),
+        div8().flex_1().min_w(0).truncate().child(`#${pull.number} ${pull.title}`).when(pull.state === "draft", (el) => el.italic())
       ];
     },
     idle: (pull) => [
-      div6().flex_none().max_w(110).truncate().text_size(12).text_color(colors().dim).child(pull.author ? `by @${pull.author}` : "by ghost")
+      div8().flex_none().max_w(110).truncate().text_size(12).text_color(colors().dim).child(pull.author ? `by @${pull.author}` : "by ghost")
     ]
   });
 }
@@ -11151,7 +11443,7 @@ var Panel = class {
     const t = colors();
     const overlay = props2()?.overlay;
     const noRemote = this.remote === null && !(this.account && !this.account.status.ok);
-    return v_flex3().id("github").size_full().min_h(0).overflow_hidden().bg(t.background).text_color(t.foreground).text_size(13).when(!overlay, (el) => el.rounded(10).border_1().border_color(t.border)).child(this.header(overlay, where.cwd ?? "no folder")).when(noRemote, (el) => el.child(this.noRemote(where.cwd))).when(!noRemote, (el) => el.child(this.tabs()).child(this.list())).child(this.statusCard(where.on, where.cwd));
+    return v_flex5().id("github").size_full().min_h(0).overflow_hidden().bg(t.background).text_color(t.foreground).text_size(13).when(!overlay, (el) => el.rounded(10).border_1().border_color(t.border)).child(this.header(overlay, where.cwd ?? "no folder")).when(noRemote, (el) => el.child(this.noRemote(where.cwd))).when(!noRemote, (el) => el.child(this.tabs()).child(this.list())).child(this.statusCard(where.on, where.cwd));
   }
   /** The repository, then ↻ (Herdr's own spinner while anything loads, as its tab bar shows a working agent). */
   header(overlay, context) {
@@ -11162,7 +11454,7 @@ var Panel = class {
       cx.notify();
     });
     const repo = this.remote ? `${this.remote.owner}/${this.remote.repo}` : "";
-    return h_flex4().h(42).flex_none().px(14).gap(8).items_center().border_b(1).border_color(t.border).child(div7().font_semibold().tooltip(context).child("GitHub")).child(div7().flex_1().min_w(0).truncate().text_right().text_size(12).text_color(t.dim).child(repo)).child(busy ? div7().size(24).flex_none().flex().items_center().justify_center().child(spinner()) : refresh).when(overlay !== void 0, (el) => el.child(button("gh-close", "\xD7", "Close", () => closeOverlay(overlay))));
+    return h_flex6().h(42).flex_none().px(14).gap(8).items_center().border_b(1).border_color(t.border).child(div9().font_semibold().tooltip(context).child("GitHub")).child(div9().flex_1().min_w(0).truncate().text_right().text_size(12).text_color(t.dim).child(repo)).child(busy ? div9().size(24).flex_none().flex().items_center().justify_center().child(spinner()) : refresh).when(overlay !== void 0, (el) => el.child(button("gh-close", "\xD7", "Close", () => closeOverlay(overlay))));
   }
   /** The gh account on the folder's machine, then how fresh the lists are. What to do about a problem is said in the list. */
   statusCard(on, cwd) {
@@ -11178,13 +11470,13 @@ var Panel = class {
       Date.now()
     );
     const tip = `${this.account ? describeAccount(this.account).text : "checking gh\u2026"} \xB7 ${cwd ?? "no folder"}`;
-    const dot = s.tone === "pending" ? spinner(10) : div7().size(8).rounded(4).bg(s.tone === "ok" ? t.done : t.blocked);
-    return v_flex3().id("gh-status").flex_none().px(14).py(8).gap(2).border_t(1).border_color(t.border).bg(t.surface).text_size(12).tooltip(tip).accessibility_label(`${s.account} on ${s.machine}${s.sync ? `. ${s.sync}` : ""}`).child(
-      h_flex4().gap(8).items_center().child(div7().w(10).flex_none().flex().items_center().justify_center().child(dot)).child(div7().flex_none().max_w(160).truncate().font_medium().child(s.account)).child(div7().flex_none().text_color(t.dim).child("\xB7")).child(div7().flex_1().min_w(0).truncate().text_color(t.dim).child(s.machine))
+    const dot = s.tone === "pending" ? spinner(10) : div9().size(8).rounded(4).bg(s.tone === "ok" ? t.done : t.blocked);
+    return v_flex5().id("gh-status").flex_none().px(14).py(8).gap(2).border_t(1).border_color(t.border).bg(t.surface).text_size(12).tooltip(tip).accessibility_label(`${s.account} on ${s.machine}${s.sync ? `. ${s.sync}` : ""}`).child(
+      h_flex6().gap(8).items_center().child(div9().w(10).flex_none().flex().items_center().justify_center().child(dot)).child(div9().flex_none().max_w(160).truncate().font_medium().child(s.account)).child(div9().flex_none().text_color(t.dim).child("\xB7")).child(div9().flex_1().min_w(0).truncate().text_color(t.dim).child(s.machine))
     ).when(
       s.sync !== null,
       (el) => el.child(
-        div7().pl(18).truncate().text_color(s.tone === "problem" ? t.blocked : t.dim).child(s.sync ?? "")
+        div9().pl(18).truncate().text_color(s.tone === "problem" ? t.blocked : t.dim).child(s.sync ?? "")
       )
     );
   }
@@ -11192,14 +11484,14 @@ var Panel = class {
   noRemote(cwd) {
     const t = colors();
     const empty = noRepository(cwd);
-    return v_flex3().flex_1().min_h(0).px(28).gap(8).items_center().justify_center().child(svg4("mods/github/assets/github.svg").size(28).text_color(t.dim)).child(div7().pt(4).font_medium().text_color(t.muted).child(empty.title)).child(div7().text_size(12).text_center().text_color(t.dim).child(empty.detail));
+    return v_flex5().flex_1().min_h(0).px(28).gap(8).items_center().justify_center().child(svg6("mods/github/assets/github.svg").size(28).text_color(t.dim)).child(div9().pt(4).font_medium().text_color(t.muted).child(empty.title)).child(div9().text_size(12).text_center().text_color(t.dim).child(empty.detail));
   }
   /** Issues and Pull Requests; Actions and notifications join them later. */
   tabs() {
     const t = colors();
-    return h_flex4().h(34).flex_none().px(10).gap(4).items_center().border_b(1).border_color(t.border).children(
+    return h_flex6().h(34).flex_none().px(10).gap(4).items_center().border_b(1).border_color(t.border).children(
       TABS.map(
-        ({ id, label }) => div7().id(`gh-tab-${id}`).px(8).py(3).rounded(6).text_size(12).font_medium().cursor_pointer().text_color(this.tab === id ? t.foreground : t.muted).when(this.tab === id, (el) => el.bg(t.hover)).when(this.tab !== id, (el) => el.hover((s) => s.bg(t.hover))).accessibility_label(label).on_mouse_down("left", stop).on_click((_e, cx) => {
+        ({ id, label }) => div9().id(`gh-tab-${id}`).px(8).py(3).rounded(6).text_size(12).font_medium().cursor_pointer().text_color(this.tab === id ? t.foreground : t.muted).when(this.tab === id, (el) => el.bg(t.hover)).when(this.tab !== id, (el) => el.hover((s) => s.bg(t.hover))).accessibility_label(label).on_mouse_down("left", stop).on_click((_e, cx) => {
           this.tab = id;
           this.openFailure = null;
           if (id === "prs") this.pulls.load(cx);
@@ -11221,18 +11513,18 @@ var Panel = class {
       issuesEnabled: this.tab === "issues" ? this.issues.anyPage?.issuesEnabled : void 0,
       failure: this.failure ?? list2.notFound
     });
-    const problem = (text3) => div7().p(8).text_size(12).text_color(t.blocked).child(text3);
-    return v_flex3().id(`gh-list-${this.tab}`).flex_1().min_h(0).overflow_y_scroll().p(6).gap(4).when(this.openFailure !== null, (el) => el.child(problem(this.openFailure ?? ""))).when(notice !== null, (el) => el.child(problem(notice ?? ""))).when(!notice && this.ready() !== null, (el) => el.children(list2.render())).when(!notice && !this.ready() && this.loading, (el) => el.child(div7().p(8).text_color(t.dim).child("\u2026")));
+    const problem = (text3) => div9().p(8).text_size(12).text_color(t.blocked).child(text3);
+    return v_flex5().id(`gh-list-${this.tab}`).flex_1().min_h(0).overflow_y_scroll().p(6).gap(4).when(this.openFailure !== null, (el) => el.child(problem(this.openFailure ?? ""))).when(notice !== null, (el) => el.child(problem(notice ?? ""))).when(!notice && this.ready() !== null, (el) => el.children(list2.render())).when(!notice && !this.ready() && this.loading, (el) => el.child(div9().p(8).text_color(t.dim).child("\u2026")));
   }
 };
 
 // src/github/views/reader.ts
-import { v_flex as v_flex8 } from "gpui-base";
+import { v_flex as v_flex9 } from "gpui-base";
 import { nextCommand, props as props3 } from "herdr";
 
 // src/github/views/issue.ts
-import { h_flex as h_flex6, Textarea, TextareaState, v_flex as v_flex5 } from "gpui-base";
-import { div as div9 } from "gpui-kit";
+import { h_flex as h_flex7, Textarea, TextareaState, v_flex as v_flex6 } from "gpui-base";
+import { div as div10 } from "gpui-kit";
 
 // src/github/core/projects.ts
 var FIELD = { issue: "issue", pr: "pullRequest" };
@@ -11285,137 +11577,6 @@ async function readProjects(ref, on) {
   } catch (e) {
     return projectsFailure(e instanceof Error ? e.message : String(e), on);
   }
-}
-
-// src/github/views/detail.ts
-import { h_flex as h_flex5, TextView, v_flex as v_flex4 } from "gpui-base";
-import { div as div8, svg as svg5 } from "gpui-kit";
-var NOUN = { issue: "issue", pr: "pull request" };
-var Noun = (kind) => NOUN[kind].charAt(0).toUpperCase() + NOUN[kind].slice(1);
-function openLink(cx, host, url, page) {
-  const ref = detailLink(url, page);
-  if (ref) host.follow(cx, ref);
-  else {
-    const external = browserUrl(url, page);
-    if (external) cx.open_url(external);
-  }
-}
-function detailEmpty(_kind) {
-  return div8().flex_1();
-}
-function detailHeader(host, ref, shown, refresh) {
-  const t = colors();
-  const url = shown.url ?? detailUrl(ref);
-  const previous3 = host.previous();
-  const number = link(`${ref.kind}-browser`, url, `#${ref.number}`).px(2).rounded(4).text_color(t.accent).hover((s) => s.bg(t.hover)).tooltip(`Open ${ref.repo} #${ref.number} in browser`).accessibility_label(`Open #${ref.number} in browser`);
-  const copy = button(
-    `${ref.kind}-copy`,
-    svg5("mods/github/assets/copy.svg").size(16),
-    `Copy ${NOUN[ref.kind]} link`,
-    (_e, cx) => cx.write_to_clipboard(url)
-  );
-  return h_flex5().flex_none().px(24).pt(18).pb(12).gap(12).items_start().when(
-    previous3 !== null,
-    (el) => el.child(
-      square(button(`${ref.kind}-back`, "\u2190", `Back to #${previous3?.number}`, (_e, cx) => host.back(cx))).text_size(
-        22
-      )
-    )
-  ).child(
-    h_flex5().flex_1().min_w(0).gap(8).items_center().flex_wrap().text_size(22).child(
-      div8().min_w(0).font_semibold().child(shown.title ?? `${Noun(ref.kind)} details`)
-    ).child(h_flex5().gap(2).items_center().flex_none().child(number).child(copy))
-  ).child(
-    shown.loading ? square(div8()).child(spinner(18)) : square(
-      button(`${ref.kind}-refresh`, "\u21BB", `Refresh ${NOUN[ref.kind]}`, (_e, cx) => {
-        refresh(cx);
-        cx.notify();
-      })
-    ).text_size(22)
-  );
-}
-function detailBody(ref, loading, failure, document3) {
-  const t = colors();
-  return v_flex4().id(`${ref.kind}-scroll-${detailKey(ref)}`).flex_1().min_h(0).overflow_y_scroll().px(24).pb(18).gap(12).when(loading, (el) => el.child(div8().text_size(12).text_color(t.dim).child(`Loading ${NOUN[ref.kind]}\u2026`))).when(
-    failure !== void 0,
-    (el) => el.child(
-      div8().text_color(t.blocked).child(failure ?? "")
-    )
-  ).when(document3 !== null, (el) => el.child(document3 ?? div8()));
-}
-var DetailMetadata = class {
-  expanded = false;
-  render(layout2, sections) {
-    const t = colors();
-    const wide = layout2 === "wide";
-    const fields = () => sections.map(
-      ([title, value]) => v_flex4().min_w(0).gap(10).py(16).border_b(1).border_color(t.border).when(layout2 === "narrow", (el) => el.w(180).min_w(140).flex_grow(1)).when(layout2 === "compact", (el) => el.w_full().flex_none()).child(div8().text_size(13).font_semibold().child(title)).child(value)
-    );
-    if (wide) return v_flex4().w(220).flex_none().children(fields());
-    const labels2 = sections.find(([title]) => title === "Labels");
-    const summary = () => h_flex5().min_w(0).gap(10).py(16).items_center().flex_wrap().child(div8().text_size(13).font_semibold().child("Labels")).child(layout2 === "compact" ? quiet(String(labels2?.[2] ?? 0)) : labels2?.[1] ?? quiet("None yet"));
-    let content3;
-    if (!this.expanded) content3 = summary();
-    else if (layout2 === "compact") content3 = v_flex4().children(fields());
-    else content3 = h_flex5().gap(20).items_start().flex_wrap().children(fields());
-    const label = this.expanded ? "See less" : "See more";
-    return v_flex4().min_w(0).gap(12).pb(16).border_b(1).border_color(t.border).child(content3).child(
-      h_flex5().child(
-        button("detail-metadata-toggle", label, label, (_e, cx) => {
-          this.expanded = !this.expanded;
-          cx.notify();
-        }).text_color(t.accent)
-      )
-    );
-  }
-};
-function detailDocument(layout2, heading, timeline, sections, metadata) {
-  const wide = layout2 === "wide";
-  const posts = v_flex4().min_w(0).gap(20).when(wide, (el) => el.flex_1()).when(!wide, (el) => el.w_full().flex_none()).children(timeline);
-  const side = metadata.render(layout2, sections);
-  return v_flex4().gap(18).child(h_flex5().gap(10).pb(4).items_center().flex_wrap().children(heading)).child(wide ? h_flex5().gap(24).items_start().child(posts).child(side) : v_flex4().gap(20).child(side).child(posts));
-}
-function stateBadge(label, color, icon2) {
-  return h_flex5().gap(6).items_center().px(10).py(4).rounded(14).bg(`${color}26`).text_size(13).font_semibold().text_color(color).when(icon2 !== void 0, (el) => el.child(svg5(icon2 ?? "").size(14))).child(label);
-}
-function postCard(id, post, verb, onLink) {
-  const t = colors();
-  const reactions = post.reactions ?? [];
-  const heading = h_flex5().px(16).py(10).gap(8).items_center().flex_wrap().bg(t.raised).border_b(1).border_color(t.border).text_size(12).child(div8().font_semibold().child(post.author)).child(div8().text_color(t.dim).child(verb)).child(div8().flex_1()).child(div8().text_color(t.dim).tooltip(post.createdAt).child(relativeTime(post.createdAt, Date.now())));
-  const text3 = TextView.markdown(id, post.markdown).selectable(true).scrollable(false).on_link_click(onLink);
-  return v_flex4().id(`${id}-card`).min_w(0).w_full().overflow_hidden().rounded(8).border_1().border_color(t.border).bg(t.background).child(heading).child(
-    v_flex4().min_w(0).px(16).py(16).gap(12).child(text3).when(
-      reactions.length > 0,
-      (el) => el.child(
-        h_flex5().gap(6).flex_wrap().children(reactions.map((r) => chip(`${r.emoji} ${r.count}`, t.border, t.raised)))
-      )
-    )
-  );
-}
-var quiet = (text3) => div8().text_size(12).text_color(colors().dim).child(text3);
-function people(logins, none) {
-  if (logins.length === 0) return quiet(none);
-  return v_flex4().gap(8).children(logins.map((login2) => div8().text_size(13).font_medium().child(login2)));
-}
-function labelChip(label) {
-  const t = colors();
-  return chip(label.name, label.color ?? t.input, label.color ? `${label.color}26` : t.raised).text_color(t.foreground);
-}
-function labels(list2) {
-  if (list2.length === 0) return quiet("None yet");
-  return h_flex5().gap(6).flex_wrap().children(list2.map(labelChip));
-}
-var milestone = (title) => title ? div8().text_size(13).child(title) : quiet("No milestone");
-function projects(list2, loading) {
-  const t = colors();
-  if (!list2) return quiet(loading ? "Loading Projects\u2026" : "Projects not loaded.");
-  if (!list2.ok) return quiet("None yet").tooltip(list2.message);
-  if (list2.projects.length === 0) return quiet("None yet");
-  return v_flex4().gap(8).children(
-    list2.projects.map(
-      (project) => link(`project-${project.url}`, project.url, project.title).text_size(13).text_color(t.accent).tooltip(project.url)
-    )
-  );
 }
 
 // src/github/views/issue.ts
@@ -11610,7 +11771,7 @@ ${detailKey(this.ref)}` : null;
       layout2,
       [
         stateBadge(open ? "\u25CB Open" : "\u25CF Closed", open ? t.done : t.accent),
-        div9().text_size(13).font_medium().child(issue.author)
+        div10().text_size(13).font_medium().child(issue.author)
       ],
       [
         postCard("issue-body", issue, "opened this issue", onLink),
@@ -11631,14 +11792,14 @@ ${detailKey(this.ref)}` : null;
   /** A label or assignment change between the comments. */
   activity(activity) {
     const t = colors();
-    const avatar = div9().size(22).flex_none().rounded(11).bg(t.raised).text_color(t.muted).font_semibold().flex().items_center().justify_center().child(activity.actor.slice(0, 1).toUpperCase());
+    const avatar = div10().size(22).flex_none().rounded(11).bg(t.raised).text_color(t.muted).font_semibold().flex().items_center().justify_center().child(activity.actor.slice(0, 1).toUpperCase());
     const changed = "labels" in activity ? activity.labels : null;
-    return h_flex6().id(`activity-${activity.id}`).px(16).py(4).gap(8).items_center().flex_wrap().text_size(12).child(avatar).child(div9().font_semibold().child(activity.actor)).child(div9().text_color(t.dim).child(activityText(activity))).when(
+    return h_flex7().id(`activity-${activity.id}`).px(16).py(4).gap(8).items_center().flex_wrap().text_size(12).child(avatar).child(div10().font_semibold().child(activity.actor)).child(div10().text_color(t.dim).child(activityText(activity))).when(
       changed !== null,
       (el) => el.children((changed ?? []).map(labelChip)).child(
-        div9().text_color(t.dim).child(changed?.length === 1 ? "label" : "labels")
+        div10().text_color(t.dim).child(changed?.length === 1 ? "label" : "labels")
       )
-    ).child(div9().flex_1()).child(div9().text_color(t.dim).tooltip(activity.createdAt).child(relativeTime(activity.createdAt, Date.now())));
+    ).child(div10().flex_1()).child(div10().text_color(t.dim).tooltip(activity.createdAt).child(relativeTime(activity.createdAt, Date.now())));
   }
   /** A new comment, and close / reopen: GitHub's own order of the two buttons. */
   composer(issue) {
@@ -11660,23 +11821,23 @@ ${detailKey(this.ref)}` : null;
       enabled: !busy && this.draft.trim() !== "",
       primary: true
     };
-    return v_flex5().id("issue-composer").min_w(0).w_full().gap(10).pt(4).when(
+    return v_flex6().id("issue-composer").min_w(0).w_full().gap(10).pt(4).when(
       box !== null,
       (el) => el.child(
-        div9().min_w(0).rounded(8).border_1().border_color(t.border).bg(t.background).p(8).on_mouse_down("left", stop).child(Textarea.new(box).w_full().text_size(13).text_color(t.foreground))
+        div10().min_w(0).rounded(8).border_1().border_color(t.border).bg(t.background).p(8).on_mouse_down("left", stop).child(Textarea.new(box).w_full().text_size(13).text_color(t.foreground))
       )
     ).when(
       this.writeFailure !== null,
       (el) => el.child(
-        div9().text_size(12).text_color(t.blocked).child(this.writeFailure ?? "")
+        div10().text_size(12).text_color(t.blocked).child(this.writeFailure ?? "")
       )
     ).child(
-      h_flex6().gap(8).items_center().justify_end().when(busy, (el) => el.child(spinner(14))).child(this.action(close, (cx) => this.setState(cx, open ? "closed" : "open"))).child(this.action(send, (cx) => this.comment(cx)))
+      h_flex7().gap(8).items_center().justify_end().when(busy, (el) => el.child(spinner(14))).child(this.action(close, (cx) => this.setState(cx, open ? "closed" : "open"))).child(this.action(send, (cx) => this.comment(cx)))
     );
   }
   action({ id, label, tip, enabled, primary }, act) {
     const t = colors();
-    return h_flex6().id(id).h(32).px(14).gap(6).items_center().rounded(6).border_1().text_size(13).font_medium().border_color(primary ? t.accent : t.border).bg(primary ? t.accent : t.raised).text_color(primary ? t.background : t.foreground).when(
+    return h_flex7().id(id).h(32).px(14).gap(6).items_center().rounded(6).border_1().text_size(13).font_medium().border_color(primary ? t.accent : t.border).bg(primary ? t.accent : t.raised).text_color(primary ? t.background : t.foreground).when(
       enabled,
       (el) => el.cursor_pointer().hover((s) => s.opacity(0.85)).on_click((_e, cx) => {
         cx.stop_propagation();
@@ -11687,12 +11848,12 @@ ${detailKey(this.ref)}` : null;
 };
 
 // src/github/views/pull.ts
-import { h_flex as h_flex8, v_flex as v_flex7 } from "gpui-base";
-import { div as div11 } from "gpui-kit";
+import { h_flex as h_flex9, v_flex as v_flex8 } from "gpui-base";
+import { div as div12 } from "gpui-kit";
 
 // src/github/views/diff.ts
-import { h_flex as h_flex7, Scrollbar, v_flex as v_flex6, v_virtual_list } from "gpui-base";
-import { div as div10 } from "gpui-kit";
+import { h_flex as h_flex8, Scrollbar, v_flex as v_flex7, v_virtual_list } from "gpui-base";
+import { div as div11 } from "gpui-kit";
 
 // src/github/core/diff.ts
 function parsePatch(patch) {
@@ -11760,14 +11921,14 @@ var FileDiff = class {
     }
     const rows = this.rows;
     const id = `pull-diff-${file.path}`;
-    const header = v_flex6().flex_none().px(16).py(8).gap(6).border_b(1).border_color(t.border).child(
-      h_flex7().gap(10).items_center().flex_wrap().child(div10().min_w(0).font_medium().child(file.path)).child(div10().text_color(t.done).child(`+${file.additions}`)).child(div10().text_color(t.blocked).child(`\u2212${file.deletions}`)).child(link(`${id}-browser`, file.url, "Open File on GitHub").text_size(12).text_color(t.accent))
+    const header = v_flex7().flex_none().px(16).py(8).gap(6).border_b(1).border_color(t.border).child(
+      h_flex8().gap(10).items_center().flex_wrap().child(div11().min_w(0).font_medium().child(file.path)).child(div11().text_color(t.done).child(`+${file.additions}`)).child(div11().text_color(t.blocked).child(`\u2212${file.deletions}`)).child(link(`${id}-browser`, file.url, "Open File on GitHub").text_size(12).text_color(t.accent))
     ).when(
       file.previousPath !== null,
-      (el) => el.child(div10().text_size(12).text_color(t.dim).child(`Renamed from ${file.previousPath}`))
+      (el) => el.child(div11().text_size(12).text_color(t.dim).child(`Renamed from ${file.previousPath}`))
     );
-    const body = rows.length > 0 ? div10().flex_1().min_h(0).min_w(0).relative().child(
-      div10().id(`${id}-horizontal`).size_full().overflow_x_scrollbar().child(
+    const body = rows.length > 0 ? div11().flex_1().min_h(0).min_w(0).relative().child(
+      div11().id(`${id}-horizontal`).size_full().overflow_x_scrollbar().child(
         v_virtual_list(
           id,
           rows.length,
@@ -11776,22 +11937,22 @@ var FileDiff = class {
           (range) => rows.slice(range.start, range.end).map(diffRow)
         ).h_full().w_full().min_w(this.width)
       )
-    ).child(Scrollbar.vertical(id).absolute().inset_0()) : div10().p(20).text_color(t.dim).child(
+    ).child(Scrollbar.vertical(id).absolute().inset_0()) : div11().p(20).text_color(t.dim).child(
       file.additions === 0 && file.deletions === 0 ? "No textual changes in this file. Open it on GitHub to view the full file." : "GitHub did not provide a patch for this file (it may be binary or too large). Open it on GitHub to view the changes."
     );
-    return v_flex6().flex_1().min_h(0).min_w(0).overflow_hidden().child(header).child(body);
+    return v_flex7().flex_1().min_h(0).min_w(0).overflow_hidden().child(header).child(body);
   }
 };
 function diffRow(row) {
   const t = colors();
   const added = row.kind === "add", deleted = row.kind === "delete";
-  return h_flex7().h(ROW_HEIGHT).w_full().flex_none().items_center().font_family("monospace").text_size(13).when(added, (el) => el.bg(`${t.done}20`)).when(deleted, (el) => el.bg(`${t.blocked}20`)).when(row.kind === "hunk", (el) => el.bg(`${t.accent}18`).text_color(t.accent)).when(row.kind === "notice", (el) => el.text_color(t.dim)).child(
-    div10().w(54).flex_none().pr(8).text_right().text_color(t.dim).child(row.oldLine ?? "")
+  return h_flex8().h(ROW_HEIGHT).w_full().flex_none().items_center().font_family("monospace").text_size(13).when(added, (el) => el.bg(`${t.done}20`)).when(deleted, (el) => el.bg(`${t.blocked}20`)).when(row.kind === "hunk", (el) => el.bg(`${t.accent}18`).text_color(t.accent)).when(row.kind === "notice", (el) => el.text_color(t.dim)).child(
+    div11().w(54).flex_none().pr(8).text_right().text_color(t.dim).child(row.oldLine ?? "")
   ).child(
-    div10().w(54).flex_none().pr(8).text_right().text_color(t.dim).child(row.newLine ?? "")
+    div11().w(54).flex_none().pr(8).text_right().text_color(t.dim).child(row.newLine ?? "")
   ).child(
-    div10().w(20).flex_none().text_color(added ? t.done : deleted ? t.blocked : t.dim).child(added ? "+" : deleted ? "\u2212" : "")
-  ).child(div10().flex_none().whitespace_nowrap().child(row.text));
+    div11().w(20).flex_none().text_color(added ? t.done : deleted ? t.blocked : t.dim).child(added ? "+" : deleted ? "\u2212" : "")
+  ).child(div11().flex_none().whitespace_nowrap().child(row.text));
 }
 
 // src/github/views/pull.ts
@@ -11877,7 +12038,7 @@ var Pull = class {
         (cx) => this.load(cx)
       ),
       ...this.selected !== null ? [
-        h_flex8().flex_none().px(24).pb(8).child(
+        h_flex9().flex_none().px(24).pb(8).child(
           button(
             "pull-description",
             "Description",
@@ -11894,8 +12055,8 @@ var Pull = class {
     if (file) return this.diff.render(file);
     const failure = this.files?.failure;
     const message = failure ?? (this.files?.loading ? "Loading changed files\u2026" : "This file is not in the changed-files list. Choose another file in the GitHub sidebar or refresh.");
-    return v_flex7().flex_1().min_h(0).p(24).gap(8).child(
-      div11().text_color(failure ? colors().blocked : colors().dim).child(message)
+    return v_flex8().flex_1().min_h(0).p(24).gap(8).child(
+      div12().text_color(failure ? colors().blocked : colors().dim).child(message)
     ).when(
       !this.files?.loading,
       (el) => el.child(
@@ -11915,18 +12076,18 @@ var Pull = class {
       layout2,
       [
         stateBadge(state.label, state.color(t), state.icon),
-        div11().text_size(13).child(`${pull.author} ${merged} into ${pull.base} from ${pull.head}`)
+        div12().text_size(13).child(`${pull.author} ${merged} into ${pull.base} from ${pull.head}`)
       ],
       [
         postCard("pull-body", pull, "opened this pull request", onLink),
         ...(pull.timeline ?? []).map(
-          (item, index2) => v_flex7().gap(8).child(postCard(`pull-event-${index2}`, item, item.verb, onLink)).children(
+          (item, index2) => v_flex8().gap(8).child(postCard(`pull-event-${index2}`, item, item.verb, onLink)).children(
             item.discussion.map(
-              (d) => v_flex7().gap(6).child(div11().text_size(12).child(d.path)).when(Boolean(d.snippet), (el) => el.child(div11().text_size(12).child(d.snippet))).child(postCard(`inline-${d.comment.id}`, d.comment, "commented", onLink))
+              (d) => v_flex8().gap(6).child(div12().text_size(12).child(d.path)).when(Boolean(d.snippet), (el) => el.child(div12().text_size(12).child(d.snippet))).child(postCard(`inline-${d.comment.id}`, d.comment, "commented", onLink))
             )
           )
         ),
-        v_flex7().gap(10).child(div11().font_semibold().child("Checks")).children(
+        v_flex8().gap(10).child(div12().font_semibold().child("Checks")).children(
           (pull.checks ?? []).map(
             (c) => c.url ? link(c.id, c.url, `${c.name} \xB7 ${c.status} \xB7 ${c.duration}`).text_color(t.accent) : quiet(`${c.name} \xB7 ${c.status} \xB7 ${c.duration}`)
           )
@@ -11945,12 +12106,12 @@ var Pull = class {
   reviewers(pull) {
     const t = colors();
     if (pull.reviewers.length === 0) return quiet("None yet");
-    return v_flex7().gap(8).children(
+    return v_flex8().gap(8).children(
       pull.reviewers.map((r) => {
         const state = REVIEWS[r.state];
-        return h_flex8().gap(8).items_center().tooltip(state.label).accessibility_label(`${r.name}: ${state.label}`).child(
-          div11().flex_1().min_w(0).text_size(13).child(`${r.name}${r.team ? " (team)" : ""}`)
-        ).child(div11().text_color(t[state.color]).child(state.icon));
+        return h_flex9().gap(8).items_center().tooltip(state.label).accessibility_label(`${r.name}: ${state.label}`).child(
+          div12().flex_1().min_w(0).text_size(13).child(`${r.name}${r.team ? " (team)" : ""}`)
+        ).child(div12().text_color(t[state.color]).child(state.icon));
       })
     );
   }
@@ -12018,7 +12179,7 @@ var Reader = class {
     }
     const t = colors();
     const kind = this.navigation.ref?.kind ?? this.initial();
-    return v_flex8().id("reader").size_full().min_h(0).overflow_hidden().bg(t.background).text_color(t.foreground).text_size(14).on_size_change((size, cx2) => {
+    return v_flex9().id("reader").size_full().min_h(0).overflow_hidden().bg(t.background).text_color(t.foreground).text_size(14).on_size_change((size, cx2) => {
       const layout2 = size.width >= WIDE ? "wide" : size.width >= COMPACT ? "narrow" : "compact";
       if (layout2 !== this.layout) {
         this.layout = layout2;

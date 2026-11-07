@@ -7,8 +7,10 @@ import { type Context, div, type Element } from "gpui-kit";
 import type { DetailKind, DetailRef } from "../core/detail.ts";
 import type { Failure } from "../core/gh.ts";
 import type { Page } from "../core/page.ts";
+import { previewKey } from "../core/preview.ts";
 import * as gh from "../io/gh.ts";
 import type { Ready } from "../io/known.ts";
+import { RowPreviews } from "./preview.ts";
 import { button, colors, spinner, stop } from "./ui.ts";
 
 /** What a tab's groups ask of the sidebar, each time (the place can change between calls). */
@@ -69,6 +71,7 @@ export class GroupList<K extends string, R extends Row, P extends Page<R>> {
 	private readonly groups: Record<K, Group<P>>;
 	private readonly host: ListHost;
 	private readonly source: GroupSource<K, R, P>;
+	private readonly previews = new RowPreviews();
 
 	constructor(host: ListHost, source: GroupSource<K, R, P>) {
 		this.host = host;
@@ -283,6 +286,11 @@ export class GroupList<K extends string, R extends Row, P extends Page<R>> {
 		const t = colors();
 		const id = this.source.kind;
 		const key = `${kind}#${row.number}`;
+		const ready = this.host.ready();
+		const ref: DetailRef | null = ready
+			? { kind: id, repo: `${ready.remote.owner}/${ready.remote.repo}`, number: row.number }
+			: null;
+		const contextKey = ready && ref ? previewKey(ref, ready.on, ready.login) : null;
 		const actions = [
 			button(`${id}-copy-${kind}-${row.number}`, "#", `Copy #${row.number}`, (_e, cx) =>
 				cx.write_to_clipboard(`#${row.number}`),
@@ -308,11 +316,18 @@ export class GroupList<K extends string, R extends Row, P extends Page<R>> {
 			.on_hover((h, cx) => {
 				if (h) this.hovered = key;
 				else if (this.hovered === key) this.hovered = null;
+				this.previews.hover(cx, `${key}-${contextKey}`, h ? ref : null, ready, () => {
+					const live = this.host.ready();
+					if (!live || !ref || this.hovered !== key || !this.host.asking()) return false;
+					const target = { ...ref, repo: `${live.remote.owner}/${live.remote.repo}` };
+					return previewKey(target, live.on, live.login) === contextKey;
+				});
 				cx.notify();
 			})
 			.children(disclosure ? [disclosure] : [])
 			.children([...this.source.cells(row), ...(this.hovered === key ? actions : this.source.idle(row))]);
+		const card = ready && ref ? this.previews.wrap(`${id}-${key}`, frame, ref, ready) : frame;
 		const expanded = this.source.expandedRow?.(row, key);
-		return expanded ? v_flex().child(frame).child(expanded) : frame;
+		return expanded ? v_flex().child(card).child(expanded) : card;
 	}
 }

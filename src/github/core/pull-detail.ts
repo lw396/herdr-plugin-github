@@ -3,7 +3,7 @@ import { type Comment, login, parseComments, parseReactions, type Reaction } fro
 import { type Label, parseLabel } from "./labels.ts";
 import { readerMarkdown } from "./markdown.ts";
 import type { PullCheck, PullTimelineItem } from "./pull-timeline.ts";
-import type { PullState } from "./pulls.ts";
+import { type PullState, pullState } from "./pulls.ts";
 
 export type ReviewState = "requested" | "approved" | "changes_requested" | "commented" | "dismissed";
 export interface Reviewer {
@@ -85,7 +85,7 @@ export function parsePullDetail(pull: unknown, issue: unknown, comments: unknown
 	return {
 		number: p.number,
 		title: p.title,
-		state: p.merged ? "merged" : p.state === "closed" ? "closed" : p.draft ? "draft" : "open",
+		state: pullState(p.merged ? "merged" : p.state, p.draft),
 		author: login(p.user),
 		createdAt: p.created_at,
 		url: p.html_url,

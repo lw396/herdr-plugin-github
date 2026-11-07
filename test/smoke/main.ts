@@ -1,12 +1,14 @@
 // Herdr smoke mod: runs real parser and reader paths inside Herdr's QuickJS (scripts/smoke.sh).
-import { h_flex } from "gpui-base";
+import { HoverCard, h_flex } from "gpui-base";
 import { type AsyncContext, type Context, div, View } from "gpui-kit";
 import { parseFiles } from "../../src/github/core/files.ts";
 import { parseIssueDetail } from "../../src/github/core/issue-detail.ts";
 import { browserUrl, detailLink, readerMarkdown } from "../../src/github/core/markdown.ts";
+import { PREVIEW_CLOSE_MS, PREVIEW_OPEN_MS, parsePreview } from "../../src/github/core/preview.ts";
 import { parsePullDetail } from "../../src/github/core/pull-detail.ts";
 import { DetailMetadata, labels, people } from "../../src/github/views/detail.ts";
 import { ChangedFiles } from "../../src/github/views/files.ts";
+import { previewCard } from "../../src/github/views/preview.ts";
 import { Reader } from "../../src/github/views/reader.ts";
 import issue from "../fixtures/issue-plugin-13.json";
 import pull from "../fixtures/pull-cli-14974.json";
@@ -64,6 +66,7 @@ export default class Smoke extends View {
 			pull: parsePullDetail(pull, pullIssue, pullComments.flat(), pullReviews.flat()),
 		};
 		expectEqual(pr.pull.entry.pull?.state ?? "", "closed", "PR state");
+		expectEqual(parsePreview(pull, "pr").summary, "probe", "hover summary in QuickJS");
 		expectEqual(
 			JSON.stringify(detailLink("https://github.com/cli/cli/pull/14976", pull.html_url)),
 			'{"kind":"pr","repo":"cli/cli","number":14976}',
@@ -142,6 +145,18 @@ export default class Smoke extends View {
 			.size_full()
 			.children(this.readers.map((reader) => div().flex_1().child(reader.render(cx))))
 			.children(this.metadataSamples())
-			.child(this.files?.render() ?? div());
+			.child(this.files?.render() ?? div())
+			.child(
+				HoverCard.new("smoke-hover")
+					.open_delay(PREVIEW_OPEN_MS)
+					.close_delay(PREVIEW_CLOSE_MS)
+					.trigger(div().child("Hover preview"))
+					.content(previewCard({ kind: "pr", repo: "cli/cli", number: 14974 }, parsePreview(pull, "pr"))),
+			)
+			.child(
+				previewCard({ kind: "issue", repo: "lw396/herdr-plugin-github", number: 13 }, parsePreview(issue, "issue")),
+			)
+			.child(previewCard({ kind: "issue", repo: "o/r", number: 1 }, undefined))
+			.child(previewCard({ kind: "pr", repo: "o/r", number: 2 }, undefined, "Not found"));
 	}
 }

@@ -6,6 +6,11 @@ import type { RemoteRepo } from "./remote.ts";
 
 export type PullState = "open" | "draft" | "merged" | "closed";
 
+/** Draft styling applies only to open PRs; merged and closed always take precedence. */
+export function pullState(state: Exclude<PullState, "draft">, draft: boolean): PullState {
+	return state === "open" && draft ? "draft" : state;
+}
+
 export interface Pull {
 	number: number;
 	title: string;
@@ -104,7 +109,7 @@ function pullRow(n: PullNode): Pull {
 		number: n.number,
 		title: n.title,
 		author: n.author?.login ?? null,
-		state: n.state === "MERGED" ? "merged" : n.state === "CLOSED" ? "closed" : n.isDraft ? "draft" : "open",
+		state: pullState(n.state.toLowerCase() as Exclude<PullState, "draft">, n.isDraft),
 		updatedAt: n.updatedAt,
 		url: n.url,
 	};
