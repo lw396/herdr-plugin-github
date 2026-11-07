@@ -7,15 +7,17 @@ import { type AsyncContext, type Context, div, type Element, svg } from "gpui-ki
 import { nextCommand, props } from "herdr";
 import { describeAccount } from "../core/account.ts";
 import { type Activity, activityText, issueTimeline } from "../core/activity.ts";
+import type { Change } from "../core/conditional.ts";
 import { transient } from "../core/gh-args.ts";
 import { type Comment, type IssueDetail, type IssueRef, issueKey, type Label } from "../core/issue-detail.ts";
+import { IssuePolling } from "../core/issue-polling.ts";
 import { browserUrl, issueLink } from "../core/markdown.ts";
 import type { Projects } from "../core/projects.ts";
 import { relativeTime } from "../core/time.ts";
 import { announce, type IssueNotice, Notices } from "../io/changes.ts";
-import { detailMachine, issueCommand, navigatedDetail, readyDetail } from "../io/detail-tabs.ts";
+import { detailLocation, issueCommand, navigatedDetail, readyDetail } from "../io/detail-tabs.ts";
 import * as gh from "../io/gh.ts";
-import { addComment, readIssue, readIssueProjects, setIssueState } from "../io/issues.ts";
+import { addComment, issueChanges, readIssue, readIssueProjects, setIssueState } from "../io/issues.ts";
 import { button, chip, colors, link, type Role, spinner, square, stop } from "./ui.ts";
 
 interface Loaded {
@@ -56,6 +58,7 @@ export class Issue implements Role {
 	drafts = new Map<string, string>();
 	writing: "comment" | "state" | null = null;
 	writeFailure: string | null = null;
+	polling = new IssuePolling();
 
 	init(cx: AsyncContext): void {
 		this.reader = typeof props()?.reader === "string" ? props().reader : "";
@@ -70,6 +73,10 @@ export class Issue implements Role {
 			if (e.secondary) this.comment(cx);
 		});
 		this.box = box;
+		cx.timer.every(10_000, (cx) => {
+			const shown = this.syncPolling();
+			if (!this.writing) this.load(cx, shown);
+		});
 		// Waiting is a read: init neither opens tabs nor writes shared state.
 		cx.spawn(async (cx) => {
 			for (;;) {
@@ -111,53 +118,82 @@ export class Issue implements Role {
 		cx.notify();
 	}
 
-	load(cx: Context): void {
+	/** Visibility is the reader's own native tab, not keyboard focus or the sidebar's repository. */
+	private syncPolling(): boolean {
+		const place = detailLocation(this.reader);
+		const key = this.ref && place ? `${place.on ?? ""}\n${place.pane}\n${issueKey(this.ref)}` : null;
+		return this.polling.sync(key, Boolean(place?.visible));
+	}
+
+	/** A forced refresh reloads even on 304; normal ticks leave unchanged discussions alone. Never touches the draft. */
+	load(cx: Context, force = true): void {
 		const ref = this.ref;
-		if (!ref) return;
-		// A refresh keeps the shown issue until the new one arrives. ↻ is hidden while loading (one refresh at a time);
-		// a different issue still replaces a load in progress, whose result is then dropped, and is not shown meanwhile.
+		const place = detailLocation(this.reader);
+		this.syncPolling();
+		const request = this.polling.begin(force);
+		if (!ref || !place || !request) return;
 		const key = issueKey(ref);
-		const entry: Loaded = {
-			key,
-			issue: this.entry?.key === key ? this.entry.issue : undefined,
-			loading: true,
-			projectsLoading: false,
-		};
+		const previous = this.entry?.key === key ? this.entry : null;
+		let entry: Loaded =
+			!force && previous && previous.on === place.on
+				? previous
+				: {
+						key,
+						issue: previous?.issue,
+						on: previous?.on === place.on ? previous.on : undefined,
+						failure: previous?.failure,
+						projects: previous?.projects,
+						loading: force,
+						projectsLoading: false,
+					};
 		this.entry = entry;
-		const machine = detailMachine(this.reader);
-		if (!machine) {
-			entry.loading = false;
-			entry.failure = "This issue tab is unavailable. Open the issue from its sidebar again.";
-			return;
-		}
 		cx.spawn(async (cx) => {
+			const current = () =>
+				this.entry === entry && this.polling.current(request) && detailLocation(this.reader)?.visible;
+			let completed: Change | undefined;
 			try {
-				const account = await gh.account(machine.on);
-				if (!account.status.ok) throw new Error(describeAccount(account).text);
-				const issue = await readIssue(ref.repo, ref.number, account.on);
-				if (this.entry !== entry) return;
-				entry.issue = issue;
-				entry.on = account.on;
-				entry.projectsLoading = true;
-				// Optional Projects load on their own: the discussion shows now.
-				cx.spawn(async (cx) => {
-					const projects = await readIssueProjects(ref.repo, ref.number, account.on);
-					if (this.entry !== entry) return;
-					entry.projects = projects;
-					entry.projectsLoading = false;
-					cx.notify();
-				});
+				let on = entry.on;
+				if (on === undefined) {
+					const account = await gh.account(place.on);
+					if (!account.status.ok) throw new Error(describeAccount(account).text);
+					on = account.on;
+				}
+				if (!current()) return;
+				const change = await issueChanges(ref.repo, ref.number, request.etag, on);
+				if (!current()) return;
+				if (this.polling.reload(request, change)) {
+					if (!force) {
+						// A 304 keeps the entry (including slow Projects); a reload replaces it so old metadata cannot win.
+						entry = { ...entry, projectsLoading: false };
+						this.entry = entry;
+					}
+					const issue = await readIssue(ref.repo, ref.number, on);
+					if (!current()) return;
+					entry.issue = issue;
+					entry.on = on;
+					entry.projectsLoading = true;
+					// Optional Projects load on their own, only after an actual discussion reload.
+					cx.spawn(async (cx) => {
+						const projects = await readIssueProjects(ref.repo, ref.number, on);
+						if (this.entry !== entry) return;
+						entry.projects = projects;
+						entry.projectsLoading = false;
+						cx.notify();
+					});
+				}
+				completed = change;
+				entry.failure = undefined;
 			} catch (e) {
-				if (this.entry !== entry) return;
+				if (!current()) return;
 				const failure = gh.failureOf(e);
 				entry.failure = failure.notFound
 					? `${ref.repo} #${ref.number} isn't on GitHub, or this account can't see it.`
 					: failure.message;
 			} finally {
-				if (this.entry === entry) {
-					entry.loading = false;
-					cx.notify();
-				}
+				if (!detailLocation(this.reader)?.visible) this.syncPolling();
+				const result = this.polling.finish(request, completed);
+				if (this.entry === entry) entry.loading = false;
+				if (result.accepted && result.notify) cx.notify();
 			}
 		});
 	}
@@ -222,6 +258,8 @@ export class Issue implements Role {
 		const issue = this.entry?.issue;
 		const comment = notice.comment;
 		if (!issue || !this.ref || issueKey(notice) !== issueKey(this.ref)) return;
+		this.polling.invalidate();
+		if (this.entry) this.entry.loading = false;
 		if (comment && !issue.comments.some((c) => c.id === comment.id)) issue.comments = [...issue.comments, comment];
 		if (notice.state) issue.state = notice.state.state;
 	}
@@ -236,10 +274,11 @@ export class Issue implements Role {
 		} else if (this.ref && issueKey(linked) !== issueKey(this.ref)) this.follow(cx, linked);
 	}
 
-	render(_cx: Context): Element {
+	render(cx: Context): Element {
 		if (this.reader) readyDetail(this.reader);
 		// Writes announced by other views (shared metadata re-renders this one).
 		for (const notice of this.notices.take()) this.apply(notice);
+		if (this.syncPolling()) this.load(cx);
 		const t = colors();
 		const root = v_flex()
 			.id("issue-reader")

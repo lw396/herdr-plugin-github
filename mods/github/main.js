@@ -9562,6 +9562,55 @@ function parseIssueDetail(issue, timeline) {
   };
 }
 
+// src/github/core/issue-polling.ts
+var IssuePolling = class {
+  key = null;
+  visible = false;
+  etag = null;
+  failed = false;
+  pending = null;
+  /** Returns whether the newly shown issue needs an immediate refresh. */
+  sync(key, visible) {
+    const changed = key !== this.key;
+    const refresh = visible && key !== null && (changed || !this.visible);
+    if (changed) {
+      this.etag = null;
+      this.failed = false;
+    }
+    if (changed || !visible) this.pending = null;
+    this.key = key;
+    this.visible = visible;
+    return refresh;
+  }
+  /** A local/shared write wins over an older read, and the next tick checks again without a validator. */
+  invalidate() {
+    this.pending = null;
+    this.etag = null;
+  }
+  begin(force = false) {
+    if (!this.key || !this.visible || this.pending) return null;
+    const request = { etag: this.etag, force };
+    this.pending = request;
+    return request;
+  }
+  current(request) {
+    return this.visible && this.pending === request;
+  }
+  reload(request, change) {
+    return this.current(request) && (request.force || change.changed);
+  }
+  /** Finish only after any required discussion reload succeeds; failed reloads must be retried. */
+  finish(request, change) {
+    if (!this.current(request)) return { accepted: false, notify: false };
+    const notify = !change || change.changed || request.force || this.failed;
+    this.pending = null;
+    this.failed = !change;
+    if (!change) this.etag = null;
+    else if (change.changed) this.etag = change.etag;
+    return { accepted: true, notify };
+  }
+};
+
 // src/github/core/time.ts
 var MINUTE = 6e4;
 var HOUR = 60 * MINUTE;
@@ -9661,7 +9710,7 @@ var DetailTabs = class {
       throw new Error("Herdr returned an unreadable tab reply.");
     }
     if (!reply.tab || reply.error) throw new Error(reply.error ?? "Herdr did not return a new tab.");
-    return { id, reader: { tab: reply.tab, request: "", ready: null } };
+    return { id, reader: { tab: reply.tab, pane: reply.pane, request: "", ready: null } };
   }
   /** Live shared metadata re-renders the sidebar: no polling and no persisted issue mailbox. */
   deliver() {
@@ -9686,10 +9735,19 @@ function navigatedDetail(id, issue) {
   const name = issueTabName(issue);
   if (space.tabs.find((t) => t.id === r.tab)?.name !== name) run("tab.rename", { id: r.tab, name });
 }
-function detailMachine(id) {
-  const tab = reader(id)?.tab;
-  const space = spaces().find((s) => s.tabs.some((t) => t.id === tab));
-  return space ? { on: space.machine } : null;
+function detailLocation(id) {
+  const r = reader(id);
+  if (!r) return null;
+  const space = spaces().find((s) => s.tabs.some((t) => t.id === r.tab));
+  const tab = space?.tabs.find((t) => t.id === r.tab);
+  const all2 = panes().filter((p) => p.tab === r.tab);
+  const pane = all2.find((p) => p.mod === "github" && (!r.pane || p.pane === r.pane));
+  if (!space || !tab || !pane) return null;
+  return {
+    pane: pane.pane,
+    on: space.machine,
+    visible: Boolean(space.active && tab.active && !all2.some((p) => p.zoomed && p.pane !== pane.pane))
+  };
 }
 function issueCommand(command, id) {
   if (!command.startsWith("issue:")) return null;
@@ -9892,6 +9950,7 @@ function projectsFailure(message, on) {
 
 // src/github/io/issues.ts
 var listChanges = (repo, etag, on) => changes(`repos/${repo}/issues?state=all&sort=updated&per_page=1`, etag, { on });
+var issueChanges = (repo, number, etag, on) => changes(`repos/${repo}/issues/${number}`, etag, { on });
 async function issuePage(kind, remote2, login, on, after) {
   return parseIssueGroup(await graphql(groupQuery(kind), groupVariables(kind, remote2, login, after), { on }));
 }
@@ -9971,6 +10030,7 @@ var Issue = class {
   drafts = /* @__PURE__ */ new Map();
   writing = null;
   writeFailure = null;
+  polling = new IssuePolling();
   init(cx) {
     this.reader = typeof props()?.reader === "string" ? props().reader : "";
     const box = TextareaState.new({ placeholder: "Leave a comment (Markdown)" });
@@ -9983,6 +10043,10 @@ var Issue = class {
       if (e.secondary) this.comment(cx2);
     });
     this.box = box;
+    cx.timer.every(1e4, (cx2) => {
+      const shown = this.syncPolling();
+      if (!this.writing) this.load(cx2, shown);
+    });
     cx.spawn(async (cx2) => {
       for (; ; ) {
         const ref = issueCommand(await nextCommand(), this.reader);
@@ -10017,48 +10081,75 @@ var Issue = class {
     this.load(cx);
     cx.notify();
   }
-  load(cx) {
+  /** Visibility is the reader's own native tab, not keyboard focus or the sidebar's repository. */
+  syncPolling() {
+    const place = detailLocation(this.reader);
+    const key = this.ref && place ? `${place.on ?? ""}
+${place.pane}
+${issueKey(this.ref)}` : null;
+    return this.polling.sync(key, Boolean(place?.visible));
+  }
+  /** A forced refresh reloads even on 304; normal ticks leave unchanged discussions alone. Never touches the draft. */
+  load(cx, force = true) {
     const ref = this.ref;
-    if (!ref) return;
+    const place = detailLocation(this.reader);
+    this.syncPolling();
+    const request = this.polling.begin(force);
+    if (!ref || !place || !request) return;
     const key = issueKey(ref);
-    const entry = {
+    const previous3 = this.entry?.key === key ? this.entry : null;
+    let entry = !force && previous3 && previous3.on === place.on ? previous3 : {
       key,
-      issue: this.entry?.key === key ? this.entry.issue : void 0,
-      loading: true,
+      issue: previous3?.issue,
+      on: previous3?.on === place.on ? previous3.on : void 0,
+      failure: previous3?.failure,
+      projects: previous3?.projects,
+      loading: force,
       projectsLoading: false
     };
     this.entry = entry;
-    const machine = detailMachine(this.reader);
-    if (!machine) {
-      entry.loading = false;
-      entry.failure = "This issue tab is unavailable. Open the issue from its sidebar again.";
-      return;
-    }
     cx.spawn(async (cx2) => {
+      const current = () => this.entry === entry && this.polling.current(request) && detailLocation(this.reader)?.visible;
+      let completed;
       try {
-        const account3 = await account(machine.on);
-        if (!account3.status.ok) throw new Error(describeAccount(account3).text);
-        const issue = await readIssue(ref.repo, ref.number, account3.on);
-        if (this.entry !== entry) return;
-        entry.issue = issue;
-        entry.on = account3.on;
-        entry.projectsLoading = true;
-        cx2.spawn(async (cx3) => {
-          const projects = await readIssueProjects(ref.repo, ref.number, account3.on);
-          if (this.entry !== entry) return;
-          entry.projects = projects;
-          entry.projectsLoading = false;
-          cx3.notify();
-        });
+        let on = entry.on;
+        if (on === void 0) {
+          const account3 = await account(place.on);
+          if (!account3.status.ok) throw new Error(describeAccount(account3).text);
+          on = account3.on;
+        }
+        if (!current()) return;
+        const change = await issueChanges(ref.repo, ref.number, request.etag, on);
+        if (!current()) return;
+        if (this.polling.reload(request, change)) {
+          if (!force) {
+            entry = { ...entry, projectsLoading: false };
+            this.entry = entry;
+          }
+          const issue = await readIssue(ref.repo, ref.number, on);
+          if (!current()) return;
+          entry.issue = issue;
+          entry.on = on;
+          entry.projectsLoading = true;
+          cx2.spawn(async (cx3) => {
+            const projects = await readIssueProjects(ref.repo, ref.number, on);
+            if (this.entry !== entry) return;
+            entry.projects = projects;
+            entry.projectsLoading = false;
+            cx3.notify();
+          });
+        }
+        completed = change;
+        entry.failure = void 0;
       } catch (e) {
-        if (this.entry !== entry) return;
+        if (!current()) return;
         const failure = failureOf(e);
         entry.failure = failure.notFound ? `${ref.repo} #${ref.number} isn't on GitHub, or this account can't see it.` : failure.message;
       } finally {
-        if (this.entry === entry) {
-          entry.loading = false;
-          cx2.notify();
-        }
+        if (!detailLocation(this.reader)?.visible) this.syncPolling();
+        const result = this.polling.finish(request, completed);
+        if (this.entry === entry) entry.loading = false;
+        if (result.accepted && result.notify) cx2.notify();
       }
     });
   }
@@ -10111,6 +10202,8 @@ var Issue = class {
     const issue = this.entry?.issue;
     const comment = notice.comment;
     if (!issue || !this.ref || issueKey(notice) !== issueKey(this.ref)) return;
+    this.polling.invalidate();
+    if (this.entry) this.entry.loading = false;
     if (comment && !issue.comments.some((c) => c.id === comment.id)) issue.comments = [...issue.comments, comment];
     if (notice.state) issue.state = notice.state.state;
   }
@@ -10122,15 +10215,16 @@ var Issue = class {
       if (external) cx.open_url(external);
     } else if (this.ref && issueKey(linked) !== issueKey(this.ref)) this.follow(cx, linked);
   }
-  render(_cx) {
+  render(cx) {
     if (this.reader) readyDetail(this.reader);
     for (const notice of this.notices.take()) this.apply(notice);
+    if (this.syncPolling()) this.load(cx);
     const t = colors();
-    const root = v_flex().id("issue-reader").size_full().min_h(0).overflow_hidden().bg(t.background).text_color(t.foreground).text_size(14).on_size_change((size, cx) => {
+    const root = v_flex().id("issue-reader").size_full().min_h(0).overflow_hidden().bg(t.background).text_color(t.foreground).text_size(14).on_size_change((size, cx2) => {
       const wide = size.width >= 820;
       if (wide !== this.wide) {
         this.wide = wide;
-        cx.notify();
+        cx2.notify();
       }
     });
     const ref = this.ref;

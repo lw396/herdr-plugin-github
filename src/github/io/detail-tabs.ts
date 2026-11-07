@@ -4,6 +4,7 @@ import { type IssueRef, issueKey, issueTabName } from "../core/issue-detail.ts";
 
 interface Reader {
 	tab: string;
+	pane?: string;
 	identity?: string;
 	request: string;
 	ready: string | null;
@@ -92,7 +93,7 @@ export class DetailTabs {
 			throw new Error("Herdr returned an unreadable tab reply.");
 		}
 		if (!reply.tab || reply.error) throw new Error(reply.error ?? "Herdr did not return a new tab.");
-		return { id, reader: { tab: reply.tab, request: "", ready: null } };
+		return { id, reader: { tab: reply.tab, pane: reply.pane, request: "", ready: null } };
 	}
 
 	/** Live shared metadata re-renders the sidebar: no polling and no persisted issue mailbox. */
@@ -127,6 +128,22 @@ export function detailMachine(id: string): { on: string | null } | null {
 	const tab = reader(id)?.tab;
 	const space = spaces().find((s) => s.tabs.some((t) => t.id === tab));
 	return space ? { on: space.machine } : null;
+}
+
+/** tab.new returns this reader's pane id; older saved metadata can resolve its lone GitHub pane by tab. */
+export function detailLocation(id: string): { pane: string; on: string | null; visible: boolean } | null {
+	const r = reader(id);
+	if (!r) return null;
+	const space = spaces().find((s) => s.tabs.some((t) => t.id === r.tab));
+	const tab = space?.tabs.find((t) => t.id === r.tab);
+	const all = panes().filter((p) => p.tab === r.tab);
+	const pane = all.find((p) => p.mod === "github" && (!r.pane || p.pane === r.pane));
+	if (!space || !tab || !pane) return null;
+	return {
+		pane: pane.pane,
+		on: space.machine,
+		visible: Boolean(space.active && tab.active && !all.some((p) => p.zoomed && p.pane !== pane.pane)),
+	};
 }
 
 /** Mod commands are broadcast: only the intended reader may accept this issue. */

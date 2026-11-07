@@ -18,6 +18,10 @@ import { api, changes, graphql } from "./gh.ts";
 export const listChanges = (repo: string, etag: string | null, on: string | null) =>
 	changes(`repos/${repo}/issues?state=all&sort=updated&per_page=1`, etag, { on });
 
+/** A single issue's validator also changes when a new comment is posted (recorded in #17). */
+export const issueChanges = (repo: string, number: number, etag: string | null, on: string | null) =>
+	changes(`repos/${repo}/issues/${number}`, etag, { on });
+
 /**
  * One page of a group in the repository, asked with the gh on `on` (whose account is `login`,
  * for Assigned): the first page when `after` is null, else the page after that cursor.

@@ -2,12 +2,27 @@
 // The timeline (issues/N/timeline) carries both comments and label/assignment activity.
 import { afterEach, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
-import { readIssue } from "../../src/github/io/issues.ts";
+import { issueChanges, readIssue } from "../../src/github/io/issues.ts";
 import { machine, reset } from "../fake-herdr.ts";
 
 afterEach(reset);
 const fixture = (name: string) => readFileSync(new URL(`../fixtures/${name}`, import.meta.url), "utf8");
 const TIMELINE = "/timeline?per_page=100 --paginate --slurp";
+
+// gh 2.96, 2026-11-07: first GET, unchanged GET, then a real new comment and the same conditional GET.
+test("new comments change the issue validator; unchanged discussions return 304 on the reader machine", async () => {
+	const path = "~$ gh api repos/lw396/herdr-plugin-github/issues/17 --include";
+	const etag = 'W/"4e1d128d63c6bad4ac465901e7acc7dca2f6b708dbd12dc81c1529cb946ae44f"';
+	machine("center", { [path]: JSON.parse(fixture("issue-poll-before.json")) });
+	expect(await issueChanges("lw396/herdr-plugin-github", 17, null, "center")).toEqual({ changed: true, etag });
+	machine("center", { [`${path} -H If-None-Match: ${etag}`]: JSON.parse(fixture("issue-poll-304.json")) });
+	expect(await issueChanges("lw396/herdr-plugin-github", 17, etag, "center")).toEqual({ changed: false });
+	machine("center", { [`${path} -H If-None-Match: ${etag}`]: JSON.parse(fixture("issue-poll-after-comment.json")) });
+	expect(await issueChanges("lw396/herdr-plugin-github", 17, etag, "center")).toEqual({
+		changed: true,
+		etag: 'W/"2ac14621bcc9bc8014fb54aaf3f1fbf68b1fd16da99ad94db2dca9f8d6aaea92"',
+	});
+});
 
 test("one timeline read gives the issue's complete discussion and activity on the pane machine's gh", async () => {
 	machine("center", {

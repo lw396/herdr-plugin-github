@@ -11,6 +11,7 @@ The mod uses GitHub CLI (`gh`) on the machine hosting the repository, so local a
 - **Automatic list refresh** — while the GitHub sidebar is visible, check for changes every 60 seconds using ETags; refresh expanded groups only when changed. Showing it again refreshes immediately.
 - **Native issue tabs** — open different issues in separate tabs; selecting an already-open issue reuses its tab.
 - **Discussion reader** — read Markdown descriptions, comments, and reaction counts in individual cards.
+- **Automatic discussion refresh** — check the visible issue tab every 10 seconds using ETags; keep unsent comments through refreshes, stop polling hidden tabs, and refresh immediately when shown again.
 - **Issue links** — `#123` and links to the repository's issues open in the same tab, with **←** to go back; other links open in your browser.
 - **Comment, close and reopen** — post a new comment (⌘/Ctrl+Enter) or close and reopen an issue from its tab; the sidebar's groups update at once.
 - **Issue metadata** — view colored labels, assignees, linked Projects, and milestones.

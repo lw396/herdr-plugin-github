@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
 import {
 	DetailTabs,
+	detailLocation,
 	detailMachine,
 	issueCommand,
 	navigatedDetail,
@@ -36,6 +37,38 @@ const atDetail = () =>
 		panes: [source, detail],
 		focused: { space: space.id, tab: detail.tab, pane: detail.pane },
 	});
+
+test("the reader knows its own pane and shown tab even when keyboard focus is elsewhere", async () => {
+	atSource();
+	machine(null, { [create]: { stdout: '{"tab":"center/tb2","pane":"center/p2"}' } });
+	await new DetailTabs().open({ repo: "cli/cli", number: 9789 });
+	screen({
+		spaces: [{ ...space, active: true, tabs: [{ id: detail.tab, active: true }] }],
+		panes: [source, detail],
+		focused: { space: space.id, tab: detail.tab, pane: source.pane },
+	});
+	expect(detailLocation(reader)).toEqual({ pane: "center/p2", on: "center", visible: true });
+	screen({ spaces: [{ ...space, active: true }], panes: [source, detail] });
+	expect(detailLocation(reader)).toEqual({ pane: "center/p2", on: "center", visible: false });
+	screen({ spaces: [{ ...space, active: false, tabs: [{ id: detail.tab, active: true }] }], panes: [detail] });
+	expect(detailLocation(reader)?.visible).toBe(false);
+	screen({ spaces: [space], panes: [source] });
+	expect(detailLocation(reader)).toBeNull();
+});
+
+test("older reader metadata resolves its pane by tab, but zooming another pane hides it", () => {
+	setShared("github.readers", { [reader]: { tab: detail.tab, request: "old", ready: "old" } });
+	screen({
+		spaces: [{ ...space, active: true, tabs: [{ id: detail.tab, active: true }] }],
+		panes: [detail],
+	});
+	expect(detailLocation(reader)).toEqual({ pane: detail.pane, on: "center", visible: true });
+	screen({
+		spaces: [{ ...space, active: true, tabs: [{ id: detail.tab, active: true }] }],
+		panes: [detail, { pane: "center/p3", tab: detail.tab, zoomed: true }],
+	});
+	expect(detailLocation(reader)?.visible).toBe(false);
+});
 
 test("open a native Herdr tab, then select that tab on a repeated click without splitting panes", async () => {
 	atSource();
