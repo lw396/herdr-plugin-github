@@ -1,0 +1,178 @@
+name: pi
+
+on:
+  issue_comment:
+    types: [created]
+  pull_request_review_comment:
+    types: [created]
+  issues:
+    types: [opened]
+  pull_request_review:
+    types: [submitted]
+
+jobs:
+  pi:
+    # Only owners, members and collaborators (not bots) start the job, so
+    # others' comments never reach the self-hosted runner. The action
+    # still checks write permission. The comment's or review's author
+    # comes first: on issue_comment the issue author may be someone else.
+    if: |
+      contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'),
+      github.event.comment.author_association ||
+      github.event.review.author_association ||
+      github.event.issue.author_association) && (
+      (github.event_name == 'issue_comment' &&
+      github.event.comment.user.type != 'Bot' &&
+      contains(github.event.comment.body, '@pi')) ||
+      (github.event_name == 'pull_request_review_comment' &&
+      github.event.comment.user.type != 'Bot' &&
+      contains(github.event.comment.body, '@pi')) ||
+      (github.event_name == 'pull_request_review' &&
+      github.event.review.user.type != 'Bot' &&
+      contains(github.event.review.body, '@pi')) ||
+      (github.event_name == 'issues' &&
+      github.event.issue.user.type != 'Bot' &&
+      (contains(github.event.issue.body, '@pi') ||
+      contains(github.event.issue.title, '@pi'))))
+    runs-on: self-hosted
+    env:
+      # Same as verify.yml.
+      HERDR_APP_VERSION: 0.1.13
+      HERDR_APP_SHA256: 77b0be72a46ca14bb367365a04164641f914b3a69712bac391d39c56a959bef4
+    timeout-minutes: 90
+    # One run per issue/PR, so two runs never push to the same branch.
+    # No cancelling: a cancelled run loses its unsaved work.
+    concurrency:
+      group: >-
+        pi-${{ github.event.issue.number ||
+        github.event.pull_request.number }}
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      id-token: write # For the pi-agent-action app token
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          persist-credentials: false # The action configures its own App token.
+
+      # For bun run check/smoke. The runner needs libxkbcommon-x11-0 and
+      # libxcb-xkb1.
+      - name: Install Herdr (subcommands only)
+        run: |
+          test "$(cat types/VERSION)" = "herdr-app $HERDR_APP_VERSION"
+          base=https://releases.herdr.dev/app/$HERDR_APP_VERSION
+          tgz=$RUNNER_TEMP/herdr-app.tgz
+          curl -fsSL "$base/herdr-app-linux-x86_64.tar.gz" -o "$tgz"
+          echo "$HERDR_APP_SHA256  $tgz" | sha256sum -c -
+          tar xzf "$tgz" -C "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/herdr-app" >> "$GITHUB_PATH"
+
+      - uses: oven-sh/setup-bun@v2
+        id: bun
+        with:
+          bun-version: 1.4.3
+          no-cache: true
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      # For pi-subagents.
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          package-manager-cache: false
+
+      - name: Run pi
+        id: pi
+        uses: lw396/pi-agent-action@v1
+        with:
+          path_to_bun_executable: ${{ steps.bun.outputs.bun-path }}
+          model: openai/gpt-6.1-sol
+          classify_model: typesafe/jev-latest
+
+          # Comments by others stay out of the prompt (prompt injection);
+          # add collaborators here. The issue/PR body is always included.
+          include_comments_by_actor: lw396,pi-agent-action[bot]
+
+          # Sub-agents use opencode: OPENAI_BASE_URL does not reach them.
+          # Only read-only builtin agents stay, since sub-agents are not
+          # limited by allowed_tools.
+          settings: |
+            {
+              "subagents": {
+                "defaultModel": "opencode-go/deepseek-v4.1-flash",
+                "agentOverrides": {
+                  "worker": {"disabled": true},
+                  "delegate": {"disabled": true},
+                  "researcher": {"disabled": true},
+                  "evidence-auditor": {"disabled": true},
+                  "claude-code": {"disabled": true},
+                  "claude-code-writer": {"disabled": true},
+                  "codex-exec": {"disabled": true},
+                  "codex-exec-writer": {"disabled": true},
+                  "cursor-agent": {"disabled": true},
+                  "cursor-agent-writer": {"disabled": true}
+                }
+              }
+            }
+
+          additional_permissions: |
+            actions: read
+
+          # implement only loads explicitly: @pi /skill:implement #<issue>
+          skills: |
+            mattpocock/skills implement --pin 4ae2317ddb22b046e26455e4f9c9b3aaaf62212d
+            mattpocock/skills tdd --pin 4ae2317ddb22b046e26455e4f9c9b3aaaf62212d
+            mattpocock/skills code-review --pin 4ae2317ddb22b046e26455e4f9c9b3aaaf62212d
+          packages: |
+            npm:pi-subagents@0.87.0
+
+          # Off for an open-source repo: anyone can read run logs, the Job
+          # Summary and artifacts, and redaction does not catch everything.
+          show_full_output: false
+          display_report: false
+          export_session: false
+
+          # Tag mode already allows git add/commit/push and read-only git.
+          # No git fetch (--upload-pack runs commands); herdr-app check
+          # only (other subcommands can open a window).
+          allowed_tools: >-
+            Bash(pwd),Bash(ls:*),Bash(rg:*),Bash(grep:*),Bash(find:*),
+            Bash(head:*),Bash(tail:*),Bash(wc:*),Bash(stat:*),
+            Bash(du:*),Bash(df:*),Bash(realpath:*),Bash(readlink:*),
+            Bash(diff:*),Bash(cmp:*),Bash(jq:*),
+            Bash(git blame:*),Bash(git ls-files:*),Bash(git ls-tree:*),
+            Bash(git check-ignore:*),Bash(git rev-parse:*),
+            Bash(git merge-base:*),
+            Bash(bun --version),Bash(bun install:*),Bash(bun test:*),
+            Bash(bun run verify),Bash(bun run lint),Bash(bun run format),
+            Bash(bun run build),Bash(bun run typecheck),Bash(bun run test:*),
+            Bash(bun run check),Bash(bun run check:built),Bash(bun run smoke),
+            Bash(herdr-app --version),Bash(herdr-app check:*),
+            Bash(gh issue view:*),Bash(gh issue list:*),
+            Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh pr checks:*),
+            Bash(gh run list:*),Bash(gh run view:*),
+            Bash(gh workflow list:*),Bash(gh workflow view:*),
+            Bash(sh scripts/review-patch.sh:*),subagent
+          disallowed_tools: >-
+            Bash(rg *--pre*),Bash(rg *--hostname-bin*),
+            Bash(find *-exec*),Bash(find *-ok*),Bash(find *-delete*),
+            Bash(find *-fprint*),Bash(find *-fls*)
+
+          # Excluding subagents_enable keeps subagent always active.
+          # Split like a shell: no apostrophes inside the quotes, and no
+          # line may start with #.
+          pi_args: |
+            --tools +codemode
+            --exclude-tools subagents_enable
+            --append-system-prompt 'The ticket is the agreed contract:
+            do not stop to confirm the tdd seams; post them in your
+            comment and continue. For code-review, the fixed point is the base
+            branch, origin/master unless the PR targets another.'
+        env:
+          OPENAI_BASE_URL: ${{ secrets.OPENAI_BASE_URL }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
+          TYPESAFE_API_KEY: ${{ secrets.TYPESAFE_API_KEY }}
