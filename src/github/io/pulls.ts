@@ -15,7 +15,7 @@ import {
 import type { RemoteRepo } from "../core/remote.ts";
 import { parseThreads, type ReviewThread, type ThreadNode } from "../core/review-threads.ts";
 import { announce } from "./changes.ts";
-import { api, graphql } from "./gh.ts";
+import { api, GhError, graphql } from "./gh.ts";
 import type { LocalBranches } from "./git.ts";
 
 /** One page of a group, asked with the gh on `on`, whose account is `login` (for the searches). */
@@ -113,15 +113,31 @@ export async function setPullFileViewed(
 	viewed: boolean,
 	on: string | null,
 ): Promise<void> {
-	const { id } = await readPullViewed(repo, number, on);
-	const operation = viewed ? "markFileAsViewed" : "unmarkFileAsViewed";
-	await graphql(
+	const [owner, name] = repo.split("/");
+	const data = await graphql<{ repository: { pullRequest: { id: string } | null } | null }>(
 		{
-			query: `mutation($id:ID!,$path:String!){${operation}(input:{pullRequestId:$id,path:$path}){pullRequest{id}}}`,
-			variables: { id, path },
+			query:
+				"query($owner:String!,$repo:String!,$number:Int!){repository(owner:$owner,name:$repo){pullRequest(number:$number){id}}}",
+			variables: { owner, repo: name, number },
 		},
 		on,
 	);
+	const id = data?.repository?.pullRequest?.id;
+	if (!id) throw new Error("GitHub did not return the pull request's ID.");
+	const operation = viewed ? "markFileAsViewed" : "unmarkFileAsViewed";
+	try {
+		await graphql(
+			{
+				query: `mutation($id:ID!,$path:String!){${operation}(input:{pullRequestId:$id,path:$path}){pullRequest{id}}}`,
+				variables: { id, path },
+			},
+			on,
+		);
+	} catch (e) {
+		// The write may have reached GitHub: reconcile every view without retrying the mutation.
+		if (e instanceof GhError && e.transient) announce({ repo, number, files: { on } });
+		throw e;
+	}
 	announce({ repo, number, files: { on } });
 }
 

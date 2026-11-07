@@ -10562,15 +10562,29 @@ async function readPullViewed(repo, number, on) {
   }
 }
 async function setPullFileViewed(repo, number, path, viewed, on) {
-  const { id } = await readPullViewed(repo, number, on);
-  const operation = viewed ? "markFileAsViewed" : "unmarkFileAsViewed";
-  await graphql(
+  const [owner, name] = repo.split("/");
+  const data = await graphql(
     {
-      query: `mutation($id:ID!,$path:String!){${operation}(input:{pullRequestId:$id,path:$path}){pullRequest{id}}}`,
-      variables: { id, path }
+      query: "query($owner:String!,$repo:String!,$number:Int!){repository(owner:$owner,name:$repo){pullRequest(number:$number){id}}}",
+      variables: { owner, repo: name, number }
     },
     on
   );
+  const id = data?.repository?.pullRequest?.id;
+  if (!id) throw new Error("GitHub did not return the pull request's ID.");
+  const operation = viewed ? "markFileAsViewed" : "unmarkFileAsViewed";
+  try {
+    await graphql(
+      {
+        query: `mutation($id:ID!,$path:String!){${operation}(input:{pullRequestId:$id,path:$path}){pullRequest{id}}}`,
+        variables: { id, path }
+      },
+      on
+    );
+  } catch (e) {
+    if (e instanceof GhError && e.transient) announce({ repo, number, files: { on } });
+    throw e;
+  }
   announce({ repo, number, files: { on } });
 }
 async function replyPullThread(repo, number, root, body, on) {
@@ -11300,6 +11314,7 @@ var ChangedFiles = class {
           await setPullFileViewed(this.ref.repo, this.ref.number, file.path, !file.viewed, this.on);
           this.sync(cx2);
         } catch (e) {
+          this.sync(cx2);
           this.failure = failureOf(e).message;
         } finally {
           this.writing.delete(file.path);

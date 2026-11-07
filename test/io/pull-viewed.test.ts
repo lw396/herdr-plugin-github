@@ -13,12 +13,12 @@ test("viewed state cannot fall back from a remote machine to local credentials",
 	expect(execCalls().every((c) => c.on === "center")).toBe(true);
 });
 
-test("a rejected mark reports the error, announces nothing, and is not retried", async () => {
+test("a dropped mark reply reports the error, requests reconciliation, and is not retried", async () => {
 	const notices = new Notices();
 	const mutation =
 		"mutation($id:ID!,$path:String!){markFileAsViewed(input:{pullRequestId:$id,path:$path}){pullRequest{id}}}";
 	machine("center", {
-		[command]: reply([]),
+		[idCommand]: reply([]),
 		[`~$ gh api graphql -f query=${mutation} -f id=PR_kwDOVkv4288AAAABNfEEsw -f path=docs/pr-fixture.md`]: {
 			code: 1,
 			stderr: 'Post "https://api.github.com/graphql": EOF',
@@ -27,8 +27,24 @@ test("a rejected mark reports the error, announces nothing, and is not retried",
 	await expect(
 		setPullFileViewed("lw396/herdr-plugin-github", 35, "docs/pr-fixture.md", true, "center"),
 	).rejects.toThrow("EOF");
-	expect(notices.take()).toEqual([]);
+	expect(notices.take()).toEqual([{ repo: "lw396/herdr-plugin-github", number: 35, files: { on: "center" } }]);
 	expect(execCalls().filter((c) => c.args.some((a) => a.startsWith("query=mutation")))).toHaveLength(1);
+});
+
+test("a definitively rejected mark does not announce a change", async () => {
+	const notices = new Notices();
+	const mutation =
+		"mutation($id:ID!,$path:String!){markFileAsViewed(input:{pullRequestId:$id,path:$path}){pullRequest{id}}}";
+	machine("center", {
+		[idCommand]: reply([]),
+		[`~$ gh api graphql -f query=${mutation} -f id=PR_kwDOVkv4288AAAABNfEEsw -f path=docs/pr-fixture.md`]: {
+			stdout: JSON.stringify({ errors: [{ message: "Resource not accessible by integration" }] }),
+		},
+	});
+	await expect(
+		setPullFileViewed("lw396/herdr-plugin-github", 35, "docs/pr-fixture.md", true, "center"),
+	).rejects.toThrow("Resource not accessible");
+	expect(notices.take()).toEqual([]);
 });
 
 test("a GraphQL permission failure is not interpreted as all files unviewed", async () => {
@@ -40,6 +56,8 @@ test("a GraphQL permission failure is not interpreted as all files unviewed", as
 const query =
 	"query($owner:String!,$repo:String!,$number:Int!,$after:String){repository(owner:$owner,name:$repo){pullRequest(number:$number){id files(first:100,after:$after){nodes{path viewerViewedState} pageInfo{hasNextPage endCursor}}}}}";
 const command = `~$ gh api graphql -F number=35 -F after=null -f query=${query} -f owner=lw396 -f repo=herdr-plugin-github`;
+const idCommand =
+	"~$ gh api graphql -F number=35 -f query=query($owner:String!,$repo:String!,$number:Int!){repository(owner:$owner,name:$repo){pullRequest(number:$number){id}}} -f owner=lw396 -f repo=herdr-plugin-github";
 const reply = (nodes: unknown[], more = false, cursor = "NA") => ({
 	stdout: JSON.stringify({
 		data: {
@@ -74,7 +92,7 @@ for (const viewed of [true, false]) {
 		const mutation = `mutation($id:ID!,$path:String!){${operation}(input:{pullRequestId:$id,path:$path}){pullRequest{id}}}`;
 		const notices = new Notices();
 		machine("center", {
-			[command]: reply([]),
+			[idCommand]: reply([]),
 			[`~$ gh api graphql -f query=${mutation} -f id=PR_kwDOVkv4288AAAABNfEEsw -f path=docs/a "quoted" file.md`]: {
 				stdout: JSON.stringify({ data: { [operation]: { pullRequest: { id: "PR_kwDOVkv4288AAAABNfEEsw" } } } }),
 			},

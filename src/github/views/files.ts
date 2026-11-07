@@ -89,6 +89,7 @@ export class ChangedFiles {
 					await setPullFileViewed(this.ref.repo, this.ref.number, file.path, !file.viewed, this.on);
 					this.sync(cx);
 				} catch (e) {
+					this.sync(cx);
 					this.failure = failureOf(e).message;
 				} finally {
 					this.writing.delete(file.path);
