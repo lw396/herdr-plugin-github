@@ -89,6 +89,7 @@ export class Panel implements Role {
 		cx.spawn(async (cx) => {
 			const current = () => run === this.latest && this.checking === checking && this.isVisible();
 			let changed = false;
+			let recovered = false;
 			try {
 				const result = await listChanges(`${r.remote.owner}/${r.remote.repo}`, this.etag, r.on);
 				if (!current()) return;
@@ -96,6 +97,7 @@ export class Panel implements Role {
 					this.etag = result.etag;
 					changed = true;
 				}
+				recovered = this.failure !== undefined;
 				this.failure = undefined;
 			} catch (e) {
 				if (current()) this.failure = gh.failureOf(e);
@@ -104,7 +106,7 @@ export class Panel implements Role {
 					if (changed || refresh) {
 						for (const { kind } of GROUPS) this.load(cx, kind, true);
 					}
-					if (changed || refresh || this.failure) cx.notify();
+					if (changed || refresh || recovered || this.failure) cx.notify();
 				}
 				if (this.checking === checking) this.checking = null;
 			}

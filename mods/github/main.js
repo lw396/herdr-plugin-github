@@ -10592,6 +10592,7 @@ var Panel = class {
     cx.spawn(async (cx2) => {
       const current = () => run3 === this.latest && this.checking === checking && this.isVisible();
       let changed = false;
+      let recovered = false;
       try {
         const result = await listChanges(`${r.remote.owner}/${r.remote.repo}`, this.etag, r.on);
         if (!current()) return;
@@ -10599,6 +10600,7 @@ var Panel = class {
           this.etag = result.etag;
           changed = true;
         }
+        recovered = this.failure !== void 0;
         this.failure = void 0;
       } catch (e) {
         if (current()) this.failure = failureOf(e);
@@ -10607,7 +10609,7 @@ var Panel = class {
           if (changed || refresh) {
             for (const { kind } of GROUPS) this.load(cx2, kind, true);
           }
-          if (changed || refresh || this.failure) cx2.notify();
+          if (changed || refresh || recovered || this.failure) cx2.notify();
         }
         if (this.checking === checking) this.checking = null;
       }
