@@ -1,5 +1,8 @@
 import { expect, test } from "bun:test";
-import { browserUrl, imageLinks, issueLink, readerMarkdown } from "../../src/github/core/markdown.ts";
+import { browserUrl, detailLink, readerMarkdown } from "../../src/github/core/markdown.ts";
+
+/** Images only: a page outside github.com has no repository for #123 references. */
+const imageLinks = (markdown: string): string => readerMarkdown(markdown, "https://example.com/");
 
 // GitHub autolinks #<number> to the issue's own repository, but not inside code, links or words.
 test("plain #123 references become links to the issue's own repository, which open in the reader", () => {
@@ -7,7 +10,8 @@ test("plain #123 references become links to the issue's own repository, which op
 	const to = (n: number) => `[#${n}](<https://github.com/lw396/herdr-plugin-github/issues/${n}>)`;
 	const prepared = readerMarkdown("Fixes #13, see (#12).\n\n#11 first", base);
 	expect(prepared).toBe(`Fixes ${to(13)}, see (${to(12)}).\n\n${to(11)} first`);
-	expect(issueLink("https://github.com/lw396/herdr-plugin-github/issues/13", base)).toEqual({
+	expect(detailLink("https://github.com/lw396/herdr-plugin-github/issues/13", base)).toEqual({
+		kind: "issue",
 		repo: "lw396/herdr-plugin-github",
 		number: 13,
 	});
@@ -29,7 +33,7 @@ test("#123 inside code, links, HTML, words, URLs and escapes stays as written", 
 	expect(readerMarkdown("&amp;#12 &#x26;#13", base)).toBe("&amp;#12 &#x26;#13");
 });
 
-test("#123 links only for a github.com issue, the same repositories issueLink opens in the reader", () => {
+test("#123 links only for a github.com issue, the same repositories detailLink opens in the reader", () => {
 	expect(readerMarkdown("see #2", "https://example.com/o/r/issues/1")).toBe("see #2");
 	expect(readerMarkdown("see #2", "https://github.com/o/r/issues/1#issuecomment-5")).toBe(
 		"see [#2](<https://github.com/o/r/issues/2>)",
@@ -46,21 +50,25 @@ test("reader Markdown turns images and #123 into links together and marks an emp
 });
 
 // GitHub issue URLs: https://github.com/<owner>/<repo>/issues/<number>; pull requests use /pull/<number>.
-test("links to the current repository's issues open in the reader; other repositories, PRs and pages do not", () => {
+test("links to the current repository's issues and PRs open in the reader; other repositories and pages do not", () => {
 	const base = "https://github.com/lw396/herdr-plugin-github/issues/14";
-	const issue13 = { repo: "lw396/herdr-plugin-github", number: 13 };
-	expect(issueLink("https://github.com/lw396/herdr-plugin-github/issues/13", base)).toEqual(issue13);
-	expect(issueLink("https://github.com/LW396/Herdr-Plugin-GitHub/issues/13#issuecomment-1", base)).toEqual(issue13);
-	expect(issueLink("https://www.github.com/lw396/herdr-plugin-github/issues/13/", base)).toEqual(issue13);
-	expect(issueLink("../issues/13", base)).toEqual(issue13);
-	expect(issueLink("https://github.com/cli/cli/issues/13", base)).toBeNull();
-	expect(issueLink("https://github.com/lw396/herdr-plugin-github/pull/19", base)).toBeNull();
-	expect(issueLink("https://github.com/lw396/herdr-plugin-github/issues/new", base)).toBeNull();
-	expect(issueLink("https://github.com/lw396/herdr-plugin-github/issues", base)).toBeNull();
-	expect(issueLink("https://github.com/lw396/herdr-plugin-github/issues/0", base)).toBeNull();
-	expect(issueLink("https://example.com/lw396/herdr-plugin-github/issues/13", base)).toBeNull();
-	expect(issueLink("https://example.com/", base)).toBeNull();
-	expect(issueLink("javascript:alert(1)", base)).toBeNull();
+	const issue13 = { kind: "issue", repo: "lw396/herdr-plugin-github", number: 13 } as const;
+	expect(detailLink("https://github.com/lw396/herdr-plugin-github/issues/13", base)).toEqual(issue13);
+	expect(detailLink("https://github.com/LW396/Herdr-Plugin-GitHub/issues/13#issuecomment-1", base)).toEqual(issue13);
+	expect(detailLink("https://www.github.com/lw396/herdr-plugin-github/issues/13/", base)).toEqual(issue13);
+	expect(detailLink("../issues/13", base)).toEqual(issue13);
+	expect(detailLink("https://github.com/cli/cli/issues/13", base)).toBeNull();
+	expect(detailLink("https://github.com/lw396/herdr-plugin-github/pull/19", base)).toEqual({
+		...issue13,
+		kind: "pr",
+		number: 19,
+	});
+	expect(detailLink("https://github.com/lw396/herdr-plugin-github/issues/new", base)).toBeNull();
+	expect(detailLink("https://github.com/lw396/herdr-plugin-github/issues", base)).toBeNull();
+	expect(detailLink("https://github.com/lw396/herdr-plugin-github/issues/0", base)).toBeNull();
+	expect(detailLink("https://example.com/lw396/herdr-plugin-github/issues/13", base)).toBeNull();
+	expect(detailLink("https://example.com/", base)).toBeNull();
+	expect(detailLink("javascript:alert(1)", base)).toBeNull();
 });
 
 test("relative image links open against the issue URL, while unsafe schemes never open", () => {

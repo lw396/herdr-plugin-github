@@ -7,6 +7,9 @@ export interface Location {
 	space: string | null;
 }
 
+/** Where git runs: a folder on its machine. */
+export type Folder = Pick<Location, "cwd" | "on">;
+
 /** The parts of Herdr's spaces(), panes() and focused() the rule reads. */
 export interface Herdr {
 	spaces: { id: string; active: boolean; folder: string; machine: string | null }[];

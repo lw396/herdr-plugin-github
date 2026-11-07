@@ -1,4 +1,4 @@
-import type { Comment } from "./issue-detail.ts";
+import { type Comment, login } from "./discussion.ts";
 import { type Label, parseLabel } from "./labels.ts";
 
 interface EventBase {
@@ -55,10 +55,10 @@ interface RestEvent {
 	assignee?: { login: string };
 }
 
-/** Label and assignment events; comments are parsed by issue-detail, other kinds are not shown. */
+/** Label and assignment events; other kinds are not shown. */
 export function parseActivity(data: unknown): Activity[] {
 	return (data as RestEvent[]).flatMap((event): Activity[] => {
-		const base = { id: event.id, actor: event.actor?.login ?? "deleted user", createdAt: event.created_at };
+		const base = { id: event.id, actor: login(event.actor), createdAt: event.created_at };
 		if ((event.event === "labeled" || event.event === "unlabeled") && event.label) {
 			return [{ ...base, kind: event.event, labels: [parseLabel(event.label)] }];
 		}

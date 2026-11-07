@@ -3,7 +3,6 @@ import {
 	DetailTabs,
 	detailCommand,
 	detailLocation,
-	detailMachine,
 	navigatedDetail,
 	readyDetail,
 } from "../../src/github/io/detail-tabs.ts";
@@ -112,10 +111,11 @@ test("different issues get separate native tabs and their machines do not follow
 	await tabs.open({ kind: "issue", repo: "lw396/herdr-plugin-github", number: 13 });
 	screen({
 		spaces: [space, { id: "s-local", machine: null, tabs: [{ id: "tb-local" }] }],
+		panes: [source, detail],
 		focused: { space: "s-local", tab: "tb-local" },
 	});
-	expect(detailMachine(reader)).toEqual({ on: "center" });
-	expect(detailMachine("unknown-reader")).toBeNull();
+	expect(detailLocation(reader)?.on).toBe("center");
+	expect(detailLocation("unknown-reader")).toBeNull();
 	expect(execCalls().filter((c) => c.command === "herdr-app")).toHaveLength(2);
 	expect(commands().some((c) => c.name.startsWith("pane."))).toBe(false);
 });
@@ -131,7 +131,7 @@ test("a tab that followed a link belongs to the linked issue; its first issue ge
 
 	navigatedDetail(reader, { kind: "issue", repo: "cli/cli", number: 1 });
 	expect(commands()).toContainEqual({ name: "tab.rename", args: { id: detail.tab, name: "#1 · cli" } });
-	expect(detailMachine(reader)).toEqual({ on: "center" });
+	expect(detailLocation(reader)?.on).toBe("center");
 
 	machine(null, {}); // The linked issue reuses its tab.
 	atSource(true);

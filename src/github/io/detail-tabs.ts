@@ -2,7 +2,8 @@
 import { exec, focused, panes, run, setShared, shared, spaces } from "herdr";
 import { type DetailRef, detailKey, detailTabName } from "../core/detail.ts";
 
-interface Reader {
+/** A reader tab, in shared metadata: what it shows and whether its init can take a command yet. */
+interface ReaderTab {
 	tab: string;
 	pane?: string;
 	identity?: string;
@@ -11,16 +12,16 @@ interface Reader {
 }
 interface OpenReader {
 	id: string;
-	reader: Reader;
+	reader: ReaderTab;
 }
 const READERS = "github.readers";
 /** The mod command that hands a reader its issue or PR (Herdr prefixes it with the mod's name). */
 const COMMAND = "detail:";
-const readers = (): Record<string, Reader> => (shared(READERS) as Record<string, Reader> | null) ?? {};
+const readers = (): Record<string, ReaderTab> => (shared(READERS) as Record<string, ReaderTab> | null) ?? {};
 const reader = (id: string) => readers()[id];
 
 /** Keep metadata only for live native tabs (plus the tab just confirmed by app IPC). */
-function remember(id: string, value: Reader): void {
+function remember(id: string, value: ReaderTab): void {
 	const live = new Set(spaces().flatMap((s) => s.tabs.map((t) => t.id)));
 	const kept = Object.fromEntries(Object.entries(readers()).filter(([key, r]) => key === id || live.has(r.tab)));
 	setShared(READERS, { ...kept, [id]: value });
@@ -34,9 +35,9 @@ export function readyDetail(id: string): void {
 
 /** Explicit clicks can reuse native tab frames; contents and pending opens are session-only. */
 export class DetailTabs {
-	opened = new Map<string, string>();
-	pending = new Map<string, DetailRef>();
-	creating = new Map<string, Promise<OpenReader>>();
+	private opened = new Map<string, string>();
+	private pending = new Map<string, DetailRef>();
+	private creating = new Map<string, Promise<OpenReader>>();
 
 	async open(ref: DetailRef): Promise<void> {
 		const space = focused()?.space,
@@ -126,14 +127,10 @@ export function navigatedDetail(id: string, ref: DetailRef): void {
 	if (space.tabs.find((t) => t.id === r.tab)?.name !== name) run("tab.rename", { id: r.tab, name });
 }
 
-/** The native reader tab's space determines gh's machine, never current focus. */
-export function detailMachine(id: string): { on: string | null } | null {
-	const tab = reader(id)?.tab;
-	const space = spaces().find((s) => s.tabs.some((t) => t.id === tab));
-	return space ? { on: space.machine } : null;
-}
-
-/** tab.new returns this reader's pane id; older saved metadata can resolve its lone GitHub pane by tab. */
+/**
+ * The reader's pane, its space's machine (gh runs there, never where focus is) and whether it is shown.
+ * Metadata saved before tab.new returned the pane id resolves the tab's lone GitHub pane.
+ */
 export function detailLocation(id: string): { pane: string; on: string | null; visible: boolean } | null {
 	const r = reader(id);
 	if (!r) return null;

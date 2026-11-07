@@ -1,22 +1,19 @@
-import type { Projects } from "../core/projects.ts";
+// Pull requests from GitHub, through gh on the folder's or reader tab's machine (ADR 0003).
 import { type PullDetail, parsePullDetail } from "../core/pull-detail.ts";
 import {
-	localPullRequest,
+	localPullsQuery,
+	type Pull,
 	type PullGroup,
 	type PullGroupKind,
 	parseLocalPulls,
 	parsePullGroup,
-	pullRequest,
+	pullGroupQuery,
 } from "../core/pulls.ts";
 import type { RemoteRepo } from "../core/remote.ts";
-import { api, graphql, type Where } from "./gh.ts";
-import { type LocalBranches, localBranches } from "./git.ts";
-import { readProjects } from "./projects.ts";
+import { api, graphql } from "./gh.ts";
+import type { LocalBranches } from "./git.ts";
 
-/**
- * One page of a group, asked with the gh on `on` (whose account is `login`, for the groups that
- * search for it): the first page when `after` is null, else the page after that cursor.
- */
+/** One page of a group, asked with the gh on `on`, whose account is `login` (for the searches). */
 export async function pullPage(
 	kind: PullGroupKind,
 	remote: RemoteRepo,
@@ -24,11 +21,10 @@ export async function pullPage(
 	on: string | null,
 	after: string | null,
 ): Promise<PullGroup> {
-	const { query, variables } = pullRequest(kind, remote, login, after);
-	return parsePullGroup(await graphql(query, variables, { on }));
+	return parsePullGroup(await graphql(pullGroupQuery(kind, remote, login, after), on));
 }
 
-/** A PR's description and ordinary discussion, read on its native tab's machine. */
+/** A PR's description and ordinary discussion. */
 export async function readPull(repo: string, number: number, on: string | null): Promise<PullDetail> {
 	const [pull, issue, comments, reviews] = await Promise.all([
 		api(`repos/${repo}/pulls/${number}`, { on }),
@@ -40,15 +36,12 @@ export async function readPull(repo: string, number: number, on: string | null):
 	return parsePullDetail(pull, issue, comments, reviews);
 }
 
-/** Projects remain optional: a missing scope never hides the description or comments. */
-export function readPullProjects(repo: string, number: number, on: string | null): Promise<Projects> {
-	return readProjects({ kind: "pr", repo, number }, on);
-}
-
-/** One batch for a snapshot, read here unless the caller already checked it for changes. */
-export async function localPulls(remote: RemoteRepo, where: Where, snapshot?: LocalBranches): Promise<PullGroup> {
-	const { branches, head } = snapshot ?? (await localBranches(remote, where));
-	if (branches.length === 0) return { total: 0, more: false, cursor: null, pulls: [] };
-	const { query, variables } = localPullRequest(remote, branches);
-	return parseLocalPulls(await graphql(query, variables, { on: where.on ?? null }), head);
+/** The local branches' latest PRs, in one batch. */
+export async function localPulls(
+	remote: RemoteRepo,
+	{ branches, head }: LocalBranches,
+	on: string | null,
+): Promise<Pull[]> {
+	if (branches.length === 0) return [];
+	return parseLocalPulls(await graphql(localPullsQuery(remote, branches), on), head);
 }

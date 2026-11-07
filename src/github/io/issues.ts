@@ -1,32 +1,27 @@
-// Issues from GitHub, through gh on the folder/reader's machine (ADR 0003).
+// Issues from GitHub, through gh on the folder's or reader tab's machine (ADR 0003).
 
-import { type Comment, type IssueDetail, parseComment, parseIssueDetail } from "../core/issue-detail.ts";
+import { type Comment, parseComment } from "../core/discussion.ts";
+import { type IssueDetail, parseIssueDetail } from "../core/issue-detail.ts";
 import {
 	type GroupKind,
-	groupQuery,
-	groupVariables,
 	type IssueChange,
 	type IssueGroup,
+	issueGroupQuery,
 	parseIssueChange,
 	parseIssueGroup,
 } from "../core/issues.ts";
-import type { Projects } from "../core/projects.ts";
 import type { RemoteRepo } from "../core/remote.ts";
 import { api, changes, graphql } from "./gh.ts";
-import { readProjects } from "./projects.ts";
 
-/** Detects repository list changes without spending a search request on unchanged groups. */
+/** Whether the repository's issues changed, without spending a search request on unchanged groups. */
 export const listChanges = (repo: string, etag: string | null, on: string | null) =>
-	changes(`repos/${repo}/issues?state=all&sort=updated&per_page=1`, etag, { on });
+	changes(`repos/${repo}/issues?state=all&sort=updated&per_page=1`, etag, on);
 
 /** A single issue's validator also changes when a new comment is posted (recorded in #17). */
 export const issueChanges = (repo: string, number: number, etag: string | null, on: string | null) =>
-	changes(`repos/${repo}/issues/${number}`, etag, { on });
+	changes(`repos/${repo}/issues/${number}`, etag, on);
 
-/**
- * One page of a group in the repository, asked with the gh on `on` (whose account is `login`,
- * for Assigned): the first page when `after` is null, else the page after that cursor.
- */
+/** One page of a group, asked with the gh on `on`, whose account is `login` (for Assigned). */
 export async function issuePage(
 	kind: GroupKind,
 	remote: RemoteRepo,
@@ -34,13 +29,10 @@ export async function issuePage(
 	on: string | null,
 	after: string | null,
 ): Promise<IssueGroup> {
-	return parseIssueGroup(await graphql(groupQuery(kind), groupVariables(kind, remote, login, after), { on }));
+	return parseIssueGroup(await graphql(issueGroupQuery(kind, remote, login, after), on));
 }
 
-/**
- * One issue and all timeline pages: the timeline carries both the comments and the label/assignment
- * activity, so one paginated read serves both. The caller supplies the reader tab's machine, never a cwd.
- */
+/** One issue and all timeline pages: the timeline carries both the comments and the activity. */
 export async function readIssue(repo: string, number: number, on: string | null): Promise<IssueDetail> {
 	const path = `repos/${repo}/issues/${number}`;
 	const [issue, timeline] = await Promise.all([
@@ -50,7 +42,7 @@ export async function readIssue(repo: string, number: number, on: string | null)
 	return parseIssueDetail(issue, timeline);
 }
 
-/** Posts a new comment; resolves with it as the timeline shows it. A write is never asked twice (see gh()). */
+/** Posts a new comment; resolves with it as the timeline shows it. */
 export async function addComment(repo: string, number: number, body: string, on: string | null): Promise<Comment> {
 	const comment = await api(`repos/${repo}/issues/${number}/comments`, { on, method: "POST", rawFields: { body } });
 	return parseComment(comment, `https://github.com/${repo}/issues/${number}`);
@@ -67,9 +59,4 @@ export async function setIssueState(
 		await api(`repos/${repo}/issues/${number}`, { on, method: "PATCH", rawFields: { state } }),
 		repo,
 	);
-}
-
-/** Optional metadata: lack of Projects access must never hide the issue body or comments. */
-export function readIssueProjects(repo: string, number: number, on: string | null): Promise<Projects> {
-	return readProjects({ kind: "issue", repo, number }, on);
 }

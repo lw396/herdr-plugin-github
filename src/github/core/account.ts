@@ -1,5 +1,5 @@
 // The gh that talks to GitHub: the one on the folder's machine (ADR 0003), and what the sidebar says about it.
-import { explain } from "./gh-args.ts";
+import { explain } from "./gh.ts";
 
 /** Whether gh is installed and signed in on a machine. */
 export type Status = { ok: true; user: string } | { ok: false; reason: "missing" | "auth" | "error"; message: string };

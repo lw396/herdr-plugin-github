@@ -4,8 +4,9 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { groupQuery } from "../../src/github/core/issues.ts";
-import { ALL_OPEN_QUERY } from "../../src/github/core/pulls.ts";
+import { issueGroupQuery } from "../../src/github/core/issues.ts";
+import { pullGroupQuery } from "../../src/github/core/pulls.ts";
+import type { RemoteRepo } from "../../src/github/core/remote.ts";
 import * as known from "../../src/github/io/known.ts";
 import { execCalls, machine, reset } from "../fake-herdr.ts";
 
@@ -19,6 +20,16 @@ const REMOTES = "/w/app$ git remote -v";
 const REMOTE_V =
 	"origin\tgit@github.com:lw396/herdr-plugin-github.git (fetch)\norigin\tgit@github.com:lw396/herdr-plugin-github.git (push)\n";
 const fixture = (name: string): string => readFileSync(join(import.meta.dir, "../fixtures", name), "utf8");
+/** Where groups are asked: the repository, with the gh account `login` on machine `on`. */
+const at = (remote: RemoteRepo, login: string, on: string | null = null) => ({ remote, login, on, cwd: null });
+const groupQuery = (kind: "assigned" | "open") =>
+	issueGroupQuery(kind, { remote: "origin", host: "github.com", owner: "", repo: "" }, "", null).query;
+const ALL_OPEN_QUERY = pullGroupQuery(
+	"all",
+	{ remote: "origin", host: "github.com", owner: "", repo: "" },
+	"",
+	null,
+).query;
 const ASSIGNED = `~$ gh api graphql -F after=null -f query=${groupQuery("assigned")} -f owner=lw396 -f name=herdr-plugin-github -f assignee=lw396`;
 const OPEN_CLI = `~$ gh api graphql -F after=null -f query=${groupQuery("open")} -f owner=cli -f name=cli`;
 const OPEN_CLI_2 = `~$ gh api graphql -f query=${groupQuery("open")} -f owner=cli -f name=cli -f after=Y3Vyc29yOnYyOpK0MjAyNi0xMS0wMlQxNzowMDozMVrPAAAAAW3jAo8=`;
@@ -123,13 +134,16 @@ describe("issue groups", () => {
 
 	test("per kind, machine, repository and login, then kept", async () => {
 		machine(null, { [ASSIGNED]: { stdout: fixture("assigned-herdr-plugin-github.json") } });
-		expect(await known.group("assigned", REMOTE, "lw396", null)).toMatchObject({ total: 1, issues: [{ number: 12 }] });
+		expect(await known.issueGroup("assigned", at(REMOTE, "lw396", null))).toMatchObject({
+			total: 1,
+			rows: [{ number: 12 }],
+		});
 		machine(null, {});
-		expect(await known.group("assigned", REMOTE, "lw396", null)).toMatchObject({ total: 1 });
-		expect(known.peekGroup("assigned", REMOTE, "lw396", null)).toMatchObject({ total: 1 });
-		expect(known.peekGroup("open", REMOTE, "lw396", null)).toBeUndefined();
-		expect(known.peekGroup("assigned", REMOTE, "lw396", "center")).toBeUndefined();
-		expect(known.peekGroup("assigned", REMOTE, "someone-else", null)).toBeUndefined();
+		expect(await known.issueGroup("assigned", at(REMOTE, "lw396", null))).toMatchObject({ total: 1 });
+		expect(known.peekIssueGroup("assigned", at(REMOTE, "lw396", null))).toMatchObject({ total: 1 });
+		expect(known.peekIssueGroup("open", at(REMOTE, "lw396", null))).toBeUndefined();
+		expect(known.peekIssueGroup("assigned", at(REMOTE, "lw396", "center"))).toBeUndefined();
+		expect(known.peekIssueGroup("assigned", at(REMOTE, "someone-else", null))).toBeUndefined();
 	});
 
 	test("a 404 rejects and keeps nothing", async () => {
@@ -141,10 +155,10 @@ describe("issue groups", () => {
 				stderr: "gh: Could not resolve to a Repository with the name 'lw396/herdr-plugin-github'.\n",
 			},
 		});
-		expect(await known.group("assigned", REMOTE, "lw396", null).catch((e: unknown) => e)).toMatchObject({
+		expect(await known.issueGroup("assigned", at(REMOTE, "lw396", null)).catch((e: unknown) => e)).toMatchObject({
 			notFound: true,
 		});
-		expect(known.peekGroup("assigned", REMOTE, "lw396", null)).toBeUndefined();
+		expect(known.peekIssueGroup("assigned", at(REMOTE, "lw396", null))).toBeUndefined();
 	});
 
 	test("Load more: the next page joins the kept rows, so switching back shows all 60", async () => {
@@ -152,10 +166,10 @@ describe("issue groups", () => {
 			[OPEN_CLI]: { stdout: fixture("open-cli-1.json") },
 			[OPEN_CLI_2]: { stdout: fixture("open-cli-2.json") },
 		});
-		const first = await known.group("open", CLI, "lw396", null);
-		const both = await known.more("open", CLI, "lw396", null, first);
-		expect(both.issues).toHaveLength(60);
-		expect(known.peekGroup("open", CLI, "lw396", null)?.issues).toHaveLength(60);
+		const first = await known.issueGroup("open", at(CLI, "lw396", null));
+		const both = await known.moreIssues("open", at(CLI, "lw396", null), first);
+		expect(both.rows).toHaveLength(60);
+		expect(known.peekIssueGroup("open", at(CLI, "lw396", null))?.rows).toHaveLength(60);
 	});
 
 	test("an issue closed in a reader leaves its kept groups at once; they are asked again on the next look", async () => {
@@ -163,8 +177,8 @@ describe("issue groups", () => {
 			[ASSIGNED]: { stdout: fixture("assigned-herdr-plugin-github.json") },
 			[OPEN_CLI]: { stdout: fixture("open-cli-1.json") },
 		});
-		await known.group("assigned", REMOTE, "lw396", null);
-		const cli = await known.group("open", CLI, "lw396", null);
+		await known.issueGroup("assigned", at(REMOTE, "lw396", null));
+		const cli = await known.issueGroup("open", at(CLI, "lw396", null));
 		known.issueChanged({
 			repo: "LW396/Herdr-Plugin-GitHub",
 			state: "closed",
@@ -176,17 +190,17 @@ describe("issue groups", () => {
 				url: "https://github.com/lw396/herdr-plugin-github/issues/12",
 			},
 		});
-		expect(known.peekGroup("assigned", REMOTE, "lw396", null)).toMatchObject({ total: 0, issues: [] });
-		expect(known.peekGroup("open", CLI, "lw396", null)).toBe(cli);
+		expect(known.peekIssueGroup("assigned", at(REMOTE, "lw396", null))).toMatchObject({ total: 0, rows: [] });
+		expect(known.peekIssueGroup("open", at(CLI, "lw396", null))).toBe(cli);
 		machine(null, {
 			[ASSIGNED]: {
 				stdout:
 					'{"data":{"repository":{"hasIssuesEnabled":true,"issues":{"totalCount":0,"pageInfo":{"hasNextPage":false,"endCursor":null},"nodes":[]}}}}',
 			},
 		});
-		await known.group("assigned", REMOTE, "lw396", null);
+		await known.issueGroup("assigned", at(REMOTE, "lw396", null));
 		expect(execCalls().filter((c) => c.command === "gh")).toHaveLength(3);
-		expect(await known.group("open", CLI, "lw396", null)).toBe(cli);
+		expect(await known.issueGroup("open", at(CLI, "lw396", null))).toBe(cli);
 	});
 
 	test("↻ while Load more is still out: the refreshed first page stays, not the older rows plus page 2", async () => {
@@ -195,12 +209,12 @@ describe("issue groups", () => {
 			[OPEN_CLI]: { stdout: fixture("open-cli-1.json") },
 			[OPEN_CLI_2]: new Promise((resolve) => (answerPage2 = resolve)),
 		});
-		const first = await known.group("open", CLI, "lw396", null);
-		const loading = known.more("open", CLI, "lw396", null, first);
-		await known.group("open", CLI, "lw396", null, true);
+		const first = await known.issueGroup("open", at(CLI, "lw396", null));
+		const loading = known.moreIssues("open", at(CLI, "lw396", null), first);
+		await known.issueGroup("open", at(CLI, "lw396", null), true);
 		answerPage2({ stdout: fixture("open-cli-2.json") });
 		await loading;
-		expect(known.peekGroup("open", CLI, "lw396", null)?.issues).toHaveLength(30);
+		expect(known.peekIssueGroup("open", at(CLI, "lw396", null))?.rows).toHaveLength(30);
 	});
 });
 
@@ -214,12 +228,12 @@ describe("PR groups", () => {
 			[ALL]: { stdout: fixture("pulls-all-cli-1.json") },
 			[ALL_2]: { stdout: fixture("pulls-all-cli-2.json") },
 		});
-		const first = await known.pullGroup("all", CLI, "lw396", null);
-		expect(first.pulls).toHaveLength(30);
-		expect(await known.pullGroup("all", CLI, "lw396", null)).toBe(first);
-		expect(known.peekPullGroup("all", CLI, "lw396", "center")).toBeUndefined();
-		await known.morePulls("all", CLI, "lw396", null, first);
-		expect(known.peekPullGroup("all", CLI, "lw396", null)?.pulls).toHaveLength(59);
+		const first = await known.pullGroup("all", at(CLI, "lw396", null));
+		expect(first.rows).toHaveLength(30);
+		expect(await known.pullGroup("all", at(CLI, "lw396", null))).toBe(first);
+		expect(known.peekPullGroup("all", at(CLI, "lw396", "center"))).toBeUndefined();
+		await known.morePulls("all", at(CLI, "lw396", null), first);
+		expect(known.peekPullGroup("all", at(CLI, "lw396", null))?.rows).toHaveLength(59);
 		expect(execCalls().filter((c) => c.command === "gh")).toHaveLength(2);
 	});
 });
@@ -231,6 +245,6 @@ test("a PR group kept for one account is not shown to another on the same machin
 			stdout: fixture("pulls-all-cli-1.json"),
 		},
 	});
-	await known.pullGroup("all", CLI, "lw396", null);
-	expect(known.peekPullGroup("all", CLI, "someone-else", null)).toBeUndefined();
+	await known.pullGroup("all", at(CLI, "lw396", null));
+	expect(known.peekPullGroup("all", at(CLI, "someone-else", null))).toBeUndefined();
 });

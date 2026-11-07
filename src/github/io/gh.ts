@@ -1,25 +1,19 @@
-// The only file that reaches GitHub: `gh`, on the folder's machine (`on`, see account()).
+// The only file that reaches GitHub: `gh` on the folder's machine (`on`: null for this computer, ADR 0003).
 import { type ExecResult, exec } from "herdr";
-import type { Account, Status } from "../core/account.ts";
-import { type Change, responseHeaders } from "../core/conditional.ts";
+import { type Account, describeAccount, type Status } from "../core/account.ts";
 import {
 	type ApiOptions,
 	apiArgs,
+	type Change,
 	errorMessage,
 	explain,
-	type GraphqlVariables,
+	type Failure,
 	graphqlArgs,
 	parseJson,
+	type Query,
+	responseHeaders,
 	transient,
-} from "../core/gh-args.ts";
-import type { Failure } from "../core/issues.ts";
-
-export type { Account, Status };
-
-export interface Where {
-	cwd?: string | null;
-	on?: string | null;
-}
+} from "../core/gh.ts";
 
 export class GhError extends Error {
 	readonly code: number;
@@ -34,6 +28,11 @@ export class GhError extends Error {
 	get notFound(): boolean {
 		return /HTTP 404|Could not resolve to a Repository/.test(this.stderr + this.message);
 	}
+
+	/** The connection dropped: GitHub may or may not have done a write. */
+	get transient(): boolean {
+		return transient(this.stderr);
+	}
 }
 
 /** A failed ask in the UI's words (a dropped connection reads as such, not as gh's `Post "…": EOF`). */
@@ -46,60 +45,47 @@ export function failureOf(e: unknown): Failure {
 const TRIES = 3;
 
 /**
- * `gh <args>` → stdout, or a GhError. Herdr 0.1.13 exec: 30 s, 8 MiB. A `read` is asked again
- * when the connection drops (`Get "…": EOF`); a write never is: GitHub may already have done it.
+ * `gh <args>` → its result, or a GhError. A read is asked again when the connection drops; a write
+ * never is: GitHub may already have done it. A conditional read's 304 is an answer, not a failure.
  */
-export async function gh(args: string[], where: Where = {}, read = false): Promise<string> {
-	return (await execute(args, where, read)).stdout;
-}
-
-async function execute(args: string[], where: Where, read: boolean, conditional = false): Promise<ExecResult> {
+async function execute(args: string[], on: string | null, read: boolean, conditional = false): Promise<ExecResult> {
 	for (let tried = 1; ; tried++) {
-		const r = await exec("gh", args, { cwd: where.cwd ?? undefined, on: where.on ?? null });
+		const r = await exec("gh", args, { on });
 		if (r.code === 0 || (conditional && responseHeaders(r.stdout).status === 304)) return r;
 		if (!read || tried >= TRIES || !transient(r.stderr)) throw new GhError(errorMessage(r.stderr), r.code, r.stderr);
 	}
 }
 
 /** A conditional GET. gh exits 1 for 304 but keeps the status and headers in stdout. */
-export async function changes(path: string, etag: string | null, where: Where = {}): Promise<Change> {
+export async function changes(path: string, etag: string | null, on: string | null): Promise<Change> {
 	const args = ["api", path, "--include"];
 	if (etag) args.push("-H", `If-None-Match: ${etag}`);
-	const result = await execute(args, where, true, true);
-	const headers = responseHeaders(result.stdout);
+	const headers = responseHeaders((await execute(args, on, true, true)).stdout);
 	if (headers.status === 304) return { changed: false };
 	if (headers.status !== 200) throw new Error("GitHub did not return an HTTP 200 or 304 response.");
 	return { changed: true, etag: headers.etag };
 }
 
+type RestOptions = Omit<ApiOptions, "jq" | "slurp"> & { on: string | null };
+
 const reads = (method: string | undefined): boolean => !method || method.toUpperCase() === "GET";
 
-/** `gh api <path>`, parsed as JSON. */
-export async function api(path: string, options: Omit<ApiOptions, "jq" | "slurp"> & Where = {}): Promise<unknown> {
-	const { cwd, on, ...rest } = options;
-	const data = parseJson(await gh(apiArgs(path, { ...rest, slurp: rest.paginate }), { cwd, on }, reads(rest.method)));
-	// REST array pages become one list; object pages (e.g. GraphQL) retain their page structure.
-	return rest.paginate && Array.isArray(data) && data.every(Array.isArray) ? data.flat() : data;
+/** `gh api <path>`, parsed as JSON; paginated REST array pages become one list. */
+export async function api(path: string, { on, ...options }: RestOptions): Promise<unknown> {
+	const args = apiArgs(path, { ...options, slurp: options.paginate });
+	const data = parseJson((await execute(args, on, reads(options.method))).stdout);
+	return options.paginate && Array.isArray(data) && data.every(Array.isArray) ? data.flat() : data;
 }
 
 /** `gh api <path> --jq <filter>`: jq prints plain text (strings unquoted), trimmed here. */
-export async function apiText(
-	path: string,
-	jq: string,
-	options: Omit<ApiOptions, "jq" | "slurp"> & Where = {},
-): Promise<string> {
-	const { cwd, on, ...rest } = options;
-	return (await gh(apiArgs(path, { ...rest, jq }), { cwd, on }, reads(rest.method))).trim();
+export async function apiText(path: string, jq: string, { on, ...options }: RestOptions): Promise<string> {
+	return (await execute(apiArgs(path, { ...options, jq }), on, reads(options.method))).stdout.trim();
 }
 
 /** `gh api graphql`, parsed; resolves with `data`. */
-export async function graphql<T = unknown>(
-	query: string,
-	variables: GraphqlVariables = {},
-	where: Where = {},
-): Promise<T> {
-	const read = !/^\s*mutation\b/.test(query);
-	const out = parseJson(await gh(graphqlArgs(query, variables), where, read)) as {
+export async function graphql<T = unknown>(query: Query, on: string | null): Promise<T> {
+	const read = !/^\s*mutation\b/.test(query.query);
+	const out = parseJson((await execute(graphqlArgs(query), on, read)).stdout) as {
 		data?: T;
 		errors?: { message: string }[];
 	} | null;
@@ -108,19 +94,16 @@ export async function graphql<T = unknown>(
 }
 
 /**
- * The gh on the folder's machine (ADR 0003): this computer's for a local folder, that
- * machine's for a remote one. Never falls back to the other, so the account is the one
- * signed in where the folder is; when it can't be used, the reason is that machine's.
+ * The gh on that machine (ADR 0003). Never falls back to another machine's, so the account is the
+ * one signed in where the folder is; when it can't be used, the reason is that machine's.
  */
 export async function account(on: string | null): Promise<Account> {
-	return { on, status: await status({ on }) };
+	return { on, status: await status(on) };
 }
 
-/** Whether gh is installed and signed in there. */
-export async function status(where: Where = {}): Promise<Status> {
+async function status(on: string | null): Promise<Status> {
 	try {
-		const user = await apiText("user", ".login", where);
-		return { ok: true, user };
+		return { ok: true, user: await apiText("user", ".login", { on }) };
 	} catch (e) {
 		const message = e instanceof Error ? e.message : String(e);
 		// exec itself rejected: gh didn't run (Herdr: "cannot run gh: ...", "cannot start gh: ..." on another machine).
@@ -129,4 +112,10 @@ export async function status(where: Where = {}): Promise<Status> {
 		if (/gh auth login|HTTP 401/.test(e.stderr)) return { ok: false, reason: "auth", message };
 		return { ok: false, reason: "error", message };
 	}
+}
+
+/** Rejects with what to do on that machine unless its gh is installed and signed in. */
+export async function signedIn(on: string | null): Promise<void> {
+	const a = await account(on);
+	if (!a.status.ok) throw new Error(describeAccount(a).text);
 }

@@ -3,7 +3,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { type GroupKind, groupQuery } from "../../src/github/core/issues.ts";
+import { type GroupKind, issueGroupQuery } from "../../src/github/core/issues.ts";
 import { GhError } from "../../src/github/io/gh.ts";
 import * as issues from "../../src/github/io/issues.ts";
 import { machine, reset } from "../fake-herdr.ts";
@@ -17,7 +17,7 @@ const remote = (owner: string, repo: string) => ({ remote: "origin", host: "gith
 function asked(kind: GroupKind, owner: string, name: string, after: string | null, assignee?: string): string {
 	const first = after === null ? "-F after=null " : "";
 	const next = after === null ? "" : ` -f after=${after}`;
-	return `~$ gh api graphql ${first}-f query=${groupQuery(kind)} -f owner=${owner} -f name=${name}${next}${assignee ? ` -f assignee=${assignee}` : ""}`;
+	return `~$ gh api graphql ${first}-f query=${issueGroupQuery(kind, remote(owner, name), "", null).query} -f owner=${owner} -f name=${name}${next}${assignee ? ` -f assignee=${assignee}` : ""}`;
 }
 
 describe("issue list changes", () => {
@@ -71,7 +71,7 @@ describe("issuePage", () => {
 				total: 1,
 				more: false,
 				cursor: "Y3Vyc29yOnYyOpK0MjAyNi0xMS0wNlQxMzoyODo1M1rPAAAAAXProvM=",
-				issues: [
+				rows: [
 					{
 						number: 12,
 						title: "Issues 标签页：Open、Closed、折叠和加载更多",
@@ -89,15 +89,15 @@ describe("issuePage", () => {
 			[asked("closed", "lw396", "herdr-plugin-github", null)]: { stdout: fixture("closed-herdr-plugin-github.json") },
 		});
 		const page = await issues.issuePage("closed", remote("lw396", "herdr-plugin-github"), "lw396", null, null);
-		expect(page.issues.map((i) => i.number)).toEqual([11, 10, 2]);
+		expect(page.rows.map((i) => i.number)).toEqual([11, 10, 2]);
 		expect(page).toMatchObject({ total: 3, more: false });
 	});
 
 	test("Open, more than a page (cli/cli): 30 rows, and another page follows", async () => {
 		machine(null, { [asked("open", "cli", "cli", null)]: { stdout: fixture("open-cli-1.json") } });
 		const page = await issues.issuePage("open", remote("cli", "cli"), "lw396", null, null);
-		expect(page.issues).toHaveLength(30);
-		expect(page.issues.slice(0, 4).map((i) => i.number)).toEqual([13118, 14962, 9789, 14615]);
+		expect(page.rows).toHaveLength(30);
+		expect(page.rows.slice(0, 4).map((i) => i.number)).toEqual([13118, 14962, 9789, 14615]);
 		expect(page).toMatchObject({
 			total: 1058,
 			more: true,
@@ -118,7 +118,7 @@ describe("issuePage", () => {
 			null,
 			"Y3Vyc29yOnYyOpK0MjAyNi0xMS0wMlQxNzowMDozMVrPAAAAAW3jAo8=",
 		);
-		expect(page.issues.slice(0, 4).map((i) => i.number)).toEqual([14895, 14856, 14855, 14822]);
+		expect(page.rows.slice(0, 4).map((i) => i.number)).toEqual([14895, 14856, 14855, 14822]);
 		expect(page).toMatchObject({ more: true, cursor: "Y3Vyc29yOnYyOpK0MjAyNi0xMC0yNVQxNToxNzozNVrPAAAAAS_2QAQ=" });
 	});
 
@@ -131,7 +131,7 @@ describe("issuePage", () => {
 		});
 		expect(await issues.issuePage("open", remote("torvalds", "linux"), "lw396", null, null)).toMatchObject({
 			issuesEnabled: false,
-			issues: [],
+			rows: [],
 		});
 	});
 

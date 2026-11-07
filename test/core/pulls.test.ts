@@ -3,13 +3,8 @@
 import { expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import {
-	appendPullPage,
-	localPullRequest,
-	parseLocalPulls,
-	parsePullGroup,
-	pullSearch,
-} from "../../src/github/core/pulls.ts";
+import { appendPage } from "../../src/github/core/page.ts";
+import { localPullsQuery, parseLocalPulls, parsePullGroup, pullSearch } from "../../src/github/core/pulls.ts";
 
 const data = (name: string): unknown =>
 	(JSON.parse(readFileSync(join(import.meta.dir, "../fixtures", name), "utf8")) as { data: unknown }).data;
@@ -19,7 +14,7 @@ test("a draft and a ready PR as rows: state, author and where they open", () => 
 		total: 2,
 		more: false,
 		cursor: "Y3Vyc29yOnYyOpK0MjAyNi0xMS0wN1QwODo0MTowMlrPAAAAATXxBLM=",
-		pulls: [
+		rows: [
 			{
 				number: 36,
 				title: "测试用，可删：draft PR fixture",
@@ -44,11 +39,11 @@ test("Load more appends the next page; a PR that moved up between loads is not s
 	const first = parsePullGroup(data("pulls-all-cli-1.json"));
 	const second = parsePullGroup(data("pulls-all-cli-2.json"));
 	expect(first).toMatchObject({ total: 59, more: true });
-	const both = appendPullPage(first, second);
-	expect(both.pulls).toHaveLength(59);
+	const both = appendPage(first, second);
+	expect(both.rows).toHaveLength(59);
 	expect(both.more).toBe(false);
-	const again = appendPullPage(first, { ...second, pulls: [first.pulls[0]!, ...second.pulls] });
-	expect(again.pulls).toHaveLength(59);
+	const again = appendPage(first, { ...second, rows: [first.rows[0]!, ...second.rows] });
+	expect(again.rows).toHaveLength(59);
 });
 
 test("Waiting For My Review and Created By Me search the repository's open PRs for the gh account, newest update first", () => {
@@ -60,7 +55,7 @@ test("Waiting For My Review and Created By Me search the repository's open PRs f
 });
 
 test("local branch names are GraphQL variables, never query syntax, and include every PR state", () => {
-	const request = localPullRequest(
+	const request = localPullsQuery(
 		{ remote: "origin", host: "github.com", owner: "lw396", repo: "herdr-plugin-github" },
 		['topic/"quoted"', "fix/$branch"],
 	);
@@ -83,7 +78,7 @@ test("local matches omit empty branches and sort matching heads by update", () =
 			host: "github.com",
 			owner: "LW396",
 			repo: "HERDR-PLUGIN-GITHUB",
-		}).pulls.map((p) => p.number),
+		}).map((p) => p.number),
 	).toEqual([36, 35]);
 	expect(
 		parseLocalPulls(data("pulls-local-plugin.json"), {
@@ -91,7 +86,7 @@ test("local matches omit empty branches and sort matching heads by update", () =
 			host: "github.com",
 			owner: "other",
 			repo: "herdr-plugin-github",
-		}).pulls,
+		}),
 	).toEqual([]);
 });
 
@@ -99,7 +94,7 @@ test("a search reply parses into the same rows as a repository list", () => {
 	expect(parsePullGroup(data("pulls-mine-plugin.json"))).toMatchObject({
 		total: 2,
 		more: false,
-		pulls: [
+		rows: [
 			{ number: 36, state: "draft", author: "lw396" },
 			{ number: 35, state: "open", author: "lw396" },
 		],

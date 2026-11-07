@@ -18,7 +18,7 @@ test("the folder's GitHub remote", async () => {
 				"origin\thttps://github.com/lw396/wechat-wcp.git (fetch)\norigin\thttps://github.com/lw396/wechat-wcp.git (push)\n",
 		},
 	});
-	expect(await githubRemote({ cwd: "/Users/apple/Work/lw396/wechat-mcp" })).toEqual({
+	expect(await githubRemote({ cwd: "/Users/apple/Work/lw396/wechat-mcp", on: null })).toEqual({
 		remote: "origin",
 		host: "github.com",
 		owner: "lw396",
@@ -41,20 +41,20 @@ test("asks git on the space's machine", async () => {
 
 test("outside a git repository: none", async () => {
 	machine(null, { "/tmp$ git remote -v": NOT_A_REPO });
-	expect(await githubRemote({ cwd: "/tmp" })).toBeNull();
+	expect(await githubRemote({ cwd: "/tmp", on: null })).toBeNull();
 });
 
 test("a repository without remotes: none", async () => {
 	machine(null, { "/w/new$ git remote -v": { stdout: "" } });
-	expect(await githubRemote({ cwd: "/w/new" })).toBeNull();
+	expect(await githubRemote({ cwd: "/w/new", on: null })).toBeNull();
 });
 
 test("no folder: none, without running git", async () => {
 	machine(null, {});
-	expect(await githubRemote({ cwd: null })).toBeNull();
+	expect(await githubRemote({ cwd: null, on: null })).toBeNull();
 });
 
 test("git not installed: rejects with Herdr's reason", async () => {
 	machine(null, {});
-	await expect(githubRemote({ cwd: "/w/app" })).rejects.toThrow("cannot run git");
+	await expect(githubRemote({ cwd: "/w/app", on: null })).rejects.toThrow("cannot run git");
 });

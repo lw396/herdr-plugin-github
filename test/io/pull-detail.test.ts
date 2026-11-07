@@ -1,12 +1,13 @@
 // Real gh 2.96 REST replies captured on center, 2026-11-07.
 import { afterEach, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
+import { readProjects } from "../../src/github/io/projects.ts";
 import * as pulls from "../../src/github/io/pulls.ts";
 import { machine, reset } from "../fake-herdr.ts";
 
 afterEach(reset);
 const fixture = (name: string) => readFileSync(new URL(`../fixtures/${name}`, import.meta.url), "utf8");
-// Independent query specification: do not derive this from the issue query like production does.
+// Independent query specification: not derived from production's query.
 // https://docs.github.com/en/graphql/reference/objects#pullrequest
 const projectsQuery = `query($owner: String!, $name: String!, $number: Int!, $after: String) {
   repository(owner: $owner, name: $name) {
@@ -52,7 +53,7 @@ test("PR Projects load every page through the reader's machine", async () => {
 			},
 		});
 	machine("center", { [first]: { stdout: page("First", true) }, [next]: { stdout: page("Second", false) } });
-	expect(await pulls.readPullProjects("lw396/herdr-plugin-github", 35, "center")).toEqual({
+	expect(await readProjects({ kind: "pr", repo: "lw396/herdr-plugin-github", number: 35 }, "center")).toEqual({
 		ok: true,
 		projects: [
 			{ title: "First", url: "https://github.com/users/lw396/projects/1" },
@@ -65,7 +66,7 @@ test("PR Projects use pullRequest, not an issue query, and lack of scope stays o
 	const query = projectsQuery;
 	const asked = `~$ gh api graphql -F number=35 -F after=null -f query=${query} -f owner=lw396 -f name=herdr-plugin-github`;
 	machine("center", { [asked]: JSON.parse(fixture("projects-denied.json")) });
-	expect(await pulls.readPullProjects("lw396/herdr-plugin-github", 35, "center")).toEqual({
+	expect(await readProjects({ kind: "pr", repo: "lw396/herdr-plugin-github", number: 35 }, "center")).toEqual({
 		ok: false,
 		message: "Projects require read:project. Run gh auth refresh -h github.com -s read:project on center.",
 	});

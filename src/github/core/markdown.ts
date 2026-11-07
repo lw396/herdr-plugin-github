@@ -3,7 +3,7 @@ import type { Image, ImageReference, Nodes } from "mdast";
 import { fromMarkdown } from "mdast-util-from-markdown";
 import type { DetailRef } from "./detail.ts";
 
-/** A link resolved against the issue page (Herdr's QuickJS has the WHATWG URL); only HTTP(S) opens. */
+/** A link resolved against the issue or PR page (Herdr's QuickJS has the WHATWG URL); only HTTP(S) opens. */
 export function browserUrl(href: string, base: string): string | null {
 	if (!href.trim()) return null;
 	let resolved: URL;
@@ -28,9 +28,9 @@ function githubPath(href: string): string[] | null {
 	return url.pathname.split("/").filter(Boolean);
 }
 
-/** The github.com repository an issue URL belongs to, as owner/repo; otherwise null. */
-function ownRepository(issueUrl: string): string | null {
-	const own = githubPath(issueUrl);
+/** The github.com repository an issue or PR URL belongs to, as owner/repo; otherwise null. */
+function ownRepository(url: string): string | null {
+	const own = githubPath(url);
 	return own && own.length >= 2 ? `${own[0]}/${own[1]}` : null;
 }
 
@@ -52,28 +52,14 @@ export function detailLink(href: string, base: string): DetailRef | null {
 	return Number.isSafeInteger(number) ? { kind: path[2] === "pull" ? "pr" : "issue", repo, number } : null;
 }
 
-/** An issue of the reader's own repository (the issue URL's repository), resolved like browserUrl; otherwise null. */
-export function issueLink(href: string, issueUrl: string): { repo: string; number: number } | null {
-	const target = browserUrl(href, issueUrl);
-	const repo = ownRepository(issueUrl),
-		own = repo?.split("/"),
-		path = target ? githubPath(target) : null;
-	if (!repo || !own || !path || path.length !== 4 || path[2] !== "issues" || !/^[1-9]\d*$/.test(path[3]!)) return null;
-	if (path[0]!.toLowerCase() !== own[0]!.toLowerCase() || path[1]!.toLowerCase() !== own[1]!.toLowerCase()) return null;
-	const number = Number(path[3]);
-	return Number.isSafeInteger(number) ? { repo, number } : null;
-}
-
 const link = (text: string, url: string): string => `[${text}](<${url.replace(/</g, "%3C").replace(/>/g, "%3E")}>)`;
 
-/** What the reader renders for a body: images and #123 references as links; an empty body reads as no text. */
-export function readerMarkdown(body: string, issueUrl: string): string {
-	return links(body || "_No text._", issueUrl);
-}
-
-/** Images only (no issue to resolve references against); source offsets preserve all other Markdown verbatim. */
-export function imageLinks(markdown: string): string {
-	return links(markdown, null);
+/**
+ * What the reader renders for a body on the page `url`: images, and #123 references to a github.com page's
+ * repository, as links; source offsets keep all other Markdown verbatim. An empty body reads as no text.
+ */
+export function readerMarkdown(body: string, url: string): string {
+	return links(body || "_No text._", url);
 }
 
 // GitHub's autolinked reference: #<number> after a non-word character, not followed by a word character.
@@ -82,17 +68,16 @@ const BEFORE_REFERENCE = /[\s([{"',;:!?*_~]/;
 // A ; that ends a character reference (&amp; &#38; &#x26;) is not punctuation before a reference.
 const CHARACTER_REFERENCE = /&(?:[a-z][a-z\d]*|#\d+|#x[\da-f]+);$/i;
 
-/** One parse for both rewrites (parsing is slow in QuickJS); a null issue URL rewrites images only. */
-function links(markdown: string, issueUrl: string | null): string {
-	// #123 links only where issueLink would open it in the reader: a github.com issue's own repository.
-	const repository = issueUrl === null ? null : ownRepository(issueUrl);
+/** One parse for both rewrites: parsing is slow in QuickJS. */
+function links(markdown: string, url: string): string {
+	// #123 links only where detailLink opens them in the reader: a github.com page's own repository.
+	const repository = ownRepository(url);
 	const references = repository !== null && /#[1-9]/.test(markdown);
 	if (!references && !markdown.includes("![") && !/<img/i.test(markdown)) return markdown;
 	const definitions = new Map<string, string>();
 	const images: (Image | ImageReference)[] = [];
 	const patches: { start: number; end: number; text: string; url: string }[] = [];
 	function visit(node: Nodes, inLink: boolean): void {
-		// A link's text is already a link.
 		if (references && !inLink && node.type === "text") {
 			const start = node.position!.start.offset!,
 				end = node.position!.end.offset!;

@@ -1,6 +1,7 @@
 // Small UI helpers shared by the views.
 import { type AsyncContext, type Color, type Context, div, type Element, svg } from "gpui-kit";
 import { theme } from "herdr";
+import type { PullState } from "../core/pulls.ts";
 
 /** One way the mod shows (props().role): created in init, rendered by the mod's View. */
 export interface Role {
@@ -35,6 +36,17 @@ export function link(id: string, url: string, label: string): Element {
 export function chip(label: string, border: Color, background: Color): Element {
 	return div().px(8).py(3).rounded(12).border_1().border_color(border).bg(background).text_size(12).child(label);
 }
+
+/** A PR state's Octicon, theme color and name, in the sidebar's rows and the PR page alike. */
+export const PULL_STATES: Record<
+	PullState,
+	{ icon: string; color: (t: Record<string, Color>) => Color; label: string }
+> = {
+	open: { icon: "mods/github/assets/git-pull-request.svg", color: (t) => t.done, label: "Open" },
+	draft: { icon: "mods/github/assets/git-pull-request-draft.svg", color: (t) => t.dim, label: "Draft" },
+	merged: { icon: "mods/github/assets/git-merge.svg", color: (t) => t.ansi5, label: "Merged" },
+	closed: { icon: "mods/github/assets/git-pull-request-closed.svg", color: (t) => t.blocked, label: "Closed" },
+};
 
 /** A 36 px square in a heading, centring a large control or its spinner. */
 export const square = (el: Element): Element => el.size(36).flex_none().flex().items_center().justify_center();

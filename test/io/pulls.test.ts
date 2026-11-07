@@ -3,13 +3,16 @@
 import { afterEach, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { ALL_OPEN_QUERY, SEARCH_QUERY } from "../../src/github/core/pulls.ts";
+import { pullGroupQuery } from "../../src/github/core/pulls.ts";
 import { failureOf } from "../../src/github/io/gh.ts";
 import * as pulls from "../../src/github/io/pulls.ts";
 import { machine, reset } from "../fake-herdr.ts";
 
 afterEach(reset);
 
+const ANY = { remote: "origin", host: "github.com", owner: "", repo: "" };
+const ALL_OPEN_QUERY = pullGroupQuery("all", ANY, "", null).query;
+const SEARCH_QUERY = pullGroupQuery("review", ANY, "", null).query;
 const fixture = (name: string): string => readFileSync(join(import.meta.dir, "../fixtures", name), "utf8");
 const remote = (owner: string, repo: string) => ({ remote: "origin", host: "github.com", owner, repo });
 const asked = (owner: string, name: string, after: string | null): string =>
@@ -20,7 +23,7 @@ const asked = (owner: string, name: string, after: string | null): string =>
 test("All Open's first page is asked with the gh on the folder's machine", async () => {
 	machine("center", { [asked("lw396", "herdr-plugin-github", null)]: { stdout: fixture("pulls-all-plugin.json") } });
 	const page = await pulls.pullPage("all", remote("lw396", "herdr-plugin-github"), "lw396", "center", null);
-	expect(page.pulls.map((p) => [p.number, p.state])).toEqual([
+	expect(page.rows.map((p) => [p.number, p.state])).toEqual([
 		[36, "draft"],
 		[35, "open"],
 	]);
@@ -32,7 +35,7 @@ test("Load more asks for the page after the last cursor", async () => {
 	machine(null, { [asked("cli", "cli", cursor)]: { stdout: fixture("pulls-all-cli-2.json") } });
 	const page = await pulls.pullPage("all", remote("cli", "cli"), "lw396", null, cursor);
 	expect(page).toMatchObject({ total: 59, more: false });
-	expect(page.pulls).toHaveLength(29);
+	expect(page.rows).toHaveLength(29);
 });
 
 test("a repository that isn't there (or can't be seen) is a not-found failure", async () => {
@@ -53,7 +56,7 @@ test("Waiting For My Review searches for PRs asking the gh account for review", 
 	});
 	const page = await pulls.pullPage("review", remote("cli", "cli"), "babakks", null, null);
 	expect(page).toMatchObject({ total: 26, more: false });
-	expect(page.pulls[0]).toMatchObject({ number: 14964, state: "open", author: "dependabot" });
+	expect(page.rows[0]).toMatchObject({ number: 14964, state: "open", author: "dependabot" });
 });
 
 test("nobody asked: an empty group, not a failure", async () => {
@@ -66,7 +69,7 @@ test("nobody asked: an empty group, not a failure", async () => {
 		total: 0,
 		more: false,
 		cursor: null,
-		pulls: [],
+		rows: [],
 	});
 });
 
@@ -77,5 +80,5 @@ test("Created By Me searches for the gh account's open PRs on the folder's machi
 		},
 	});
 	const page = await pulls.pullPage("mine", remote("lw396", "herdr-plugin-github"), "lw396", "center", null);
-	expect(page.pulls.map((p) => p.number)).toEqual([36, 35]);
+	expect(page.rows.map((p) => p.number)).toEqual([36, 35]);
 });

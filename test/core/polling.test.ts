@@ -1,8 +1,8 @@
 import { expect, test } from "bun:test";
-import { IssuePolling } from "../../src/github/core/issue-polling.ts";
+import { ConditionalPoll } from "../../src/github/core/polling.ts";
 
 test("hiding cancels a read, showing again refreshes immediately, and switching issues rejects old answers", () => {
-	const poll = new IssuePolling();
+	const poll = new ConditionalPoll();
 	poll.sync("center:o/r#17", true);
 	const hiddenRead = poll.begin()!;
 	expect(poll.sync("center:o/r#17", false)).toBe(false);
@@ -18,7 +18,7 @@ test("hiding cancels a read, showing again refreshes immediately, and switching 
 });
 
 test("a failed discussion reload retries without accepting the probe validator", () => {
-	const poll = new IssuePolling();
+	const poll = new ConditionalPoll();
 	poll.sync("o/r#17", true);
 	const request = poll.begin()!;
 	expect(poll.reload(request, { changed: true, etag: '"not-loaded"' })).toBe(true);
@@ -30,7 +30,7 @@ test("a failed discussion reload retries without accepting the probe validator",
 });
 
 test("a write invalidates an older read so it cannot erase the new comment", () => {
-	const poll = new IssuePolling();
+	const poll = new ConditionalPoll();
 	poll.sync("o/r#17", true);
 	const old = poll.begin()!;
 	expect(poll.begin()).toBeNull();
@@ -42,7 +42,7 @@ test("a write invalidates an older read so it cannot erase the new comment", () 
 });
 
 test("a visible issue refreshes immediately, unchanged ticks keep its contents, and recovery redraws", () => {
-	const poll = new IssuePolling();
+	const poll = new ConditionalPoll();
 	expect(poll.sync("center:o/r#17", true)).toBe(true);
 	const first = poll.begin(true)!;
 	expect(first.etag).toBeNull();

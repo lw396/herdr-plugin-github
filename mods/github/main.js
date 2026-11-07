@@ -6,7 +6,7 @@ var __export = (target, all2) => {
 
 // src/github/main.ts
 import { View } from "gpui-kit";
-import { props as props5 } from "herdr";
+import { props as props4 } from "herdr";
 
 // src/github/views/pane.ts
 import { h_flex } from "gpui-base";
@@ -28,6 +28,12 @@ function link(id, url, label) {
 function chip(label, border, background) {
   return div().px(8).py(3).rounded(12).border_1().border_color(border).bg(background).text_size(12).child(label);
 }
+var PULL_STATES = {
+  open: { icon: "mods/github/assets/git-pull-request.svg", color: (t) => t.done, label: "Open" },
+  draft: { icon: "mods/github/assets/git-pull-request-draft.svg", color: (t) => t.dim, label: "Draft" },
+  merged: { icon: "mods/github/assets/git-merge.svg", color: (t) => t.ansi5, label: "Merged" },
+  closed: { icon: "mods/github/assets/git-pull-request-closed.svg", color: (t) => t.blocked, label: "Closed" }
+};
 var square = (el) => el.size(36).flex_none().flex().items_center().justify_center();
 function button(id, label, tip, act) {
   const t = colors();
@@ -85,10 +91,10 @@ var Pane = class {
 
 // src/github/views/panel.ts
 import { h_flex as h_flex3, v_flex as v_flex2 } from "gpui-base";
-import { div as div5, svg as svg4 } from "gpui-kit";
+import { div as div6, svg as svg4 } from "gpui-kit";
 import { closeOverlay, props as props2 } from "herdr";
 
-// src/github/core/gh-args.ts
+// src/github/core/gh.ts
 function apiArgs(path, options = {}) {
   const args = ["api", path];
   if (options.method && options.method.toUpperCase() !== "GET") args.push("-X", options.method.toUpperCase());
@@ -97,18 +103,16 @@ function apiArgs(path, options = {}) {
   if (options.paginate) args.push("--paginate");
   if (options.slurp) args.push("--slurp");
   if (options.jq) args.push("--jq", options.jq);
-  if (options.cache) args.push("--cache", options.cache);
-  if (options.hostname) args.push("--hostname", options.hostname);
   return args;
 }
-function graphqlArgs(query, variables = {}, options = {}) {
+function graphqlArgs({ query, variables }) {
   const rawFields = { query };
   const fields = {};
   for (const [key, value] of Object.entries(variables)) {
     if (typeof value === "string") rawFields[key] = value;
     else fields[key] = value === null ? "null" : value;
   }
-  return apiArgs("graphql", { ...options, fields, rawFields });
+  return apiArgs("graphql", { fields, rawFields });
 }
 function parseJson(stdout) {
   const text3 = stdout.trim();
@@ -118,6 +122,13 @@ function parseJson(stdout) {
   } catch {
     throw new Error(`gh printed something that isn't JSON: ${text3.slice(0, 200)}`);
   }
+}
+function responseHeaders(stdout) {
+  const headers = stdout.split(/\r?\n\r?\n/, 1)[0] ?? "";
+  return {
+    status: Number(/^HTTP\/\S+\s+(\d+)/.exec(headers)?.[1]),
+    etag: /^etag:\s*(.+)$/im.exec(headers)?.[1]?.trim() ?? null
+  };
 }
 function errorMessage(stderr) {
   const lines = stderr.split("\n").map((l) => l.trim()).filter(Boolean);
@@ -148,55 +159,71 @@ function describeAccount(account3) {
   return { ok: false, text: `gh on ${machine}: ${explain(status2.message)}` };
 }
 
-// src/github/core/issues.ts
-function parseIssueChange(data, repo) {
-  const i = data;
-  return {
-    repo,
-    state: i.state,
-    issue: {
-      number: i.number,
-      title: i.title,
-      assignees: i.assignees.map((a) => a.login),
-      updatedAt: i.updated_at,
-      url: i.html_url
-    }
-  };
-}
-var PAGE = 30;
-function groupQuery(kind) {
-  const assigned = kind === "assigned";
-  return `query($owner: String!, $name: String!, $after: String${assigned ? ", $assignee: String!" : ""}) {
-  repository(owner: $owner, name: $name) {
-    hasIssuesEnabled
-    issues(first: ${PAGE}, after: $after, states: ${kind === "closed" ? "CLOSED" : "OPEN"}${assigned ? ", filterBy: {assignee: $assignee}" : ""}, orderBy: {field: UPDATED_AT, direction: DESC}) {
-      totalCount
-      pageInfo { hasNextPage endCursor }
-      nodes { number title updatedAt url assignees(first: 10) { nodes { login } } }
-    }
+// src/github/core/polling.ts
+var ConditionalPoll = class {
+  key = null;
+  visible = false;
+  etag = null;
+  failed = false;
+  pending = null;
+  get shown() {
+    return this.visible;
   }
-}`;
-}
-function groupVariables(kind, remote2, login, after) {
-  return { owner: remote2.owner, name: remote2.repo, after, ...kind === "assigned" ? { assignee: login } : {} };
-}
-function applyChange(kind, group2, change, login) {
-  const belongs = change.state === "closed" ? kind === "closed" : kind === "open" || kind === "assigned" && change.issue.assignees.some((a) => a.toLowerCase() === login.toLowerCase());
-  const others = group2.issues.filter((i) => i.number !== change.issue.number);
-  const shown = others.length < group2.issues.length;
-  if (belongs) return { ...group2, total: group2.total + (shown ? 0 : 1), issues: [change.issue, ...others] };
-  return shown ? { ...group2, total: group2.total - 1, issues: others } : group2;
-}
-function appendPage(group2, page) {
-  const shown = new Set(group2.issues.map((i) => i.number));
-  return { ...page, issues: [...group2.issues, ...page.issues.filter((i) => !shown.has(i.number))] };
-}
+  /** What is polled (null: nothing) and whether it is shown; returns whether it needs a refresh now. */
+  sync(key, visible) {
+    const changed = key !== this.key;
+    const refresh = visible && key !== null && (changed || !this.visible);
+    if (changed) {
+      this.etag = null;
+      this.failed = false;
+    }
+    if (changed || !visible) this.pending = null;
+    this.key = key;
+    this.visible = visible;
+    return refresh;
+  }
+  /** A local write or failed reload wins over an older read, and the next check asks without a validator. */
+  invalidate() {
+    this.pending = null;
+    this.etag = null;
+  }
+  /** A check to make, or null while hidden or another is out; a forced one replaces the one out. */
+  begin(force = false) {
+    if (!this.key || !this.visible || this.pending && !force) return null;
+    const request = { etag: this.etag, force };
+    this.pending = request;
+    return request;
+  }
+  current(request) {
+    return this.visible && this.pending === request;
+  }
+  /** Whether the check's answer calls for reading the contents again. */
+  reload(request, change) {
+    return this.current(request) && (request.force || change.changed);
+  }
+  /**
+   * Finish only after any required reload succeeds (no `change`: it failed, so the next check asks
+   * again without a validator). `notify`: what is shown changed or recovered.
+   */
+  finish(request, change) {
+    if (!this.current(request)) return { accepted: false, notify: false };
+    const notify = !change || change.changed || request.force || this.failed;
+    this.pending = null;
+    this.failed = !change;
+    if (!change) this.etag = null;
+    else if (change.changed) this.etag = change.etag;
+    return { accepted: true, notify };
+  }
+};
+
+// src/github/core/sidebar.ts
+var POLL_SECONDS = 60;
 function noRepository(cwd) {
   const hint = "Focus a terminal in a repository cloned from GitHub.";
   const name = cwd ? cwd.replace(/\/+$/, "").split("/").pop() || "/" : null;
   return { title: "No GitHub repository", detail: name ? `${name} has no GitHub remote. ${hint}` : hint };
 }
-function issuesNotice(s) {
+function listNotice(s) {
   if (s.account && !s.account.status.ok) return describeAccount(s.account).text;
   if (s.remote === null) return null;
   const repo = s.remote ? `${s.remote.owner}/${s.remote.repo}` : "the repository";
@@ -205,28 +232,9 @@ function issuesNotice(s) {
     return `${repo} (remote "${s.remote.remote}") isn't on GitHub, or ${user} can't see it. Check git remote -v.`;
   }
   if (s.failure) return s.failure.message;
-  if (s.group && !s.group.issuesEnabled) return `Issues are turned off for ${repo}.`;
+  if (s.issuesEnabled === false) return `Issues are turned off for ${repo}.`;
   return null;
 }
-function parseIssueGroup(data) {
-  const { hasIssuesEnabled, issues } = data.repository;
-  return {
-    issuesEnabled: hasIssuesEnabled,
-    total: issues.totalCount,
-    more: issues.pageInfo.hasNextPage,
-    cursor: issues.pageInfo.endCursor,
-    issues: issues.nodes.map((n) => ({
-      number: n.number,
-      title: n.title,
-      assignees: n.assignees.nodes.map((a) => a.login),
-      updatedAt: n.updatedAt,
-      url: n.url
-    }))
-  };
-}
-
-// src/github/core/status.ts
-var POLL_SECONDS = 60;
 var PROBLEM = { missing: "gh is not installed", auth: "Not signed in to gh", error: "gh is not working" };
 var ago = (ms) => ms < 6e4 ? "just now" : `${Math.floor(ms / 6e4)}m ago`;
 function footerStatus(s, now) {
@@ -240,23 +248,8 @@ function footerStatus(s, now) {
   return { tone: "problem", account: status2.user, machine, sync };
 }
 
-// src/github/core/time.ts
-var MINUTE = 6e4;
-var HOUR = 60 * MINUTE;
-var DAY = 24 * HOUR;
-function relativeTime(iso, now) {
-  const ago2 = now - Date.parse(iso);
-  if (ago2 < MINUTE) return "now";
-  if (ago2 < HOUR) return `${Math.floor(ago2 / MINUTE)}m`;
-  if (ago2 < DAY) return `${Math.floor(ago2 / HOUR)}h`;
-  if (ago2 < 30 * DAY) return `${Math.floor(ago2 / DAY)}d`;
-  if (ago2 < 365 * DAY) return `${Math.floor(ago2 / (30 * DAY))}mo`;
-  return `${Math.floor(ago2 / (365 * DAY))}y`;
-}
-
 // src/github/io/changes.ts
 import { setShared, shared } from "herdr";
-var isIssueNotice = (n) => n.kind !== "pr";
 var CHANGES = "github.changes";
 var KEPT = 20;
 var log = () => shared(CHANGES)?.notices ?? [];
@@ -275,7 +268,7 @@ var Notices = class {
 };
 
 // src/github/io/context.ts
-import { focused, panes as panes2, spaces } from "herdr";
+import { focused, layout, panes as panes2, spaces } from "herdr";
 
 // src/github/core/location.ts
 function focusedFolder(herdr, previous3) {
@@ -290,13 +283,25 @@ function focusedFolder(herdr, previous3) {
   return { cwd: space?.folder || null, on: space?.machine ?? null, space: id };
 }
 
+// src/github/core/visibility.ts
+function layoutShows(tree, id) {
+  if (!tree || typeof tree !== "object") return false;
+  const node2 = tree;
+  if (node2.hidden) return false;
+  if (node2.id === id) return true;
+  const children = node2.children ?? [];
+  return children.some(
+    (child, index2) => (node2.type !== "stack" || (node2.active ? child.id === node2.active : index2 === 0)) && layoutShows(child, id)
+  );
+}
+
 // src/github/io/context.ts
 var previous = null;
 function location() {
   previous = focusedFolder({ spaces: spaces(), panes: panes2(), focused: focused() }, previous);
   return previous;
 }
-var locationKey = () => JSON.stringify(location());
+var sidebarVisible = () => layoutShows(layout(), "github");
 
 // src/github/io/detail-tabs.ts
 import { exec, focused as focused2, panes as panes3, run as run2, setShared as setShared2, shared as shared2, spaces as spaces2 } from "herdr";
@@ -329,6 +334,8 @@ var DetailNavigation = class {
   }
 };
 var detailTabName = (ref) => `#${ref.number} \xB7 ${ref.repo.split("/").at(-1)}`;
+var detailUrl = (ref) => `https://github.com/${ref.repo}/${ref.kind === "pr" ? "pull" : "issues"}/${ref.number}`;
+var notVisible = (ref) => `${ref.repo} #${ref.number} isn't on GitHub, or this account can't see it.`;
 
 // src/github/io/detail-tabs.ts
 var READERS = "github.readers";
@@ -449,17 +456,6 @@ function detailCommand(command, id) {
 
 // src/github/io/gh.ts
 import { exec as exec2 } from "herdr";
-
-// src/github/core/conditional.ts
-function responseHeaders(stdout) {
-  const headers = stdout.split(/\r?\n\r?\n/, 1)[0] ?? "";
-  return {
-    status: Number(/^HTTP\/\S+\s+(\d+)/.exec(headers)?.[1]),
-    etag: /^etag:\s*(.+)$/im.exec(headers)?.[1]?.trim() ?? null
-  };
-}
-
-// src/github/io/gh.ts
 var GhError = class extends Error {
   code;
   stderr;
@@ -472,54 +468,52 @@ var GhError = class extends Error {
   get notFound() {
     return /HTTP 404|Could not resolve to a Repository/.test(this.stderr + this.message);
   }
+  /** The connection dropped: GitHub may or may not have done a write. */
+  get transient() {
+    return transient(this.stderr);
+  }
 };
 function failureOf(e) {
   if (e instanceof GhError) return { notFound: e.notFound, message: explain(e.message) };
   return { notFound: false, message: e instanceof Error ? e.message : String(e) };
 }
 var TRIES = 3;
-async function gh(args, where = {}, read = false) {
-  return (await execute(args, where, read)).stdout;
-}
-async function execute(args, where, read, conditional = false) {
+async function execute(args, on, read, conditional = false) {
   for (let tried = 1; ; tried++) {
-    const r = await exec2("gh", args, { cwd: where.cwd ?? void 0, on: where.on ?? null });
+    const r = await exec2("gh", args, { on });
     if (r.code === 0 || conditional && responseHeaders(r.stdout).status === 304) return r;
     if (!read || tried >= TRIES || !transient(r.stderr)) throw new GhError(errorMessage(r.stderr), r.code, r.stderr);
   }
 }
-async function changes(path, etag, where = {}) {
+async function changes(path, etag, on) {
   const args = ["api", path, "--include"];
   if (etag) args.push("-H", `If-None-Match: ${etag}`);
-  const result = await execute(args, where, true, true);
-  const headers = responseHeaders(result.stdout);
+  const headers = responseHeaders((await execute(args, on, true, true)).stdout);
   if (headers.status === 304) return { changed: false };
   if (headers.status !== 200) throw new Error("GitHub did not return an HTTP 200 or 304 response.");
   return { changed: true, etag: headers.etag };
 }
 var reads = (method) => !method || method.toUpperCase() === "GET";
-async function api(path, options = {}) {
-  const { cwd, on, ...rest } = options;
-  const data = parseJson(await gh(apiArgs(path, { ...rest, slurp: rest.paginate }), { cwd, on }, reads(rest.method)));
-  return rest.paginate && Array.isArray(data) && data.every(Array.isArray) ? data.flat() : data;
+async function api(path, { on, ...options }) {
+  const args = apiArgs(path, { ...options, slurp: options.paginate });
+  const data = parseJson((await execute(args, on, reads(options.method))).stdout);
+  return options.paginate && Array.isArray(data) && data.every(Array.isArray) ? data.flat() : data;
 }
-async function apiText(path, jq, options = {}) {
-  const { cwd, on, ...rest } = options;
-  return (await gh(apiArgs(path, { ...rest, jq }), { cwd, on }, reads(rest.method))).trim();
+async function apiText(path, jq, { on, ...options }) {
+  return (await execute(apiArgs(path, { ...options, jq }), on, reads(options.method))).stdout.trim();
 }
-async function graphql(query, variables = {}, where = {}) {
-  const read = !/^\s*mutation\b/.test(query);
-  const out = parseJson(await gh(graphqlArgs(query, variables), where, read));
+async function graphql(query, on) {
+  const read = !/^\s*mutation\b/.test(query.query);
+  const out = parseJson((await execute(graphqlArgs(query), on, read)).stdout);
   if (out?.errors?.length) throw new GhError(out.errors.map((e) => e.message).join("; "), 1, "");
   return out?.data;
 }
 async function account(on) {
-  return { on, status: await status({ on }) };
+  return { on, status: await status(on) };
 }
-async function status(where = {}) {
+async function status(on) {
   try {
-    const user = await apiText("user", ".login", where);
-    return { ok: true, user };
+    return { ok: true, user: await apiText("user", ".login", { on }) };
   } catch (e) {
     const message = e instanceof Error ? e.message : String(e);
     if (!(e instanceof GhError))
@@ -528,52 +522,9 @@ async function status(where = {}) {
     return { ok: false, reason: "error", message };
   }
 }
-
-// src/github/core/labels.ts
-function parseLabel(label) {
-  return typeof label === "string" ? { name: label, color: null } : {
-    name: label.name,
-    color: label.color && /^[a-f\d]{6}$/i.test(label.color) ? `#${label.color.toLowerCase()}` : null
-  };
-}
-
-// src/github/core/activity.ts
-function issueTimeline(comments, activities) {
-  const items = [
-    ...comments.map((comment) => ({ type: "comment", comment })),
-    ...activities.map((activity) => ({ type: "activity", activity }))
-  ];
-  const time = (item) => item.type === "comment" ? item.comment.createdAt : item.activity.createdAt;
-  items.sort((a, b) => time(a).localeCompare(time(b)));
-  const shown = [];
-  for (const item of items) {
-    const previous3 = shown.at(-1);
-    if (item.type === "activity" && "labels" in item.activity && previous3?.type === "activity" && "labels" in previous3.activity && item.activity.kind === previous3.activity.kind && item.activity.actor === previous3.activity.actor && item.activity.createdAt === previous3.activity.createdAt) {
-      shown[shown.length - 1] = {
-        type: "activity",
-        activity: { ...previous3.activity, labels: [...previous3.activity.labels, ...item.activity.labels] }
-      };
-    } else shown.push(item);
-  }
-  return shown;
-}
-function activityText(activity) {
-  if ("labels" in activity) return activity.kind === "labeled" ? "added" : "removed";
-  if (activity.kind === "assigned")
-    return activity.actor === activity.assignee ? "self-assigned this" : `assigned ${activity.assignee}`;
-  return activity.actor === activity.assignee ? "removed their assignment" : `unassigned ${activity.assignee}`;
-}
-function parseActivity(data) {
-  return data.flatMap((event) => {
-    const base = { id: event.id, actor: event.actor?.login ?? "deleted user", createdAt: event.created_at };
-    if ((event.event === "labeled" || event.event === "unlabeled") && event.label) {
-      return [{ ...base, kind: event.event, labels: [parseLabel(event.label)] }];
-    }
-    if ((event.event === "assigned" || event.event === "unassigned") && event.assignee) {
-      return [{ ...base, kind: event.event, assignee: event.assignee.login }];
-    }
-    return [];
-  });
+async function signedIn(on) {
+  const a = await account(on);
+  if (!a.status.ok) throw new Error(describeAccount(a).text);
 }
 
 // node_modules/entities/dist/decode-codepoint.js
@@ -5519,7 +5470,7 @@ function resolveAllAttention(events, context) {
               ...events[index2][1].start
             }
           };
-          const group2 = {
+          const group = {
             type: use > 1 ? "strong" : "emphasis",
             start: {
               ...openingSequence.start
@@ -5538,9 +5489,9 @@ function resolveAllAttention(events, context) {
           if (events[open][1].end.offset - events[open][1].start.offset) {
             nextEvents = push(nextEvents, [["enter", events[open][1], context], ["exit", events[open][1], context]]);
           }
-          nextEvents = push(nextEvents, [["enter", group2, context], ["enter", openingSequence, context], ["exit", openingSequence, context], ["enter", text3, context]]);
+          nextEvents = push(nextEvents, [["enter", group, context], ["enter", openingSequence, context], ["exit", openingSequence, context], ["enter", text3, context]]);
           nextEvents = push(nextEvents, resolveAll(context.parser.constructs.insideSpan.null, events.slice(open + 1, index2), context));
-          nextEvents = push(nextEvents, [["exit", text3, context], ["enter", closingSequence, context], ["exit", closingSequence, context], ["exit", group2, context]]);
+          nextEvents = push(nextEvents, [["exit", text3, context], ["enter", closingSequence, context], ["exit", closingSequence, context], ["exit", group, context]]);
           let offset = 0;
           if (events[index2][1].end.offset - events[index2][1].start.offset) {
             offset = 2;
@@ -6418,7 +6369,7 @@ function subtokenize(eventsArray) {
   let otherEvent;
   let parameters;
   let subevents;
-  let more2;
+  let more;
   const events = new SpliceBuffer(eventsArray);
   while (++index2 < events.length) {
     while (index2 in jumps) {
@@ -6447,7 +6398,7 @@ function subtokenize(eventsArray) {
       if (event[1].contentType) {
         Object.assign(jumps, subcontent(events, index2));
         index2 = jumps[index2];
-        more2 = true;
+        more = true;
       }
     } else if (event[1]._container) {
       otherIndex = index2;
@@ -6478,7 +6429,7 @@ function subtokenize(eventsArray) {
     }
   }
   splice(eventsArray, 0, Number.POSITIVE_INFINITY, events.slice(0));
-  return !more2;
+  return !more;
 }
 function subcontent(events, eventIndex) {
   const token = events.get(eventIndex)[1];
@@ -7854,7 +7805,7 @@ function resolveToLabelEnd(events, context) {
       close = index2;
     }
   }
-  const group2 = {
+  const group = {
     type: events[open][1].type === "labelLink" ? "link" : "image",
     start: {
       ...events[open][1].start
@@ -7881,13 +7832,13 @@ function resolveToLabelEnd(events, context) {
       ...events[close - 2][1].start
     }
   };
-  media = [["enter", group2, context], ["enter", label, context]];
+  media = [["enter", group, context], ["enter", label, context]];
   media = push(media, events.slice(open + 1, open + offset + 3));
   media = push(media, [["enter", text3, context]]);
   media = push(media, resolveAll(context.parser.constructs.insideSpan.null, events.slice(open + offset + 4, close - 3), context));
   media = push(media, [["exit", text3, context], events[close - 2], events[close - 1], ["exit", label, context]]);
   media = push(media, events.slice(close + 1));
-  media = push(media, [["exit", group2, context]]);
+  media = push(media, [["exit", group, context]]);
   splice(events, open, events.length, media);
   return events;
 }
@@ -9893,8 +9844,8 @@ function githubPath(href) {
   if (url.hostname !== "github.com" && url.hostname !== "www.github.com") return null;
   return url.pathname.split("/").filter(Boolean);
 }
-function ownRepository(issueUrl) {
-  const own3 = githubPath(issueUrl);
+function ownRepository(url) {
+  const own3 = githubPath(url);
   return own3 && own3.length >= 2 ? `${own3[0]}/${own3[1]}` : null;
 }
 function detailLink(href, base) {
@@ -9907,23 +9858,15 @@ function detailLink(href, base) {
   const number = Number(path[3]);
   return Number.isSafeInteger(number) ? { kind: path[2] === "pull" ? "pr" : "issue", repo, number } : null;
 }
-function issueLink(href, issueUrl) {
-  const target = browserUrl(href, issueUrl);
-  const repo = ownRepository(issueUrl), own3 = repo?.split("/"), path = target ? githubPath(target) : null;
-  if (!repo || !own3 || !path || path.length !== 4 || path[2] !== "issues" || !/^[1-9]\d*$/.test(path[3])) return null;
-  if (path[0].toLowerCase() !== own3[0].toLowerCase() || path[1].toLowerCase() !== own3[1].toLowerCase()) return null;
-  const number = Number(path[3]);
-  return Number.isSafeInteger(number) ? { repo, number } : null;
-}
 var link2 = (text3, url) => `[${text3}](<${url.replace(/</g, "%3C").replace(/>/g, "%3E")}>)`;
-function readerMarkdown(body, issueUrl) {
-  return links(body || "_No text._", issueUrl);
+function readerMarkdown(body, url) {
+  return links(body || "_No text._", url);
 }
 var REFERENCE = /#([1-9]\d*)(?![\w-])/g;
 var BEFORE_REFERENCE = /[\s([{"',;:!?*_~]/;
 var CHARACTER_REFERENCE = /&(?:[a-z][a-z\d]*|#\d+|#x[\da-f]+);$/i;
-function links(markdown, issueUrl) {
-  const repository = issueUrl === null ? null : ownRepository(issueUrl);
+function links(markdown, url) {
+  const repository = ownRepository(url);
   const references = repository !== null && /#[1-9]/.test(markdown);
   if (!references && !markdown.includes("![") && !/<img/i.test(markdown)) return markdown;
   const definitions = /* @__PURE__ */ new Map();
@@ -9969,9 +9912,9 @@ function links(markdown, issueUrl) {
   }
   visit(fromMarkdown(markdown), false);
   for (const image2 of images) {
-    const url = image2.type === "image" ? image2.url : definitions.get(image2.identifier);
-    if (url !== void 0)
-      patches.push({ start: image2.position.start.offset, end: image2.position.end.offset, text: "\u{1F5BC} \u56FE\u7247", url });
+    const url2 = image2.type === "image" ? image2.url : definitions.get(image2.identifier);
+    if (url2 !== void 0)
+      patches.push({ start: image2.position.start.offset, end: image2.position.end.offset, text: "\u{1F5BC} \u56FE\u7247", url: url2 });
   }
   patches.sort((a, b) => a.start - b.start);
   let result = "", copied = 0;
@@ -9982,8 +9925,7 @@ function links(markdown, issueUrl) {
   return result + markdown.slice(copied);
 }
 
-// src/github/core/issue-detail.ts
-var issueKey = (ref) => detailKey({ kind: "issue", ...ref });
+// src/github/core/discussion.ts
 var EMOJI = [
   ["+1", "\u{1F44D}"],
   ["-1", "\u{1F44E}"],
@@ -9994,30 +9936,83 @@ var EMOJI = [
   ["rocket", "\u{1F680}"],
   ["eyes", "\u{1F440}"]
 ];
+var login = (user) => user?.login ?? "deleted user";
 function parseReactions(reactions = {}) {
   return EMOJI.flatMap(([key, emoji]) => {
     const count = reactions[key];
     return typeof count === "number" && count > 0 ? [{ emoji, count }] : [];
   });
 }
-function parseComment(comment, issueUrl) {
+function parseComment(comment, url) {
   const c = comment;
   return {
     id: c.id,
-    author: c.user?.login ?? "deleted user",
+    author: login(c.user),
     createdAt: c.created_at,
     body: c.body ?? "",
-    markdown: readerMarkdown(c.body ?? "", issueUrl),
+    markdown: readerMarkdown(c.body ?? "", url),
     reactions: parseReactions(c.reactions)
   };
 }
+function parseComments(comments, url) {
+  return comments.map((c) => parseComment(c, url)).sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id - b.id);
+}
+
+// src/github/core/labels.ts
+function parseLabel(label) {
+  return typeof label === "string" ? { name: label, color: null } : {
+    name: label.name,
+    color: label.color && /^[a-f\d]{6}$/i.test(label.color) ? `#${label.color.toLowerCase()}` : null
+  };
+}
+
+// src/github/core/activity.ts
+function issueTimeline(comments, activities) {
+  const items = [
+    ...comments.map((comment) => ({ type: "comment", comment })),
+    ...activities.map((activity) => ({ type: "activity", activity }))
+  ];
+  const time = (item) => item.type === "comment" ? item.comment.createdAt : item.activity.createdAt;
+  items.sort((a, b) => time(a).localeCompare(time(b)));
+  const shown = [];
+  for (const item of items) {
+    const previous3 = shown.at(-1);
+    if (item.type === "activity" && "labels" in item.activity && previous3?.type === "activity" && "labels" in previous3.activity && item.activity.kind === previous3.activity.kind && item.activity.actor === previous3.activity.actor && item.activity.createdAt === previous3.activity.createdAt) {
+      shown[shown.length - 1] = {
+        type: "activity",
+        activity: { ...previous3.activity, labels: [...previous3.activity.labels, ...item.activity.labels] }
+      };
+    } else shown.push(item);
+  }
+  return shown;
+}
+function activityText(activity) {
+  if ("labels" in activity) return activity.kind === "labeled" ? "added" : "removed";
+  if (activity.kind === "assigned")
+    return activity.actor === activity.assignee ? "self-assigned this" : `assigned ${activity.assignee}`;
+  return activity.actor === activity.assignee ? "removed their assignment" : `unassigned ${activity.assignee}`;
+}
+function parseActivity(data) {
+  return data.flatMap((event) => {
+    const base = { id: event.id, actor: login(event.actor), createdAt: event.created_at };
+    if ((event.event === "labeled" || event.event === "unlabeled") && event.label) {
+      return [{ ...base, kind: event.event, labels: [parseLabel(event.label)] }];
+    }
+    if ((event.event === "assigned" || event.event === "unassigned") && event.assignee) {
+      return [{ ...base, kind: event.event, assignee: event.assignee.login }];
+    }
+    return [];
+  });
+}
+
+// src/github/core/issue-detail.ts
 function parseIssueDetail(issue, timeline) {
   const i = issue, events = timeline;
   return {
     number: i.number,
     title: i.title,
     state: i.state,
-    author: i.user?.login ?? "deleted user",
+    author: login(i.user),
     createdAt: i.created_at,
     url: i.html_url,
     labels: i.labels.map(parseLabel),
@@ -10026,67 +10021,80 @@ function parseIssueDetail(issue, timeline) {
     body: i.body ?? "",
     markdown: readerMarkdown(i.body ?? "", i.html_url),
     activities: parseActivity(events),
-    comments: events.filter((e) => e.event === "commented").map((c) => parseComment(c, i.html_url)).sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id - b.id)
+    comments: parseComments(
+      events.filter((e) => e.event === "commented"),
+      i.html_url
+    )
   };
 }
 
-// src/github/core/projects.ts
-var PROJECTS_QUERY = `query($owner: String!, $name: String!, $number: Int!, $after: String) {
+// src/github/core/page.ts
+var PAGE = 30;
+function appendPage(group, page) {
+  const shown = new Set(group.rows.map((r) => r.number));
+  return { ...page, rows: [...group.rows, ...page.rows.filter((r) => !shown.has(r.number))] };
+}
+
+// src/github/core/issues.ts
+function parseIssueChange(data, repo) {
+  const i = data;
+  return {
+    repo,
+    state: i.state,
+    issue: {
+      number: i.number,
+      title: i.title,
+      assignees: i.assignees.map((a) => a.login),
+      updatedAt: i.updated_at,
+      url: i.html_url
+    }
+  };
+}
+function issueGroupQuery(kind, remote2, login2, after) {
+  const assigned = kind === "assigned";
+  return {
+    query: `query($owner: String!, $name: String!, $after: String${assigned ? ", $assignee: String!" : ""}) {
   repository(owner: $owner, name: $name) {
-    issue(number: $number) {
-      projectItems(first: 100, after: $after, includeArchived: true) {
-        pageInfo { hasNextPage endCursor }
-        nodes { project { title url } }
-      }
+    hasIssuesEnabled
+    issues(first: ${PAGE}, after: $after, states: ${kind === "closed" ? "CLOSED" : "OPEN"}${assigned ? ", filterBy: {assignee: $assignee}" : ""}, orderBy: {field: UPDATED_AT, direction: DESC}) {
+      totalCount
+      pageInfo { hasNextPage endCursor }
+      nodes { number title updatedAt url assignees(first: 10) { nodes { login } } }
     }
   }
-}`;
-var PULL_PROJECTS_QUERY = PROJECTS_QUERY.replace("issue(number:", "pullRequest(number:");
-function projectPage(data, kind = "issue") {
-  const items = data?.repository?.[kind === "pr" ? "pullRequest" : "issue"]?.projectItems;
-  if (!items) throw new Error(`GitHub did not return this ${kind === "pr" ? "pull request" : "issue"}'s Projects.`);
-  return {
-    projects: items.nodes.map((n) => ({ title: n.project.title, url: n.project.url })),
-    more: items.pageInfo.hasNextPage,
-    cursor: items.pageInfo.endCursor
+}`,
+    variables: { owner: remote2.owner, name: remote2.repo, after, ...assigned ? { assignee: login2 } : {} }
   };
 }
-function projectsFailure(message, on) {
-  const machine = on ?? "this computer";
+function parseIssueGroup(data) {
+  const { hasIssuesEnabled, issues } = data.repository;
   return {
-    ok: false,
-    message: /read:project/.test(message) ? `Projects require read:project. Run gh auth refresh -h github.com -s read:project on ${machine}.` : `Projects unavailable on ${machine}. ${explain(message)}`
+    issuesEnabled: hasIssuesEnabled,
+    total: issues.totalCount,
+    more: issues.pageInfo.hasNextPage,
+    cursor: issues.pageInfo.endCursor,
+    rows: issues.nodes.map((n) => ({
+      number: n.number,
+      title: n.title,
+      assignees: n.assignees.nodes.map((a) => a.login),
+      updatedAt: n.updatedAt,
+      url: n.url
+    }))
   };
 }
-
-// src/github/io/projects.ts
-async function readProjects(ref, on) {
-  const [owner, name] = ref.repo.split("/");
-  const projects = [];
-  let after = null;
-  try {
-    do {
-      const query = ref.kind === "pr" ? PULL_PROJECTS_QUERY : PROJECTS_QUERY;
-      const page = projectPage(
-        await graphql(query, { owner, name, number: ref.number, after }, { on }),
-        ref.kind
-      );
-      projects.push(...page.projects);
-      if (!page.more) return { ok: true, projects };
-      if (!page.cursor || page.cursor === after) throw new Error("GitHub did not return the next Projects page.");
-      after = page.cursor;
-    } while (after);
-  } catch (e) {
-    return projectsFailure(e instanceof Error ? e.message : String(e), on);
-  }
-  return { ok: true, projects };
+function applyChange(kind, group, change, login2) {
+  const belongs = change.state === "closed" ? kind === "closed" : kind === "open" || kind === "assigned" && change.issue.assignees.some((a) => a.toLowerCase() === login2.toLowerCase());
+  const others = group.rows.filter((i) => i.number !== change.issue.number);
+  const shown = others.length < group.rows.length;
+  if (belongs) return { ...group, total: group.total + (shown ? 0 : 1), rows: [change.issue, ...others] };
+  return shown ? { ...group, total: group.total - 1, rows: others } : group;
 }
 
 // src/github/io/issues.ts
-var listChanges = (repo, etag, on) => changes(`repos/${repo}/issues?state=all&sort=updated&per_page=1`, etag, { on });
-var issueChanges = (repo, number, etag, on) => changes(`repos/${repo}/issues/${number}`, etag, { on });
-async function issuePage(kind, remote2, login, on, after) {
-  return parseIssueGroup(await graphql(groupQuery(kind), groupVariables(kind, remote2, login, after), { on }));
+var listChanges = (repo, etag, on) => changes(`repos/${repo}/issues?state=all&sort=updated&per_page=1`, etag, on);
+var issueChanges = (repo, number, etag, on) => changes(`repos/${repo}/issues/${number}`, etag, on);
+async function issuePage(kind, remote2, login2, on, after) {
+  return parseIssueGroup(await graphql(issueGroupQuery(kind, remote2, login2, after), on));
 }
 async function readIssue(repo, number, on) {
   const path = `repos/${repo}/issues/${number}`;
@@ -10105,9 +10113,6 @@ async function setIssueState(repo, number, state, on) {
     await api(`repos/${repo}/issues/${number}`, { on, method: "PATCH", rawFields: { state } }),
     repo
   );
-}
-function readIssueProjects(repo, number, on) {
-  return readProjects({ kind: "issue", repo, number }, on);
 }
 
 // src/github/core/cache.ts
@@ -10147,11 +10152,10 @@ var Cache = class {
 };
 
 // src/github/core/pulls.ts
-var PAGE2 = 30;
 var ROW = "number title url updatedAt isDraft state author { login }";
 var ALL_OPEN_QUERY = `query($owner: String!, $name: String!, $after: String) {
   repository(owner: $owner, name: $name) {
-    pullRequests(first: ${PAGE2}, after: $after, states: OPEN, orderBy: {field: UPDATED_AT, direction: DESC}) {
+    pullRequests(first: ${PAGE}, after: $after, states: OPEN, orderBy: {field: UPDATED_AT, direction: DESC}) {
       totalCount
       pageInfo { hasNextPage endCursor }
       nodes { ${ROW} }
@@ -10159,21 +10163,21 @@ var ALL_OPEN_QUERY = `query($owner: String!, $name: String!, $after: String) {
   }
 }`;
 var SEARCH_QUERY = `query($q: String!, $after: String) {
-  search(query: $q, type: ISSUE, first: ${PAGE2}, after: $after) {
+  search(query: $q, type: ISSUE, first: ${PAGE}, after: $after) {
     issueCount
     pageInfo { hasNextPage endCursor }
     nodes { ... on PullRequest { ${ROW} } }
   }
 }`;
-function pullSearch(kind, remote2, login) {
-  const who = kind === "review" ? `review-requested:${login}` : `author:${login}`;
+function pullSearch(kind, remote2, login2) {
+  const who = kind === "review" ? `review-requested:${login2}` : `author:${login2}`;
   return `repo:${remote2.owner}/${remote2.repo} is:pr is:open ${who} sort:updated-desc`;
 }
-function pullRequest(kind, remote2, login, after) {
+function pullGroupQuery(kind, remote2, login2, after) {
   if (kind === "all") return { query: ALL_OPEN_QUERY, variables: { owner: remote2.owner, name: remote2.repo, after } };
-  return { query: SEARCH_QUERY, variables: { q: pullSearch(kind, remote2, login), after } };
+  return { query: SEARCH_QUERY, variables: { q: pullSearch(kind, remote2, login2), after } };
 }
-function localPullRequest(remote2, branches) {
+function localPullsQuery(remote2, branches) {
   const declarations = branches.map((_, i) => `$branch${i}: String!`).join(", ");
   const fields = branches.map(
     (_, i) => `    branch${i}: pullRequests(first: 100, headRefName: $branch${i}, states: [OPEN, CLOSED, MERGED], orderBy: {field: UPDATED_AT, direction: DESC}) {
@@ -10194,6 +10198,26 @@ ${fields}
     }
   };
 }
+function pullRow(n) {
+  return {
+    number: n.number,
+    title: n.title,
+    author: n.author?.login ?? null,
+    state: n.state === "MERGED" ? "merged" : n.state === "CLOSED" ? "closed" : n.isDraft ? "draft" : "open",
+    updatedAt: n.updatedAt,
+    url: n.url
+  };
+}
+function parsePullGroup(data) {
+  const d = data;
+  const [list2, total] = "search" in d ? [d.search, d.search.issueCount] : [d.repository.pullRequests, d.repository.pullRequests.totalCount];
+  return {
+    total,
+    more: list2.pageInfo.hasNextPage,
+    cursor: list2.pageInfo.endCursor,
+    rows: list2.nodes.map(pullRow)
+  };
+}
 function parseLocalPulls(data, head) {
   const { repository } = data;
   const name = `${head.owner}/${head.repo}`.toLowerCase();
@@ -10204,38 +10228,11 @@ function parseLocalPulls(data, head) {
     else if (list2.pageInfo.hasNextPage)
       throw new Error("Too many pull requests for a local branch to identify its head repository.");
   }
-  const nodes = [...rows.values()].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
-  return parsePullGroup({
-    repository: {
-      pullRequests: { totalCount: nodes.length, pageInfo: { hasNextPage: false, endCursor: null }, nodes }
-    }
-  });
+  return [...rows.values()].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)).map(pullRow);
 }
-function stateOf(n) {
-  if (n.state === "MERGED") return "merged";
-  if (n.state === "CLOSED") return "closed";
-  return n.isDraft ? "draft" : "open";
-}
-function parsePullGroup(data) {
-  const d = data;
-  const [list2, total] = "search" in d ? [d.search, d.search.issueCount] : [d.repository.pullRequests, d.repository.pullRequests.totalCount];
-  return {
-    total,
-    more: list2.pageInfo.hasNextPage,
-    cursor: list2.pageInfo.endCursor,
-    pulls: list2.nodes.map((n) => ({
-      number: n.number,
-      title: n.title,
-      author: n.author?.login ?? null,
-      state: stateOf(n),
-      updatedAt: n.updatedAt,
-      url: n.url
-    }))
-  };
-}
-function appendPullPage(group2, page) {
-  const shown = new Set(group2.pulls.map((p) => p.number));
-  return { ...page, pulls: [...group2.pulls, ...page.pulls.filter((p) => !shown.has(p.number))] };
+function localPage(all2, count) {
+  const more = count < all2.length;
+  return { total: all2.length, more, cursor: more ? String(count) : null, rows: all2.slice(0, count) };
 }
 
 // src/github/io/git.ts
@@ -10264,19 +10261,18 @@ function pickRemote(remoteV, hosts = ["github.com"]) {
 }
 
 // src/github/io/git.ts
-async function githubRemote(where) {
-  if (!where.cwd) return null;
-  const r = await exec3("git", ["remote", "-v"], { cwd: where.cwd, on: where.on ?? null });
+async function githubRemote({ cwd, on }) {
+  if (!cwd) return null;
+  const r = await exec3("git", ["remote", "-v"], { cwd, on });
   return r.code === 0 ? pickRemote(r.stdout) : null;
 }
-async function localBranches(remote2, where) {
-  if (!where.cwd) throw new Error("No focused folder for local pull request branches.");
-  const options = { cwd: where.cwd, on: where.on ?? null };
-  const result = await exec3("git", ["for-each-ref", "--format=%(refname:short)", "refs/heads"], options);
+async function localBranches(remote2, { cwd, on }) {
+  if (!cwd) throw new Error("No focused folder for local pull request branches.");
+  const result = await exec3("git", ["for-each-ref", "--format=%(refname:short)", "refs/heads"], { cwd, on });
   if (result.code !== 0) throw new Error(result.stderr.trim() || "Could not read local branches.");
   const branches = result.stdout.split("\n").map((b) => b.trim()).filter(Boolean);
   if (branches.length === 0) return { branches, head: remote2 };
-  const remotes2 = await exec3("git", ["remote", "-v"], options);
+  const remotes2 = await exec3("git", ["remote", "-v"], { cwd, on });
   if (remotes2.code !== 0) throw new Error(remotes2.stderr.trim() || "Could not read git remotes.");
   const origin = remotes2.stdout.split("\n").filter((line) => /^origin\s/.test(line)).join("\n");
   const other = remotes2.stdout.split("\n").filter((line) => {
@@ -10294,7 +10290,7 @@ function reviewers(pull, reviews) {
     (a, b) => (b.submitted_at ?? "").localeCompare(a.submitted_at ?? "") || b.id - a.id
   )) {
     if (review.state === "PENDING" || !review.submitted_at) continue;
-    const name = review.user?.login ?? "deleted user";
+    const name = login(review.user);
     const key = name.toLowerCase();
     if (key === pull.user?.login.toLowerCase() || byName.has(key)) continue;
     byName.set(key, { name, state: review.state.toLowerCase(), team: false });
@@ -10313,7 +10309,7 @@ function parsePullDetail(pull, issue, comments, reviews) {
     number: p.number,
     title: p.title,
     state: p.merged ? "merged" : p.state === "closed" ? "closed" : p.draft ? "draft" : "open",
-    author: p.user?.login ?? "deleted user",
+    author: login(p.user),
     createdAt: p.created_at,
     url: p.html_url,
     head: crossOwner ? p.head.label || p.head.ref : p.head.ref,
@@ -10325,14 +10321,13 @@ function parsePullDetail(pull, issue, comments, reviews) {
     markdown: readerMarkdown(p.body ?? "", p.html_url),
     reactions: parseReactions(reactions),
     reviewers: reviewers(p, reviews),
-    comments: comments.map((c) => parseComment(c, p.html_url)).sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id - b.id)
+    comments: parseComments(comments, p.html_url)
   };
 }
 
 // src/github/io/pulls.ts
-async function pullPage(kind, remote2, login, on, after) {
-  const { query, variables } = pullRequest(kind, remote2, login, after);
-  return parsePullGroup(await graphql(query, variables, { on }));
+async function pullPage(kind, remote2, login2, on, after) {
+  return parsePullGroup(await graphql(pullGroupQuery(kind, remote2, login2, after), on));
 }
 async function readPull(repo, number, on) {
   const [pull, issue, comments, reviews] = await Promise.all([
@@ -10344,14 +10339,9 @@ async function readPull(repo, number, on) {
   ]);
   return parsePullDetail(pull, issue, comments, reviews);
 }
-function readPullProjects(repo, number, on) {
-  return readProjects({ kind: "pr", repo, number }, on);
-}
-async function localPulls(remote2, where, snapshot) {
-  const { branches, head } = snapshot ?? await localBranches(remote2, where);
-  if (branches.length === 0) return { total: 0, more: false, cursor: null, pulls: [] };
-  const { query, variables } = localPullRequest(remote2, branches);
-  return parseLocalPulls(await graphql(query, variables, { on: where.on ?? null }), head);
+async function localPulls(remote2, { branches, head }, on) {
+  if (branches.length === 0) return [];
+  return parseLocalPulls(await graphql(localPullsQuery(remote2, branches), on), head);
 }
 
 // src/github/io/known.ts
@@ -10377,10 +10367,12 @@ function facts(limit, fresh, keep) {
     put(key, value) {
       cache.set(key, value, Date.now());
     },
-    /** Shows `change(value)` for every kept key until asked again: kept stale, and an answer still out is dropped. */
-    patch(match, change) {
-      for (const key of cache.keys().filter(match)) {
-        cache.set(key, change(key, cache.get(key)), -Infinity);
+    /** Shows what `change` returns for a kept key until asked again (undefined: untouched); an answer still out is dropped. */
+    patch(change) {
+      for (const key of cache.keys()) {
+        const changed = change(key, cache.get(key));
+        if (changed === void 0) continue;
+        cache.set(key, changed, -Infinity);
         asking.delete(key);
       }
     },
@@ -10392,106 +10384,105 @@ function facts(limit, fresh, keep) {
 }
 var accounts = facts(16, 60 * 6e4, (a) => a.status.ok);
 var remotes = facts(64, 5 * 6e4, (r) => r !== null);
-var groups = facts(64, 6e4, () => true);
-var pullGroups = facts(64, 6e4, () => true);
-var localGroups = facts(64, 0, () => true);
-var localPages = /* @__PURE__ */ new WeakMap();
-var machineKey = (on) => on ?? "";
-var folderKey = (where) => `${where.on ?? ""}
-${where.cwd ?? ""}`;
-var groupKey = (kind, r, login, on) => `${kind}
-${on ?? ""}
-${r.host}/${r.owner}/${r.repo}
-${login}`;
-var account2 = (on, force = false) => accounts.look(machineKey(on), force && !accounts.peek(machineKey(on)), () => account(on));
-var peekAccount = (on) => accounts.peek(machineKey(on));
-var remote = (where, force = false) => remotes.look(folderKey(where), force, () => githubRemote(where));
-var peekRemote = (where) => remotes.peek(folderKey(where));
-var group = (kind, r, login, on, force = false) => groups.look(groupKey(kind, r, login, on), force, () => issuePage(kind, r, login, on, null));
-var peekGroup = (kind, r, login, on) => groups.peek(groupKey(kind, r, login, on));
-async function more(kind, r, login, on, loaded) {
-  const key = groupKey(kind, r, login, on);
-  const both = appendPage(loaded, await issuePage(kind, r, login, on, loaded.cursor));
-  if (groups.peek(key) === loaded) groups.put(key, both);
-  return both;
+var folderKey = ({ on, cwd }) => JSON.stringify([on, cwd]);
+var account2 = (on, force = false) => accounts.look(JSON.stringify(on), force && !accounts.peek(JSON.stringify(on)), () => account(on));
+var peekAccount = (on) => accounts.peek(JSON.stringify(on));
+var remote = (folder2, force = false) => remotes.look(folderKey(folder2), force, () => githubRemote(folder2));
+var peekRemote = (folder2) => remotes.peek(folderKey(folder2));
+var groupKey = (kind, r) => JSON.stringify([kind, r.on, r.remote.host, r.remote.owner, r.remote.repo, r.login]);
+var groupOf = (key) => {
+  const [kind, , host, owner, repo, login2] = JSON.parse(key);
+  return { kind: kind ?? "", repo: `${host}/${owner}/${repo}`.toLowerCase(), login: login2 ?? "" };
+};
+function pagedGroups(ask) {
+  const kept = facts(64, 6e4, () => true);
+  return {
+    kept,
+    look: (kind, r, force = false) => kept.look(groupKey(kind, r), force, () => ask(kind, r, null)),
+    peek: (kind, r) => kept.peek(groupKey(kind, r)),
+    async more(kind, r, loaded) {
+      const key = groupKey(kind, r);
+      const both = appendPage(loaded, await ask(kind, r, loaded.cursor));
+      if (kept.peek(key) === loaded) kept.put(key, both);
+      return both;
+    }
+  };
 }
+var issueGroups = pagedGroups(
+  (kind, r, after) => issuePage(kind, r.remote, r.login, r.on, after)
+);
+var pullGroups = pagedGroups(
+  (kind, r, after) => pullPage(kind, r.remote, r.login, r.on, after)
+);
+var issueGroup = issueGroups.look;
+var peekIssueGroup = issueGroups.peek;
+var moreIssues = issueGroups.more;
 function issueChanged(change) {
   const repo = `github.com/${change.repo}`.toLowerCase();
-  groups.patch(
-    (key) => key.split("\n")[2]?.toLowerCase() === repo,
-    (key, group2) => {
-      const [kind, , , login] = key.split("\n");
-      return applyChange(kind, group2, change, login ?? "");
-    }
-  );
+  issueGroups.kept.patch((key, group) => {
+    const g = groupOf(key);
+    return g.repo === repo ? applyChange(g.kind, group, change, g.login) : void 0;
+  });
 }
-var pullKey = (kind, r, login, on) => `${kind}
-${on ?? ""}
-${r.host}/${r.owner}/${r.repo}
-${login}`;
-var pullGroup = (kind, r, login, on, force = false) => pullGroups.look(pullKey(kind, r, login, on), force, () => pullPage(kind, r, login, on, null));
-var peekPullGroup = (kind, r, login, on) => pullGroups.peek(pullKey(kind, r, login, on));
-async function morePulls(kind, r, login, on, loaded) {
-  const key = pullKey(kind, r, login, on);
-  const both = appendPullPage(loaded, await pullPage(kind, r, login, on, loaded.cursor));
-  if (pullGroups.peek(key) === loaded) pullGroups.put(key, both);
-  return both;
-}
-var localKey = (r, login, where) => `${pullKey("all", r, login, where.on ?? null)}
-${where.cwd ?? ""}`;
-function localPage(full, count) {
-  const more2 = count < full.total;
-  const page = { total: full.total, pulls: full.pulls.slice(0, count), more: more2, cursor: more2 ? String(count) : null };
-  localPages.set(full, page);
+var localMatches = facts(64, 0, () => true);
+var localShown = /* @__PURE__ */ new WeakMap();
+var localKey = (r) => JSON.stringify([groupKey("local", r), r.cwd]);
+function showLocal(rows, count) {
+  const page = localPage(rows, count);
+  localShown.set(rows, page);
   return page;
 }
-async function localGroup(r, login, where, force = false) {
-  const key = localKey(r, login, where);
-  const { full } = await localGroups.look(key, force, async () => {
-    const snapshot = await localBranches(r, where);
+async function localGroup(r, force) {
+  const key = localKey(r);
+  const { rows } = await localMatches.look(key, force, async () => {
+    const snapshot = await localBranches(r.remote, r);
     const signature = JSON.stringify(snapshot);
-    const kept = localGroups.peek(key);
+    const kept = localMatches.peek(key);
     if (!force && kept?.signature === signature) return kept;
-    return { signature, full: await localPulls(r, where, snapshot) };
+    return { signature, rows: await localPulls(r.remote, snapshot, r.on) };
   });
-  return localPages.get(full) ?? localPage(full, 30);
+  return localShown.get(rows) ?? showLocal(rows, PAGE);
 }
-function peekLocalGroup(r, login, where) {
-  const full = localGroups.peek(localKey(r, login, where))?.full;
-  return full ? localPages.get(full) : void 0;
+var pullGroup = (kind, r, force = false) => kind === "local" ? localGroup(r, force) : pullGroups.look(kind, r, force);
+function peekPullGroup(kind, r) {
+  if (kind !== "local") return pullGroups.peek(kind, r);
+  const rows = localMatches.peek(localKey(r))?.rows;
+  return rows && localShown.get(rows);
 }
-function moreLocalPulls(r, login, where, loaded) {
-  const full = localGroups.peek(localKey(r, login, where))?.full;
-  return Promise.resolve(full && localPages.get(full) === loaded ? localPage(full, loaded.pulls.length + 30) : loaded);
-}
-
-// src/github/io/visibility.ts
-import { layout } from "herdr";
-
-// src/github/core/visibility.ts
-function layoutShows(tree, id) {
-  if (!tree || typeof tree !== "object") return false;
-  const node2 = tree;
-  if (node2.hidden) return false;
-  if (node2.id === id) return true;
-  const children = node2.children ?? [];
-  return children.some(
-    (child, index2) => (node2.type !== "stack" || (node2.active ? child.id === node2.active : index2 === 0)) && layoutShows(child, id)
-  );
+async function morePulls(kind, r, loaded) {
+  if (kind !== "local") return pullGroups.more(kind, r, loaded);
+  const rows = localMatches.peek(localKey(r))?.rows;
+  return rows && localShown.get(rows) === loaded ? showLocal(rows, loaded.rows.length + PAGE) : loaded;
 }
 
-// src/github/io/visibility.ts
-var sidebarVisible = () => layoutShows(layout(), "github");
+// src/github/views/issues.ts
+import { div as div4 } from "gpui-kit";
+
+// src/github/core/time.ts
+var MINUTE = 6e4;
+var HOUR = 60 * MINUTE;
+var DAY = 24 * HOUR;
+function relativeTime(iso, now) {
+  const ago2 = now - Date.parse(iso);
+  if (ago2 < MINUTE) return "now";
+  if (ago2 < HOUR) return `${Math.floor(ago2 / MINUTE)}m`;
+  if (ago2 < DAY) return `${Math.floor(ago2 / HOUR)}h`;
+  if (ago2 < 30 * DAY) return `${Math.floor(ago2 / DAY)}d`;
+  if (ago2 < 365 * DAY) return `${Math.floor(ago2 / (30 * DAY))}mo`;
+  return `${Math.floor(ago2 / (365 * DAY))}y`;
+}
 
 // src/github/views/groups.ts
 import { h_flex as h_flex2, v_flex } from "gpui-base";
 import { div as div3 } from "gpui-kit";
 var GroupList = class {
-  groups;
   /** The row under the pointer ("<kind>#<number>"): it shows its actions. */
   hovered = null;
+  groups;
+  host;
   source;
-  constructor(source) {
+  constructor(host, source) {
+    this.host = host;
     this.source = source;
     this.groups = Object.fromEntries(
       source.groups.map(({ kind }) => [
@@ -10506,26 +10497,29 @@ var GroupList = class {
       ])
     );
   }
+  all() {
+    return this.source.groups.map(({ kind }) => this.groups[kind]);
+  }
   get busy() {
-    return this.source.groups.some(({ kind }) => this.groups[kind].loading || this.groups[kind].loadingMore);
+    return this.all().some((g) => g.loading || g.loadingMore);
   }
   /** A failure every group shares (the repository isn't there or can't be seen): the tab says it once. */
   get notFound() {
-    return this.source.groups.map(({ kind }) => this.groups[kind].failure).find((f) => f?.notFound);
+    return this.all().map((g) => g.failure).find((f) => f?.notFound);
   }
   /** A loaded page of any group (what the tab's notice may depend on). */
   get anyPage() {
-    return this.source.groups.map(({ kind }) => this.groups[kind].page).find((p) => p !== void 0);
+    return this.all().map((g) => g.page).find((p) => p !== void 0);
   }
   /** Shows what is kept for this place at once (another place: nothing yet). */
   show() {
-    const r = this.source.ready();
-    for (const { kind } of this.source.groups) {
-      const g = this.groups[kind];
-      g.page = r ? this.source.peek(kind, r) : void 0;
-      g.failure = void 0;
-      g.loading = g.loadingMore = false;
-    }
+    for (const { kind } of this.source.groups) this.reset(kind);
+  }
+  reset(kind) {
+    const g = this.groups[kind], r = this.host.ready();
+    g.page = r ? this.source.peek(kind, r) : void 0;
+    g.failure = void 0;
+    g.loading = g.loadingMore = false;
   }
   /** Asks for every expanded group's first page (fresh kept pages are reused unless `force`). */
   load(cx, force = false, kinds) {
@@ -10534,53 +10528,50 @@ var GroupList = class {
     }
   }
   loadGroup(cx, kind, force) {
-    const g = this.groups[kind], r = this.source.ready(), run3 = this.source.run();
-    if (!r || !g.expanded || !this.source.asking()) return;
+    const g = this.groups[kind], r = this.host.ready(), run3 = this.host.run();
+    if (!r || !g.expanded || !this.host.asking()) return;
     g.loading = true;
     g.failure = void 0;
     cx.spawn(async (cx2) => {
       try {
         const page = await this.source.ask(kind, r, force);
-        if (run3 === this.source.run()) g.page = this.source.peek(kind, r) ?? page;
+        if (run3 === this.host.run()) g.page = this.source.peek(kind, r) ?? page;
       } catch (e) {
-        if (run3 === this.source.run()) {
+        if (run3 === this.host.run()) {
           g.failure = failureOf(e);
           this.source.failed?.();
         }
       } finally {
-        if (run3 === this.source.run()) {
+        if (run3 === this.host.run()) {
           g.loading = false;
           cx2.notify();
         }
       }
     });
   }
-  /** Folds or unfolds a group; unfolding shows what is kept and asks for what is stale. */
+  /** Unfolding shows what is kept and asks for what is stale. */
   toggle(cx, kind) {
-    const g = this.groups[kind], r = this.source.ready();
+    const g = this.groups[kind];
     g.expanded = !g.expanded;
     if (g.expanded) {
-      g.page = r ? this.source.peek(kind, r) : void 0;
-      g.failure = void 0;
-      g.loading = g.loadingMore = false;
+      this.reset(kind);
       this.loadGroup(cx, kind, false);
     }
     cx.notify();
   }
-  /** Load more: the next 30 rows of the group. */
   more(cx, kind) {
-    const g = this.groups[kind], r = this.source.ready(), run3 = this.source.run(), loaded = g.page;
+    const g = this.groups[kind], r = this.host.ready(), run3 = this.host.run(), loaded = g.page;
     if (!r || !loaded?.more || g.loadingMore) return;
     g.loadingMore = true;
     cx.notify();
     cx.spawn(async (cx2) => {
       try {
         const page = await this.source.more(kind, r, loaded);
-        if (run3 === this.source.run()) g.page = page;
+        if (run3 === this.host.run()) g.page = page;
       } catch (e) {
-        if (run3 === this.source.run()) g.failure = failureOf(e);
+        if (run3 === this.host.run()) g.failure = failureOf(e);
       } finally {
-        if (run3 === this.source.run()) {
+        if (run3 === this.host.run()) {
           g.loadingMore = false;
           cx2.notify();
         }
@@ -10593,10 +10584,10 @@ var GroupList = class {
   /** A foldable group: its title and count, then (unfolded) why it failed, its rows and Load more. */
   group({ kind, title, empty }) {
     const t = colors();
-    const id = this.source.id;
+    const id = this.source.kind;
     const g = this.groups[kind];
     const page = g.page;
-    const rows = page ? this.source.rows(page) : [];
+    const rows = page?.rows ?? [];
     const heading = h_flex2().id(`${id}-group-${kind}`).h(26).px(8).gap(6).items_center().rounded(6).text_size(12).text_color(t.dim).cursor_pointer().hover((s) => s.bg(t.hover)).on_mouse_down("left", stop).on_click((_e, cx) => this.toggle(cx, kind)).accessibility_label(`${g.expanded ? "Fold" : "Unfold"} ${title}`).child(
       div3().w(10).flex_none().child(g.expanded ? "\u25BE" : "\u25B8")
     ).child(div3().font_medium().child(title)).child(div3().child(page ? String(page.total) : "")).when(g.expanded && g.loading, (el) => el.child(spinner()));
@@ -10611,62 +10602,75 @@ var GroupList = class {
         })
       )
     );
-    const more2 = h_flex2().id(`${id}-more-${kind}`).h(26).px(8).pl(22).gap(6).items_center().rounded(6).text_size(12).text_color(t.dim).cursor_pointer().hover((s) => s.bg(t.hover).text_color(t.foreground)).on_mouse_down("left", stop).on_click((_e, cx) => this.more(cx, kind)).child(g.loadingMore ? "Loading\u2026" : `Load more (${(page?.total ?? 0) - rows.length} left)`).when(g.loadingMore, (el) => el.child(spinner()));
+    const more = h_flex2().id(`${id}-more-${kind}`).h(26).px(8).pl(22).gap(6).items_center().rounded(6).text_size(12).text_color(t.dim).cursor_pointer().hover((s) => s.bg(t.hover).text_color(t.foreground)).on_mouse_down("left", stop).on_click((_e, cx) => this.more(cx, kind)).child(g.loadingMore ? "Loading\u2026" : `Load more (${(page?.total ?? 0) - rows.length} left)`).when(g.loadingMore, (el) => el.child(spinner()));
     return v_flex().gap(1).child(heading).when(
       g.expanded,
       (el) => el.when(g.failure !== void 0 && !g.failure.notFound, (el2) => el2.child(failure)).when(
         page !== void 0 && rows.length === 0,
         (el2) => el2.child(div3().px(8).pl(22).py(4).text_size(12).text_color(t.dim).child(empty))
-      ).children(rows.map((row) => this.row(kind, row))).when(page?.more, (el2) => el2.child(more2))
+      ).children(rows.map((row) => this.row(kind, row))).when(Boolean(page?.more), (el2) => el2.child(more))
     );
   }
-  /** A row's frame: click opens it; the pointer over it shows its actions. */
+  /** A row's frame: click opens it; the pointer over it swaps its end for Copy and Open in browser. */
   row(kind, row) {
     const t = colors();
-    const key = `${kind}#${this.source.key(row)}`;
-    return h_flex2().id(`${this.source.id}-${kind}-${this.source.key(row)}`).h(28).px(8).pl(22).gap(8).items_center().rounded(6).cursor_pointer().hover((s) => s.bg(t.hover)).on_mouse_down("left", stop).on_click((_e, cx) => this.source.open(cx, row)).on_hover((h, cx) => {
+    const id = this.source.kind;
+    const key = `${kind}#${row.number}`;
+    const actions = [
+      button(
+        `${id}-copy-${kind}-${row.number}`,
+        "#",
+        `Copy #${row.number}`,
+        (_e, cx) => cx.write_to_clipboard(`#${row.number}`)
+      ),
+      button(`${id}-open-${kind}-${row.number}`, "\u2197", "Open in browser", (_e, cx) => cx.open_url(row.url))
+    ];
+    return h_flex2().id(`${id}-${kind}-${row.number}`).h(28).px(8).pl(22).gap(8).items_center().rounded(6).cursor_pointer().hover((s) => s.bg(t.hover)).on_mouse_down("left", stop).on_click((_e, cx) => {
+      const r = this.host.ready();
+      if (r) this.host.open(cx, { kind: id, repo: `${r.remote.owner}/${r.remote.repo}`, number: row.number });
+    }).on_hover((h, cx) => {
       if (h) this.hovered = key;
       else if (this.hovered === key) this.hovered = null;
       cx.notify();
-    }).children(this.source.cells(kind, row, this.hovered === key));
+    }).children([...this.source.cells(row), ...this.hovered === key ? actions : this.source.idle(row)]);
   }
 };
 
-// src/github/views/pulls.ts
-import { div as div4, svg as svg3 } from "gpui-kit";
-var EMPTY = "0 pull requests in this category";
-var ICONS = {
-  open: { svg: "git-pull-request", color: (t) => t.done, label: "Open" },
-  draft: { svg: "git-pull-request-draft", color: (t) => t.dim, label: "Draft" },
-  merged: { svg: "git-merge", color: (t) => t.ansi5, label: "Merged" },
-  closed: { svg: "git-pull-request-closed", color: (t) => t.blocked, label: "Closed" }
-};
-function cells(kind, pull, hovered) {
-  const t = colors();
-  const icon2 = ICONS[pull.state];
-  const title = div4().flex_1().min_w(0).truncate().child(`#${pull.number} ${pull.title}`).when(pull.state === "draft", (el) => el.italic());
-  const iconEl = svg3(`mods/github/assets/${icon2.svg}.svg`).size(14).flex_none().text_color(icon2.color(t)).accessibility_label(icon2.label);
-  if (!hovered)
-    return [
-      iconEl,
-      title,
-      div4().flex_none().max_w(110).truncate().text_size(12).text_color(t.dim).child(pull.author ? `by @${pull.author}` : "by ghost")
-    ];
-  return [
-    iconEl,
-    title,
-    button(
-      `pr-copy-${kind}-${pull.number}`,
-      "#",
-      `Copy #${pull.number}`,
-      (_e, cx) => cx.write_to_clipboard(`#${pull.number}`)
-    ),
-    button(`pr-open-${kind}-${pull.number}`, "\u2197", "Open in browser", (_e, cx) => cx.open_url(pull.url))
-  ];
+// src/github/views/issues.ts
+function issueList(host, failed) {
+  return new GroupList(host, {
+    kind: "issue",
+    groups: [
+      // One word like the others; the empty text says whose.
+      { kind: "assigned", title: "Assigned", empty: "No open issues assigned to you." },
+      { kind: "open", title: "Open", empty: "No open issues." },
+      { kind: "closed", title: "Closed", empty: "No closed issues." }
+    ],
+    expanded: ["assigned"],
+    peek: peekIssueGroup,
+    ask: issueGroup,
+    more: moreIssues,
+    failed,
+    cells: (issue) => [
+      div4().flex_none().text_color(colors().dim).child(`#${issue.number}`),
+      div4().flex_1().min_w(0).truncate().child(issue.title)
+    ],
+    idle: (issue) => {
+      const t = colors();
+      return [
+        div4().flex_none().max_w(90).truncate().text_size(12).text_color(t.dim).child(issue.assignees.join(", ")),
+        div4().flex_none().w(28).text_right().text_size(12).text_color(t.dim).child(relativeTime(issue.updatedAt, Date.now()))
+      ];
+    }
+  });
 }
+
+// src/github/views/pulls.ts
+import { div as div5, svg as svg3 } from "gpui-kit";
+var EMPTY = "0 pull requests in this category";
 function pullList(host) {
-  return new GroupList({
-    id: "pr",
+  return new GroupList(host, {
+    kind: "pr",
     groups: [
       { kind: "local", title: "Local Pull Request Branches", empty: EMPTY },
       { kind: "review", title: "Waiting For My Review", empty: EMPTY },
@@ -10675,44 +10679,29 @@ function pullList(host) {
     ],
     // As the extension starts: only All Open; the searches wait until their group is unfolded.
     expanded: ["all"],
-    ready: () => host.ready(),
-    run: () => host.run(),
-    asking: () => host.asking(),
-    peek: (kind, r) => kind === "local" ? peekLocalGroup(r.remote, r.login, r) : peekPullGroup(kind, r.remote, r.login, r.on),
-    ask: (kind, r, force) => kind === "local" ? localGroup(r.remote, r.login, r, force) : pullGroup(kind, r.remote, r.login, r.on, force),
-    more: (kind, r, loaded) => kind === "local" ? moreLocalPulls(r.remote, r.login, r, loaded) : morePulls(kind, r.remote, r.login, r.on, loaded),
-    rows: (page) => page.pulls,
-    key: (pull) => pull.number,
-    open: (cx, pull) => {
-      const r = host.ready();
-      if (!r) return;
-      host.openFailed(null);
-      cx.spawn(async (cx2) => {
-        try {
-          await host.details.open({ kind: "pr", repo: `${r.remote.owner}/${r.remote.repo}`, number: pull.number });
-        } catch (e) {
-          host.openFailed(e instanceof Error ? e.message : String(e));
-        }
-        cx2.notify();
-      });
+    peek: peekPullGroup,
+    ask: pullGroup,
+    more: morePulls,
+    cells: (pull) => {
+      const state = PULL_STATES[pull.state];
+      return [
+        svg3(state.icon).size(14).flex_none().text_color(state.color(colors())).accessibility_label(state.label),
+        div5().flex_1().min_w(0).truncate().child(`#${pull.number} ${pull.title}`).when(pull.state === "draft", (el) => el.italic())
+      ];
     },
-    cells
+    idle: (pull) => [
+      div5().flex_none().max_w(110).truncate().text_size(12).text_color(colors().dim).child(pull.author ? `by @${pull.author}` : "by ghost")
+    ]
   });
 }
 
 // src/github/views/panel.ts
-var GROUPS = [
-  // One word like the others; the empty text says whose.
-  { kind: "assigned", title: "Assigned", empty: "No open issues assigned to you." },
-  { kind: "open", title: "Open", empty: "No open issues." },
-  { kind: "closed", title: "Closed", empty: "No closed issues." }
-];
 var TABS = [
   { id: "issues", label: "Issues" },
   { id: "prs", label: "Pull Requests" }
 ];
 var Panel = class {
-  /** The place shown (locationKey()), and which refresh is the latest: older ones drop their results. */
+  /** The place shown (the focused folder and its machine), and which refresh is the latest: older ones drop their results. */
   context = null;
   latest = 0;
   // undefined: not known yet for this place.
@@ -10724,46 +10713,25 @@ var Panel = class {
   tab = "issues";
   details = new DetailTabs();
   openFailure = null;
-  /** The Issues tab's groups. Folded groups ask for nothing; which are expanded stays as the place changes. */
-  issues = new GroupList({
-    id: "issue",
-    groups: GROUPS,
-    expanded: ["assigned"],
-    ready: () => this.ready(),
-    run: () => this.latest,
-    asking: () => this.isVisible(),
-    peek: (kind, r) => peekGroup(kind, r.remote, r.login, r.on),
-    ask: (kind, r, force) => group(kind, r.remote, r.login, r.on, force),
-    more: (kind, r, loaded) => more(kind, r.remote, r.login, r.on, loaded),
-    rows: (page) => page.issues,
-    key: (issue) => issue.number,
-    open: (cx, issue) => this.openIssue(cx, issue),
-    cells: (kind, issue, hovered) => issueCells(kind, issue, hovered),
-    // Retry a failed refresh next tick even if the list itself has not changed.
-    failed: () => {
-      this.etag = null;
-    }
-  });
-  /** The Pull Requests tab's groups; they load only while that tab is shown. */
-  pulls = pullList({
-    ready: () => this.ready(),
-    run: () => this.latest,
-    asking: () => this.isVisible(),
-    details: this.details,
-    openFailed: (message) => {
-      this.openFailure = message;
-    }
-  });
   notices = new Notices();
-  visible = false;
-  etag = null;
-  checking = null;
-  /** When this place's lists were last confirmed fresh (a successful change check), for the footer. */
+  /** The repository's issue list, checked for changes while the sidebar is shown. */
+  poll = new ConditionalPoll();
+  /** When this place's lists were last confirmed fresh, for the footer. */
   checkedAt = null;
+  host = {
+    ready: () => this.ready(),
+    run: () => this.latest,
+    asking: () => this.isVisible(),
+    open: (cx, ref) => this.open(cx, ref)
+  };
+  /** Folded groups ask for nothing; which are expanded stays as the place changes. */
+  issues = issueList(this.host, () => this.poll.invalidate());
+  /** They load only while their tab is shown. */
+  pulls = pullList(this.host);
   init(cx) {
     cx.timer.every(POLL_SECONDS * 1e3, (cx2) => {
       if (!this.isVisible()) {
-        this.visible = false;
+        this.poll.sync(this.context, false);
         return;
       }
       if (!this.loading) {
@@ -10775,33 +10743,28 @@ var Panel = class {
   isVisible() {
     return Boolean(props2()?.overlay) || sidebarVisible();
   }
-  /** Only a changed list re-asks expanded groups. A shown/explicit refresh asks even on 304. */
-  check(cx, refresh = false, asked = false) {
+  /** Only a changed list re-asks expanded groups; a refresh asks them even on 304. */
+  check(cx, refresh) {
     const r = this.ready(), run3 = this.latest;
-    if (!r || !this.isVisible() || this.checking) return;
-    const checking = {};
-    this.checking = checking;
+    const request = r && this.poll.begin(refresh !== void 0);
+    if (!r || !request) return;
     cx.spawn(async (cx2) => {
-      const current = () => run3 === this.latest && this.checking === checking && this.isVisible();
-      let changed = false;
+      const current = () => run3 === this.latest && this.poll.current(request);
+      let change;
       try {
-        const result = await listChanges(`${r.remote.owner}/${r.remote.repo}`, this.etag, r.on);
+        change = await listChanges(`${r.remote.owner}/${r.remote.repo}`, request.etag, r.on);
         if (!current()) return;
-        if (result.changed) {
-          this.etag = result.etag;
-          changed = true;
-        }
         this.checkedAt = Date.now();
         this.failure = void 0;
       } catch (e) {
         if (current()) this.failure = failureOf(e);
       } finally {
         if (current()) {
-          if (changed || refresh) this.issues.load(cx2, true);
-          if (refresh && this.tab === "prs") this.pulls.load(cx2, asked);
+          if (change?.changed || refresh) this.issues.load(cx2, true);
+          if (refresh && this.tab === "prs") this.pulls.load(cx2, refresh === "asked");
           cx2.notify();
         }
-        if (this.checking === checking) this.checking = null;
+        this.poll.finish(request, change);
       }
     });
   }
@@ -10810,16 +10773,15 @@ var Panel = class {
     const status2 = this.account?.status;
     return this.remote && status2?.ok && this.account ? { remote: this.remote, login: status2.user, on: this.account.on, cwd: location().cwd } : null;
   }
-  /** Shows what is known about the focused place at once, then asks for what is stale (all of it when `force`, ↻). */
-  refresh(cx, force = false, asked = false) {
-    const where = location(), run3 = ++this.latest, current = () => run3 === this.latest, context = JSON.stringify(where);
+  /** Shows what is known about the focused place at once, then asks for what is stale (all of it unless it only moved). */
+  refresh(cx, why) {
+    const where = location(), run3 = ++this.latest, current = () => run3 === this.latest, context = JSON.stringify(where), force = why !== "moved";
     if (context !== this.context) {
       this.issues.hovered = this.pulls.hovered = null;
-      this.etag = null;
       this.checkedAt = null;
     }
-    this.checking = null;
     this.context = context;
+    this.poll.sync(context, true);
     this.account = peekAccount(where.on);
     this.remote = peekRemote(where);
     this.failure = void 0;
@@ -10836,7 +10798,7 @@ var Panel = class {
         ]);
         if (!current()) return;
         this.remote = remote2;
-        this.check(cx2, true, asked);
+        this.check(cx2, why);
       } catch (e) {
         if (current()) this.failure = failureOf(e);
       } finally {
@@ -10852,34 +10814,47 @@ var Panel = class {
    * then the shown expanded groups ask GitHub again (the change made them stale).
    */
   receive(cx) {
-    const changes2 = this.notices.take().filter(isIssueNotice).flatMap((n) => n.state ? [n.state] : []);
+    const changes2 = this.notices.take().flatMap((n) => n.state ? [n.state] : []);
     if (changes2.length === 0) return;
     changes2.forEach(issueChanged);
     this.issues.show();
     this.issues.load(cx);
   }
+  /** A click on a row opens (or selects) its reader tab. */
+  open(cx, ref) {
+    this.openFailure = null;
+    cx.spawn(async (cx2) => {
+      try {
+        await this.details.open(ref);
+      } catch (e) {
+        this.openFailure = e instanceof Error ? e.message : String(e);
+      }
+      cx2.notify();
+    });
+  }
   render(cx) {
     this.details.deliver();
     this.receive(cx);
-    const visible = this.isVisible();
-    const shown = visible && !this.visible;
-    this.visible = visible;
-    if (visible && (shown || locationKey() !== this.context)) this.refresh(cx, shown);
-    const t = colors();
     const where = location();
+    const visible = this.isVisible();
+    if (!visible) this.poll.sync(this.context, false);
+    else if (!this.poll.shown) this.refresh(cx, "shown");
+    else if (JSON.stringify(where) !== this.context) this.refresh(cx, "moved");
+    const t = colors();
     const overlay = props2()?.overlay;
     const noRemote = this.remote === null && !(this.account && !this.account.status.ok);
-    return v_flex2().id("github").size_full().min_h(0).overflow_hidden().bg(t.background).text_color(t.foreground).text_size(13).when(!overlay, (el) => el.rounded(10).border_1().border_color(t.border)).child(this.header(overlay, where.cwd ?? "no folder")).when(noRemote, (el) => el.child(this.noRemote(where.cwd))).when(!noRemote, (el) => el.child(this.tabs()).child(this.tab === "issues" ? this.list() : this.pullList())).child(this.statusCard(where.on, where.cwd));
+    return v_flex2().id("github").size_full().min_h(0).overflow_hidden().bg(t.background).text_color(t.foreground).text_size(13).when(!overlay, (el) => el.rounded(10).border_1().border_color(t.border)).child(this.header(overlay, where.cwd ?? "no folder")).when(noRemote, (el) => el.child(this.noRemote(where.cwd))).when(!noRemote, (el) => el.child(this.tabs()).child(this.list())).child(this.statusCard(where.on, where.cwd));
   }
   /** The repository, then ↻ (Herdr's own spinner while anything loads, as its tab bar shows a working agent). */
   header(overlay, context) {
     const t = colors();
     const busy = this.loading || this.issues.busy || this.pulls.busy;
     const refresh = button("gh-refresh", "\u21BB", "Refresh", (_e, cx) => {
-      this.refresh(cx, true, true);
+      this.refresh(cx, "asked");
       cx.notify();
     });
-    return h_flex3().h(42).flex_none().px(14).gap(8).items_center().border_b(1).border_color(t.border).child(div5().font_semibold().tooltip(context).child("GitHub")).child(div5().flex_1().min_w(0).truncate().text_right().text_size(12).text_color(t.dim).child(this.repo())).child(busy ? div5().size(24).flex_none().flex().items_center().justify_center().child(spinner()) : refresh).when(overlay, (el) => el.child(button("gh-close", "\xD7", "Close", () => closeOverlay(overlay))));
+    const repo = this.remote ? `${this.remote.owner}/${this.remote.repo}` : "";
+    return h_flex3().h(42).flex_none().px(14).gap(8).items_center().border_b(1).border_color(t.border).child(div6().font_semibold().tooltip(context).child("GitHub")).child(div6().flex_1().min_w(0).truncate().text_right().text_size(12).text_color(t.dim).child(repo)).child(busy ? div6().size(24).flex_none().flex().items_center().justify_center().child(spinner()) : refresh).when(overlay !== void 0, (el) => el.child(button("gh-close", "\xD7", "Close", () => closeOverlay(overlay))));
   }
   /** The gh account on the folder's machine, then how fresh the lists are. What to do about a problem is said in the list. */
   statusCard(on, cwd) {
@@ -10895,31 +10870,28 @@ var Panel = class {
       Date.now()
     );
     const tip = `${this.account ? describeAccount(this.account).text : "checking gh\u2026"} \xB7 ${cwd ?? "no folder"}`;
-    const dot = s.tone === "pending" ? spinner(10) : div5().size(8).rounded(4).bg(s.tone === "ok" ? t.done : t.blocked);
+    const dot = s.tone === "pending" ? spinner(10) : div6().size(8).rounded(4).bg(s.tone === "ok" ? t.done : t.blocked);
     return v_flex2().id("gh-status").flex_none().px(14).py(8).gap(2).border_t(1).border_color(t.border).bg(t.surface).text_size(12).tooltip(tip).accessibility_label(`${s.account} on ${s.machine}${s.sync ? `. ${s.sync}` : ""}`).child(
-      h_flex3().gap(8).items_center().child(div5().w(10).flex_none().flex().items_center().justify_center().child(dot)).child(div5().flex_none().max_w(160).truncate().font_medium().child(s.account)).child(div5().flex_none().text_color(t.dim).child("\xB7")).child(div5().flex_1().min_w(0).truncate().text_color(t.dim).child(s.machine))
+      h_flex3().gap(8).items_center().child(div6().w(10).flex_none().flex().items_center().justify_center().child(dot)).child(div6().flex_none().max_w(160).truncate().font_medium().child(s.account)).child(div6().flex_none().text_color(t.dim).child("\xB7")).child(div6().flex_1().min_w(0).truncate().text_color(t.dim).child(s.machine))
     ).when(
-      s.sync,
+      s.sync !== null,
       (el) => el.child(
-        div5().pl(18).truncate().text_color(s.tone === "problem" ? t.blocked : t.dim).child(s.sync ?? "")
+        div6().pl(18).truncate().text_color(s.tone === "problem" ? t.blocked : t.dim).child(s.sync ?? "")
       )
     );
-  }
-  repo() {
-    return this.remote ? `${this.remote.owner}/${this.remote.repo}` : "";
   }
   /** No GitHub remote here: nothing is wrong, there is just no repository. Said calmly, in place of the tabs and lists. */
   noRemote(cwd) {
     const t = colors();
     const empty = noRepository(cwd);
-    return v_flex2().flex_1().min_h(0).px(28).gap(8).items_center().justify_center().child(svg4("mods/github/assets/github.svg").size(28).text_color(t.dim)).child(div5().pt(4).font_medium().text_color(t.muted).child(empty.title)).child(div5().text_size(12).text_center().text_color(t.dim).child(empty.detail));
+    return v_flex2().flex_1().min_h(0).px(28).gap(8).items_center().justify_center().child(svg4("mods/github/assets/github.svg").size(28).text_color(t.dim)).child(div6().pt(4).font_medium().text_color(t.muted).child(empty.title)).child(div6().text_size(12).text_center().text_color(t.dim).child(empty.detail));
   }
   /** Issues and Pull Requests; Actions and notifications join them later. */
   tabs() {
     const t = colors();
     return h_flex3().h(34).flex_none().px(10).gap(4).items_center().border_b(1).border_color(t.border).children(
       TABS.map(
-        ({ id, label }) => div5().id(`gh-tab-${id}`).px(8).py(3).rounded(6).text_size(12).font_medium().cursor_pointer().text_color(this.tab === id ? t.foreground : t.muted).when(this.tab === id, (el) => el.bg(t.hover)).when(this.tab !== id, (el) => el.hover((s) => s.bg(t.hover))).accessibility_label(label).on_mouse_down("left", stop).on_click((_e, cx) => {
+        ({ id, label }) => div6().id(`gh-tab-${id}`).px(8).py(3).rounded(6).text_size(12).font_medium().cursor_pointer().text_color(this.tab === id ? t.foreground : t.muted).when(this.tab === id, (el) => el.bg(t.hover)).when(this.tab !== id, (el) => el.hover((s) => s.bg(t.hover))).accessibility_label(label).on_mouse_down("left", stop).on_click((_e, cx) => {
           this.tab = id;
           this.openFailure = null;
           if (id === "prs") this.pulls.load(cx);
@@ -10928,134 +10900,161 @@ var Panel = class {
       )
     );
   }
-  /** The Pull Requests tab: gh, a missing repository or another shared problem in the list's place, else the groups. */
-  pullList() {
-    const t = colors();
-    const notice = issuesNotice({
-      account: this.account,
-      remote: this.remote,
-      failure: this.failure ?? this.pulls.notFound
-    });
-    const problem = (text3) => div5().p(8).text_size(12).text_color(t.blocked).child(text3);
-    return v_flex2().id("gh-pulls").flex_1().min_h(0).overflow_y_scroll().p(6).gap(4).when(this.openFailure, (el) => el.child(problem(this.openFailure ?? ""))).when(notice, (el) => el.child(problem(notice ?? ""))).when(!notice && this.ready(), (el) => el.children(this.pulls.render())).when(!notice && !this.ready() && this.loading, (el) => el.child(div5().p(8).text_color(t.dim).child("\u2026")));
-  }
   /**
-   * The groups, or what stands in their place. A missing repository (404) or Issues turned off is the same for
-   * every group: said once, in the list's place. Any other failure stays in its own group, beside the others' rows.
+   * The shown tab's groups, or what stands in their place. A missing repository (404), gh or Issues turned off is
+   * the same for every group: said once, in the list's place. Any other failure stays in its own group.
    */
   list() {
     const t = colors();
-    const notice = issuesNotice({
+    const list2 = this.tab === "issues" ? this.issues : this.pulls;
+    const notice = listNotice({
       account: this.account,
       remote: this.remote,
-      group: this.issues.anyPage,
-      failure: this.failure ?? this.issues.notFound
+      issuesEnabled: this.tab === "issues" ? this.issues.anyPage?.issuesEnabled : void 0,
+      failure: this.failure ?? list2.notFound
     });
-    const problem = (text3) => div5().p(8).text_size(12).text_color(t.blocked).child(text3);
-    return v_flex2().id("gh-list").flex_1().min_h(0).overflow_y_scroll().p(6).gap(4).when(this.openFailure, (el) => el.child(problem(this.openFailure ?? ""))).when(notice, (el) => el.child(problem(notice ?? ""))).when(!notice && this.ready(), (el) => el.children(this.issues.render())).when(!notice && !this.ready() && this.loading, (el) => el.child(div5().p(8).text_color(t.dim).child("\u2026")));
-  }
-  /** A click on an issue row opens (or selects) its tab. */
-  openIssue(cx, issue) {
-    this.openFailure = null;
-    const repo = this.repo();
-    cx.spawn(async (cx2) => {
-      try {
-        await this.details.open({ kind: "issue", repo, number: issue.number });
-      } catch (e) {
-        this.openFailure = e instanceof Error ? e.message : String(e);
-      }
-      cx2.notify();
-    });
+    const problem = (text3) => div6().p(8).text_size(12).text_color(t.blocked).child(text3);
+    return v_flex2().id(`gh-list-${this.tab}`).flex_1().min_h(0).overflow_y_scroll().p(6).gap(4).when(this.openFailure !== null, (el) => el.child(problem(this.openFailure ?? ""))).when(notice !== null, (el) => el.child(problem(notice ?? ""))).when(!notice && this.ready() !== null, (el) => el.children(list2.render())).when(!notice && !this.ready() && this.loading, (el) => el.child(div6().p(8).text_color(t.dim).child("\u2026")));
   }
 };
-function issueCells(kind, issue, hovered) {
-  const t = colors();
-  const start = [
-    div5().flex_none().text_color(t.dim).child(`#${issue.number}`),
-    div5().flex_1().min_w(0).truncate().child(issue.title)
-  ];
-  if (hovered)
-    return [
-      ...start,
-      button(
-        `copy-${kind}-${issue.number}`,
-        "#",
-        `Copy #${issue.number}`,
-        (_e, cx) => cx.write_to_clipboard(`#${issue.number}`)
-      ),
-      button(`open-${kind}-${issue.number}`, "\u2197", "Open in browser", (_e, cx) => cx.open_url(issue.url))
-    ];
-  return [
-    ...start,
-    div5().flex_none().max_w(90).truncate().text_size(12).text_color(t.dim).child(issue.assignees.join(", ")),
-    div5().flex_none().w(28).text_right().text_size(12).text_color(t.dim).child(relativeTime(issue.updatedAt, Date.now()))
-  ];
-}
 
 // src/github/views/reader.ts
-import { nextCommand as nextCommand2, props as props4 } from "herdr";
+import { v_flex as v_flex6 } from "gpui-base";
+import { nextCommand, props as props3 } from "herdr";
 
 // src/github/views/issue.ts
 import { h_flex as h_flex5, Textarea, TextareaState, v_flex as v_flex4 } from "gpui-base";
-import { div as div7, svg as svg5 } from "gpui-kit";
-import { nextCommand, props as props3 } from "herdr";
+import { div as div8 } from "gpui-kit";
 
-// src/github/core/issue-polling.ts
-var IssuePolling = class {
-  key = null;
-  visible = false;
-  etag = null;
-  failed = false;
-  pending = null;
-  /** Returns whether the newly shown issue needs an immediate refresh. */
-  sync(key, visible) {
-    const changed = key !== this.key;
-    const refresh = visible && key !== null && (changed || !this.visible);
-    if (changed) {
-      this.etag = null;
-      this.failed = false;
+// src/github/core/projects.ts
+var FIELD = { issue: "issue", pr: "pullRequest" };
+function projectsQuery(ref, after) {
+  const [owner = "", name = ""] = ref.repo.split("/");
+  return {
+    query: `query($owner: String!, $name: String!, $number: Int!, $after: String) {
+  repository(owner: $owner, name: $name) {
+    ${FIELD[ref.kind]}(number: $number) {
+      projectItems(first: 100, after: $after, includeArchived: true) {
+        pageInfo { hasNextPage endCursor }
+        nodes { project { title url } }
+      }
     }
-    if (changed || !visible) this.pending = null;
-    this.key = key;
-    this.visible = visible;
-    return refresh;
   }
-  /** A local/shared write wins over an older read, and the next tick checks again without a validator. */
-  invalidate() {
-    this.pending = null;
-    this.etag = null;
-  }
-  begin(force = false) {
-    if (!this.key || !this.visible || this.pending) return null;
-    const request = { etag: this.etag, force };
-    this.pending = request;
-    return request;
-  }
-  current(request) {
-    return this.visible && this.pending === request;
-  }
-  reload(request, change) {
-    return this.current(request) && (request.force || change.changed);
-  }
-  /** Finish only after any required discussion reload succeeds; failed reloads must be retried. */
-  finish(request, change) {
-    if (!this.current(request)) return { accepted: false, notify: false };
-    const notify = !change || change.changed || request.force || this.failed;
-    this.pending = null;
-    this.failed = !change;
-    if (!change) this.etag = null;
-    else if (change.changed) this.etag = change.etag;
-    return { accepted: true, notify };
-  }
-};
+}`,
+    variables: { owner, name, number: ref.number, after }
+  };
+}
+function projectPage(data, kind) {
+  const repository = data?.repository;
+  const items = repository?.[FIELD[kind]]?.projectItems;
+  if (!items) throw new Error(`GitHub did not return this ${kind === "pr" ? "pull request" : "issue"}'s Projects.`);
+  return {
+    projects: items.nodes.map((n) => ({ title: n.project.title, url: n.project.url })),
+    more: items.pageInfo.hasNextPage,
+    cursor: items.pageInfo.endCursor
+  };
+}
+function projectsFailure(message, on) {
+  const machine = on ?? "this computer";
+  return {
+    ok: false,
+    message: /read:project/.test(message) ? `Projects require read:project. Run gh auth refresh -h github.com -s read:project on ${machine}.` : `Projects unavailable on ${machine}. ${explain(message)}`
+  };
+}
 
-// src/github/views/discussion.ts
+// src/github/io/projects.ts
+async function readProjects(ref, on) {
+  const projects2 = [];
+  let after = null;
+  try {
+    for (; ; ) {
+      const page = projectPage(await graphql(projectsQuery(ref, after), on), ref.kind);
+      projects2.push(...page.projects);
+      if (!page.more) return { ok: true, projects: projects2 };
+      if (!page.cursor || page.cursor === after) throw new Error("GitHub did not return the next Projects page.");
+      after = page.cursor;
+    }
+  } catch (e) {
+    return projectsFailure(e instanceof Error ? e.message : String(e), on);
+  }
+}
+
+// src/github/views/detail.ts
 import { h_flex as h_flex4, TextView, v_flex as v_flex3 } from "gpui-base";
-import { div as div6 } from "gpui-kit";
+import { div as div7, svg as svg5 } from "gpui-kit";
+var NOUN = { issue: "issue", pr: "pull request" };
+var Noun = (kind) => NOUN[kind].charAt(0).toUpperCase() + NOUN[kind].slice(1);
+function openLink(cx, host, url, page) {
+  const ref = detailLink(url, page);
+  if (ref) host.follow(cx, ref);
+  else {
+    const external = browserUrl(url, page);
+    if (external) cx.open_url(external);
+  }
+}
+function detailEmpty(kind) {
+  const t = colors();
+  const hint = `Choose ${kind === "pr" ? "a" : "an"} ${NOUN[kind]} in the GitHub sidebar. ${Noun(kind)} details are not restored after restarting Herdr.`;
+  return v_flex3().flex_1().gap(8).items_center().justify_center().p(24).child(
+    div7().font_semibold().child(`${Noun(kind)} details`)
+  ).child(div7().text_size(13).text_color(t.dim).text_center().child(hint));
+}
+function detailHeader(host, ref, shown, refresh) {
+  const t = colors();
+  const url = shown.url ?? detailUrl(ref);
+  const previous3 = host.previous();
+  const number = link(`${ref.kind}-browser`, url, `#${ref.number}`).px(2).rounded(4).text_color(t.accent).hover((s) => s.bg(t.hover)).tooltip(`Open ${ref.repo} #${ref.number} in browser`).accessibility_label(`Open #${ref.number} in browser`);
+  const copy = button(
+    `${ref.kind}-copy`,
+    svg5("mods/github/assets/copy.svg").size(16),
+    `Copy ${NOUN[ref.kind]} link`,
+    (_e, cx) => cx.write_to_clipboard(url)
+  );
+  return h_flex4().flex_none().px(24).pt(18).pb(12).gap(12).items_start().when(
+    previous3 !== null,
+    (el) => el.child(
+      square(button(`${ref.kind}-back`, "\u2190", `Back to #${previous3?.number}`, (_e, cx) => host.back(cx))).text_size(
+        22
+      )
+    )
+  ).child(
+    h_flex4().flex_1().min_w(0).gap(8).items_center().flex_wrap().text_size(22).child(
+      div7().min_w(0).font_semibold().child(shown.title ?? `${Noun(ref.kind)} details`)
+    ).child(h_flex4().gap(2).items_center().flex_none().child(number).child(copy))
+  ).child(
+    shown.loading ? square(div7()).child(spinner(18)) : square(
+      button(`${ref.kind}-refresh`, "\u21BB", `Refresh ${NOUN[ref.kind]}`, (_e, cx) => {
+        refresh(cx);
+        cx.notify();
+      })
+    ).text_size(22)
+  );
+}
+function detailBody(ref, loading, failure, document3) {
+  const t = colors();
+  return v_flex3().id(`${ref.kind}-scroll-${detailKey(ref)}`).flex_1().min_h(0).overflow_y_scroll().px(24).pb(18).gap(12).when(loading, (el) => el.child(div7().text_size(12).text_color(t.dim).child(`Loading ${NOUN[ref.kind]}\u2026`))).when(
+    failure !== void 0,
+    (el) => el.child(
+      div7().text_color(t.blocked).child(failure ?? "")
+    )
+  ).when(document3 !== null, (el) => el.child(document3 ?? div7()));
+}
+function detailDocument(wide, heading, timeline, sections) {
+  const t = colors();
+  const posts = v_flex3().min_w(0).gap(20).when(wide, (el) => el.flex_1()).when(!wide, (el) => el.w_full().flex_none()).children(timeline);
+  const metadata = sections.map(
+    ([title, value]) => v_flex3().gap(10).py(16).border_b(1).border_color(t.border).when(!wide, (el) => el.w(180).min_w(140).flex_1()).child(div7().text_size(13).font_semibold().child(title)).child(value)
+  );
+  const side = wide ? v_flex3().w(220).flex_none().children(metadata) : h_flex4().gap(20).flex_wrap().children(metadata);
+  return v_flex3().gap(18).child(h_flex4().gap(10).pb(4).items_center().flex_wrap().children(heading)).child(wide ? h_flex4().gap(24).items_start().child(posts).child(side) : v_flex3().gap(20).child(side).child(posts));
+}
+function stateBadge(label, color, icon2) {
+  return h_flex4().gap(6).items_center().px(10).py(4).rounded(14).bg(`${color}26`).text_size(13).font_semibold().text_color(color).when(icon2 !== void 0, (el) => el.child(svg5(icon2 ?? "").size(14))).child(label);
+}
 function postCard(id, post, verb, onLink) {
   const t = colors();
   const reactions = post.reactions ?? [];
-  const heading = h_flex4().px(16).py(10).gap(8).items_center().flex_wrap().bg(t.raised).border_b(1).border_color(t.border).text_size(12).child(div6().font_semibold().child(post.author)).child(div6().text_color(t.dim).child(verb)).child(div6().flex_1()).child(div6().text_color(t.dim).tooltip(post.createdAt).child(relativeTime(post.createdAt, Date.now())));
+  const heading = h_flex4().px(16).py(10).gap(8).items_center().flex_wrap().bg(t.raised).border_b(1).border_color(t.border).text_size(12).child(div7().font_semibold().child(post.author)).child(div7().text_color(t.dim).child(verb)).child(div7().flex_1()).child(div7().text_color(t.dim).tooltip(post.createdAt).child(relativeTime(post.createdAt, Date.now())));
   const text3 = TextView.markdown(id, post.markdown).selectable(true).scrollable(false).on_link_click(onLink);
   return v_flex3().id(`${id}-card`).min_w(0).w_full().overflow_hidden().rounded(8).border_1().border_color(t.border).bg(t.background).child(heading).child(
     v_flex3().min_w(0).px(16).py(16).gap(12).child(text3).when(
@@ -11066,28 +11065,51 @@ function postCard(id, post, verb, onLink) {
     )
   );
 }
+var quiet = (text3) => div7().text_size(12).text_color(colors().dim).child(text3);
+function people(logins, none) {
+  if (logins.length === 0) return quiet(none);
+  return v_flex3().gap(8).children(logins.map((login2) => div7().text_size(13).font_medium().child(login2)));
+}
+function labelChip(label) {
+  const t = colors();
+  return chip(label.name, label.color ?? t.input, label.color ? `${label.color}26` : t.raised).text_color(t.foreground);
+}
+function labels(list2) {
+  if (list2.length === 0) return quiet("None yet");
+  return h_flex4().gap(6).flex_wrap().children(list2.map(labelChip));
+}
+var milestone = (title) => title ? div7().text_size(13).child(title) : quiet("No milestone");
+function projects(list2, loading) {
+  const t = colors();
+  if (!list2) return quiet(loading ? "Loading Projects\u2026" : "Projects not loaded.");
+  if (!list2.ok) return quiet("None yet").tooltip(list2.message);
+  if (list2.projects.length === 0) return quiet("None yet");
+  return v_flex3().gap(8).children(
+    list2.projects.map(
+      (project) => link(`project-${project.url}`, project.url, project.title).text_size(13).text_color(t.accent).tooltip(project.url)
+    )
+  );
+}
 
 // src/github/views/issue.ts
+var POLL_MS = 1e4;
 var Issue = class {
-  reader = "";
-  host = null;
   ref = null;
-  /** Issues this tab showed before following links, most recent last. */
-  history = [];
   entry = null;
-  wide = false;
-  notices = new Notices();
   /** The new comment being written; kept when posting fails, and through refreshes. */
-  box = null;
   draft = "";
+  host;
+  notices = new Notices();
+  box = null;
   /** Unsent comments of the issues Back can return to. */
   drafts = /* @__PURE__ */ new Map();
   writing = null;
   writeFailure = null;
-  polling = new IssuePolling();
-  init(cx, host = null) {
+  polling = new ConditionalPoll();
+  constructor(host) {
     this.host = host;
-    this.reader = typeof props3()?.reader === "string" ? props3().reader : "";
+  }
+  init(cx) {
     const box = TextareaState.new({ placeholder: "Leave a comment (Markdown)" });
     box.set_auto_grow(3, 12);
     box.on("change", (_e, cx2) => {
@@ -11098,70 +11120,36 @@ var Issue = class {
       if (e.secondary) this.comment(cx2);
     });
     this.box = box;
-    cx.timer.every(1e4, (cx2) => {
+    cx.timer.every(POLL_MS, (cx2) => {
       const shown = this.syncPolling();
       if (!this.writing) this.load(cx2, shown);
     });
-    if (host) return;
-    cx.spawn(async (cx2) => {
-      for (; ; ) {
-        const opened = detailCommand(await nextCommand(), this.reader);
-        if (opened?.kind !== "issue") continue;
-        const ref = { repo: opened.repo, number: opened.number };
-        if (!this.ref || issueKey(this.ref) !== issueKey(ref)) {
-          this.history = [];
-          this.ref = ref;
-          this.load(cx2);
-        }
-        cx2.notify();
-      }
-    });
   }
-  /** Follow a link: Back returns to the issue shown now. */
-  follow(cx, ref) {
-    if (this.host) {
-      this.host.follow(cx, { kind: "issue", ...ref });
-      return;
-    }
-    if (this.ref) this.history.push(this.ref);
-    this.show(cx, ref);
-  }
-  goBack(cx) {
-    if (this.host) {
-      this.host.back(cx);
-      return;
-    }
-    const ref = this.history.pop();
-    if (ref) this.show(cx, ref);
-  }
-  /** The tab now shows, and is named after, that issue. */
   show(cx, ref) {
-    if (this.ref) this.drafts.set(issueKey(this.ref), this.draft);
-    this.draft = this.drafts.get(issueKey(ref)) ?? "";
-    this.drafts.delete(issueKey(ref));
+    if (this.ref) this.drafts.set(detailKey(this.ref), this.draft);
+    this.draft = this.drafts.get(detailKey(ref)) ?? "";
+    this.drafts.delete(detailKey(ref));
     this.box?.set_value(this.draft);
     this.ref = ref;
     this.writeFailure = null;
-    if (!this.host) navigatedDetail(this.reader, { kind: "issue", ...ref });
     this.load(cx);
-    cx.notify();
   }
   /** Visibility is the reader's own native tab, not keyboard focus or the sidebar's repository. */
   syncPolling() {
-    const place = detailLocation(this.reader);
+    const place = detailLocation(this.host.reader);
     const key = this.ref && place ? `${place.on ?? ""}
 ${place.pane}
-${issueKey(this.ref)}` : null;
-    return this.polling.sync(key, Boolean(place?.visible) && (this.host?.active("issue") ?? true));
+${detailKey(this.ref)}` : null;
+    return this.polling.sync(key, Boolean(place?.visible) && this.host.active("issue"));
   }
   /** A forced refresh reloads even on 304; normal ticks leave unchanged discussions alone. Never touches the draft. */
   load(cx, force = true) {
     const ref = this.ref;
-    const place = detailLocation(this.reader);
+    const place = detailLocation(this.host.reader);
     this.syncPolling();
     const request = this.polling.begin(force);
     if (!ref || !place || !request) return;
-    const key = issueKey(ref);
+    const key = detailKey(ref);
     const previous3 = this.entry?.key === key ? this.entry : null;
     let entry = !force && previous3 && previous3.on === place.on ? previous3 : {
       key,
@@ -11174,15 +11162,11 @@ ${issueKey(this.ref)}` : null;
     };
     this.entry = entry;
     cx.spawn(async (cx2) => {
-      const current = () => this.entry === entry && this.polling.current(request) && detailLocation(this.reader)?.visible && (this.host?.active("issue") ?? true);
+      const current = () => this.entry === entry && this.polling.current(request) && detailLocation(this.host.reader)?.visible && this.host.active("issue");
       let completed;
       try {
-        let on = entry.on;
-        if (on === void 0) {
-          const account3 = await account(place.on);
-          if (!account3.status.ok) throw new Error(describeAccount(account3).text);
-          on = account3.on;
-        }
+        if (entry.on === void 0) await signedIn(place.on);
+        const on = place.on;
         if (!current()) return;
         const change = await issueChanges(ref.repo, ref.number, request.etag, on);
         if (!current()) return;
@@ -11197,9 +11181,9 @@ ${issueKey(this.ref)}` : null;
           entry.on = on;
           entry.projectsLoading = true;
           cx2.spawn(async (cx3) => {
-            const projects = await readIssueProjects(ref.repo, ref.number, on);
+            const projects2 = await readProjects(ref, on);
             if (this.entry !== entry) return;
-            entry.projects = projects;
+            entry.projects = projects2;
             entry.projectsLoading = false;
             cx3.notify();
           });
@@ -11209,9 +11193,9 @@ ${issueKey(this.ref)}` : null;
       } catch (e) {
         if (!current()) return;
         const failure = failureOf(e);
-        entry.failure = failure.notFound ? `${ref.repo} #${ref.number} isn't on GitHub, or this account can't see it.` : failure.message;
+        entry.failure = failure.notFound ? notVisible(ref) : failure.message;
       } finally {
-        if (!detailLocation(this.reader)?.visible) this.syncPolling();
+        if (!detailLocation(this.host.reader)?.visible) this.syncPolling();
         const result = this.polling.finish(request, completed);
         if (this.entry === entry) entry.loading = false;
         if (result.accepted && result.notify) cx2.notify();
@@ -11224,8 +11208,8 @@ ${issueKey(this.ref)}` : null;
     this.write(cx, "comment", body.trim() !== "", async (repo, number, on) => {
       const comment = await addComment(repo, number, body, on);
       this.publish({ repo, number, comment });
-      const sentKey = issueKey({ repo, number });
-      if (this.ref && issueKey(this.ref) === sentKey && this.draft === body) {
+      const sentKey = detailKey({ kind: "issue", repo, number });
+      if (this.ref && detailKey(this.ref) === sentKey && this.draft === body) {
         this.draft = "";
         this.box?.set_value("");
       } else if (this.drafts.get(sentKey) === body) this.drafts.delete(sentKey);
@@ -11255,7 +11239,7 @@ ${issueKey(this.ref)}` : null;
         await act(ref.repo, ref.number, on);
       } catch (e) {
         this.writeFailure = failureOf(e).message;
-        if (e instanceof GhError && transient(e.stderr) && this.entry === entry) this.load(cx2);
+        if (e instanceof GhError && e.transient && this.entry === entry) this.load(cx2);
       } finally {
         this.writing = null;
         cx2.notify();
@@ -11265,129 +11249,66 @@ ${issueKey(this.ref)}` : null;
   /** A write to the shown issue: a new comment joins the timeline (once), a new state shows. */
   apply(notice) {
     const issue = this.entry?.issue;
-    if (!isIssueNotice(notice)) return;
     const comment = notice.comment;
-    if (!issue || !this.ref || issueKey(notice) !== issueKey(this.ref)) return;
+    if (!issue || !this.ref || detailKey({ kind: "issue", ...notice }) !== detailKey(this.ref)) return;
     this.polling.invalidate();
     if (this.entry) this.entry.loading = false;
     if (comment && !issue.comments.some((c) => c.id === comment.id)) issue.comments = [...issue.comments, comment];
     if (notice.state) issue.state = notice.state.state;
   }
-  /** A link in a post: an issue of this repository opens here; any other web link, in the browser. */
-  openLink(cx, url, issue) {
-    const detail = detailLink(url, issue.url);
-    if (detail && this.host) {
-      this.host.follow(cx, detail);
-      return;
-    }
-    const linked = issueLink(url, issue.url);
-    if (!linked) {
-      const external = browserUrl(url, issue.url);
-      if (external) cx.open_url(external);
-    } else if (this.ref && issueKey(linked) !== issueKey(this.ref)) this.follow(cx, linked);
-  }
-  render(cx) {
-    if (this.reader) readyDetail(this.reader);
+  render(cx, wide) {
     for (const notice of this.notices.take()) this.apply(notice);
     if (this.syncPolling()) this.load(cx);
-    const t = colors();
-    const root = v_flex4().id("issue-reader").size_full().min_h(0).overflow_hidden().bg(t.background).text_color(t.foreground).text_size(14).on_size_change((size, cx2) => {
-      const wide = size.width >= 820;
-      if (wide !== this.wide) {
-        this.wide = wide;
-        cx2.notify();
-      }
-    });
     const ref = this.ref;
-    if (!ref) return root.child(this.empty());
-    return root.child(this.header(ref)).child(this.body(ref));
-  }
-  /** No issue yet: this tab was restored after a restart, or its issue hasn't arrived. */
-  empty() {
-    const t = colors();
-    const hint = "Choose an issue in the GitHub sidebar. Issue details are not restored after restarting Herdr.";
-    return v_flex4().flex_1().gap(8).items_center().justify_center().p(24).child(div7().font_semibold().child("Issue details")).child(div7().text_size(13).text_color(t.dim).text_center().child(hint));
-  }
-  /** Back, the title with its number (opens the browser) and copy, and refresh. */
-  header(ref) {
-    const t = colors();
     const entry = this.entry;
-    const url = entry?.issue?.url ?? `https://github.com/${ref.repo}/issues/${ref.number}`;
-    const number = link("issue-browser", url, `#${ref.number}`).px(2).rounded(4).text_color(t.accent).hover((s) => s.bg(t.hover)).tooltip(`Open ${ref.repo} #${ref.number} in browser`).accessibility_label(`Open #${ref.number} in browser`);
-    const copy = button(
-      "issue-copy",
-      svg5("mods/github/assets/copy.svg").size(16),
-      "Copy issue link",
-      (_e, cx) => cx.write_to_clipboard(url)
-    );
-    const refresh = entry?.loading ? square(div7()).child(spinner(18)) : square(
-      button("issue-refresh", "\u21BB", "Refresh issue", (_e, cx) => {
-        this.load(cx);
-        cx.notify();
-      })
-    ).text_size(22);
-    return h_flex5().flex_none().px(24).pt(18).pb(12).gap(12).items_start().when(this.host ? this.host.previous() !== null : this.history.length > 0, (el) => el.child(this.back())).child(
-      h_flex5().flex_1().min_w(0).gap(8).items_center().flex_wrap().text_size(22).child(
-        div7().min_w(0).font_semibold().child(entry?.issue?.title ?? "Issue details")
-      ).child(h_flex5().gap(2).items_center().flex_none().child(number).child(copy))
-    ).child(refresh);
+    if (!ref) return [detailEmpty("issue")];
+    const issue = entry?.issue;
+    return [
+      detailHeader(
+        this.host,
+        ref,
+        { title: issue?.title, url: issue?.url, loading: Boolean(entry?.loading) },
+        (cx2) => this.load(cx2)
+      ),
+      detailBody(ref, Boolean(entry?.loading), entry?.failure, issue ? this.document(issue, wide) : null)
+    ];
   }
-  back() {
-    const previous3 = this.host?.previous() ?? this.history.at(-1);
-    return square(button("issue-back", "\u2190", `Back to #${previous3.number}`, (_e, cx) => this.goBack(cx))).text_size(22);
-  }
-  /** The scrolling part: loading and failure notes, then the issue. */
-  body(ref) {
-    const t = colors();
-    const entry = this.entry;
-    return v_flex4().id(`issue-scroll-${issueKey(ref)}`).flex_1().min_h(0).overflow_y_scroll().px(24).pb(18).gap(12).when(entry?.loading, (el) => el.child(div7().text_size(12).text_color(t.dim).child("Loading issue\u2026"))).when(
-      entry?.failure,
-      (el) => el.child(
-        div7().text_color(t.blocked).child(entry?.failure ?? "")
-      )
-    ).child(entry?.issue ? this.document(entry.issue) : div7());
-  }
-  /** State and author, then the timeline beside (wide) or below (narrow) the metadata. */
-  document(issue) {
-    const timeline = v_flex4().min_w(0).gap(20).when(this.wide, (el) => el.flex_1()).when(!this.wide, (el) => el.w_full().flex_none()).child(postCard("issue-body", issue, "opened this issue", (url, cx) => this.openLink(cx, url, issue))).children(
-      issueTimeline(issue.comments, issue.activities).map(
-        (row) => row.type === "comment" ? postCard(
-          `comment-${row.comment.id}`,
-          row.comment,
-          "commented",
-          (url, cx) => this.openLink(cx, url, issue)
-        ) : this.activity(row.activity)
-      )
-    ).child(this.composer(issue));
-    const metadata = this.metadata(issue);
-    const content3 = this.wide ? h_flex5().gap(24).items_start().child(timeline).child(metadata) : v_flex4().gap(20).child(metadata).child(timeline);
-    return v_flex4().gap(18).child(
-      h_flex5().gap(10).pb(4).items_center().flex_wrap().child(this.stateBadge(issue)).child(div7().text_size(13).font_medium().child(issue.author))
-    ).child(content3);
-  }
-  stateBadge(issue) {
+  document(issue, wide) {
     const t = colors();
     const open = issue.state === "open";
-    const color = open ? t.done : t.accent;
-    return div7().px(10).py(4).rounded(14).bg(`${color}26`).text_size(13).font_semibold().text_color(color).child(open ? "\u25CB Open" : "\u25CF Closed");
+    const onLink = (url, cx) => openLink(cx, this.host, url, issue.url);
+    return detailDocument(
+      wide,
+      [
+        stateBadge(open ? "\u25CB Open" : "\u25CF Closed", open ? t.done : t.accent),
+        div8().text_size(13).font_medium().child(issue.author)
+      ],
+      [
+        postCard("issue-body", issue, "opened this issue", onLink),
+        ...issueTimeline(issue.comments, issue.activities).map(
+          (row) => row.type === "comment" ? postCard(`comment-${row.comment.id}`, row.comment, "commented", onLink) : this.activity(row.activity)
+        ),
+        this.composer(issue)
+      ],
+      [
+        ["Assignees", people(issue.assignees, "No assignees")],
+        ["Labels", labels(issue.labels)],
+        ["Project", projects(this.entry?.projects, Boolean(this.entry?.projectsLoading))],
+        ["Milestone", milestone(issue.milestone)]
+      ]
+    );
   }
   /** A label or assignment change between the comments. */
   activity(activity) {
     const t = colors();
-    const avatar = div7().size(22).flex_none().rounded(11).bg(t.raised).text_color(t.muted).font_semibold().flex().items_center().justify_center().child(activity.actor.slice(0, 1).toUpperCase());
-    const labels = "labels" in activity ? activity.labels : null;
-    return h_flex5().id(`activity-${activity.id}`).px(16).py(4).gap(8).items_center().flex_wrap().text_size(12).child(avatar).child(div7().font_semibold().child(activity.actor)).child(div7().text_color(t.dim).child(activityText(activity))).when(
-      labels,
-      (el) => el.children((labels ?? []).map((label) => this.label(label))).child(
-        div7().text_color(t.dim).child(labels?.length === 1 ? "label" : "labels")
+    const avatar = div8().size(22).flex_none().rounded(11).bg(t.raised).text_color(t.muted).font_semibold().flex().items_center().justify_center().child(activity.actor.slice(0, 1).toUpperCase());
+    const changed = "labels" in activity ? activity.labels : null;
+    return h_flex5().id(`activity-${activity.id}`).px(16).py(4).gap(8).items_center().flex_wrap().text_size(12).child(avatar).child(div8().font_semibold().child(activity.actor)).child(div8().text_color(t.dim).child(activityText(activity))).when(
+      changed !== null,
+      (el) => el.children((changed ?? []).map(labelChip)).child(
+        div8().text_color(t.dim).child(changed?.length === 1 ? "label" : "labels")
       )
-    ).child(div7().flex_1()).child(div7().text_color(t.dim).tooltip(activity.createdAt).child(relativeTime(activity.createdAt, Date.now())));
-  }
-  label(label) {
-    const t = colors();
-    return chip(label.name, label.color ?? t.input, label.color ? `${label.color}26` : t.raised).text_color(
-      t.foreground
-    );
+    ).child(div8().flex_1()).child(div8().text_color(t.dim).tooltip(activity.createdAt).child(relativeTime(activity.createdAt, Date.now())));
   }
   /** A new comment, and close / reopen: GitHub's own order of the two buttons. */
   composer(issue) {
@@ -11410,14 +11331,14 @@ ${issueKey(this.ref)}` : null;
       primary: true
     };
     return v_flex4().id("issue-composer").min_w(0).w_full().gap(10).pt(4).when(
-      box,
+      box !== null,
       (el) => el.child(
-        div7().min_w(0).rounded(8).border_1().border_color(t.border).bg(t.background).p(8).on_mouse_down("left", stop).child(Textarea.new(box).w_full().text_size(13).text_color(t.foreground))
+        div8().min_w(0).rounded(8).border_1().border_color(t.border).bg(t.background).p(8).on_mouse_down("left", stop).child(Textarea.new(box).w_full().text_size(13).text_color(t.foreground))
       )
     ).when(
-      this.writeFailure,
+      this.writeFailure !== null,
       (el) => el.child(
-        div7().text_size(12).text_color(t.blocked).child(this.writeFailure ?? "")
+        div8().text_size(12).text_color(t.blocked).child(this.writeFailure ?? "")
       )
     ).child(
       h_flex5().gap(8).items_center().justify_end().when(busy, (el) => el.child(spinner(14))).child(this.action(close, (cx) => this.setState(cx, open ? "closed" : "open"))).child(this.action(send, (cx) => this.comment(cx)))
@@ -11433,45 +11354,11 @@ ${issueKey(this.ref)}` : null;
       })
     ).when(!enabled, (el) => el.opacity(0.5)).tooltip(tip).accessibility_label(tip).on_mouse_down("left", stop).child(label);
   }
-  /** Assignees, labels, Projects and milestone: a column beside the timeline (wide) or a row above it. */
-  metadata(issue) {
-    const t = colors();
-    const quiet = (text3) => div7().text_size(12).text_color(t.dim).child(text3);
-    const section = (title, value) => v_flex4().gap(10).py(16).border_b(1).border_color(t.border).when(!this.wide, (el) => el.w(180).min_w(140).flex_1()).child(div7().text_size(13).font_semibold().child(title)).child(value);
-    const assignees = issue.assignees.length === 0 ? quiet("No assignees") : v_flex4().gap(8).children(issue.assignees.map((login) => div7().text_size(13).font_medium().child(login)));
-    const labels = issue.labels.length === 0 ? quiet("None yet") : h_flex5().gap(6).flex_wrap().children(issue.labels.map((label) => this.label(label)));
-    const sections = [
-      section("Assignees", assignees),
-      section("Labels", labels),
-      section("Project", this.projects(quiet)),
-      section("Milestone", issue.milestone ? div7().text_size(13).child(issue.milestone) : quiet("No milestone"))
-    ];
-    return this.wide ? v_flex4().w(220).flex_none().children(sections) : h_flex5().gap(20).flex_wrap().children(sections);
-  }
-  /** The issue's Projects, each opening in the browser; why there are none shows in a tooltip. */
-  projects(quiet) {
-    const t = colors();
-    const projects = this.entry?.projects;
-    if (!projects) return quiet(this.entry?.projectsLoading ? "Loading Projects\u2026" : "Projects not loaded.");
-    if (!projects.ok) return quiet("None yet").tooltip(projects.message);
-    if (projects.projects.length === 0) return quiet("None yet");
-    return v_flex4().gap(8).children(
-      projects.projects.map(
-        (project) => link(`project-${project.url}`, project.url, project.title).text_size(13).text_color(t.accent).tooltip(project.url)
-      )
-    );
-  }
 };
 
 // src/github/views/pull.ts
 import { h_flex as h_flex6, v_flex as v_flex5 } from "gpui-base";
-import { div as div8, svg as svg6 } from "gpui-kit";
-var STATES = {
-  open: { label: "Open", icon: "git-pull-request", color: "done" },
-  draft: { label: "Draft", icon: "git-pull-request-draft", color: "dim" },
-  merged: { label: "Merged", icon: "git-merge", color: "ansi5" },
-  closed: { label: "Closed", icon: "git-pull-request-closed", color: "blocked" }
-};
+import { div as div9 } from "gpui-kit";
 var REVIEWS = {
   requested: { label: "Awaiting requested review", icon: "\u25CB", color: "dim" },
   approved: { label: "Approved these changes", icon: "\u2713", color: "done" },
@@ -11480,13 +11367,10 @@ var REVIEWS = {
   dismissed: { label: "Review dismissed", icon: "\u2212", color: "dim" }
 };
 var Pull = class {
-  reader;
-  host;
   ref = null;
   entry = null;
-  wide = false;
-  constructor(reader2, host) {
-    this.reader = reader2;
+  host;
+  constructor(host) {
     this.host = host;
   }
   show(cx, ref) {
@@ -11496,31 +11380,30 @@ var Pull = class {
   }
   load(cx) {
     const ref = this.ref;
-    const place = detailLocation(this.reader);
+    const place = detailLocation(this.host.reader);
     if (!ref || !place || !this.host.active("pr")) return;
     const entry = { pull: this.entry?.pull, loading: true, projectsLoading: false };
     this.entry = entry;
     cx.spawn(async (cx2) => {
       const current = () => this.entry === entry && this.host.active("pr");
       try {
-        const account3 = await account(place.on);
-        if (!account3.status.ok) throw new Error(describeAccount(account3).text);
+        await signedIn(place.on);
         if (!current()) return;
-        const pull = await readPull(ref.repo, ref.number, account3.on);
+        const pull = await readPull(ref.repo, ref.number, place.on);
         if (!current()) return;
         entry.pull = pull;
         entry.projectsLoading = true;
         cx2.spawn(async (cx3) => {
-          const projects = await readPullProjects(ref.repo, ref.number, account3.on);
+          const projects2 = await readProjects(ref, place.on);
           if (!current()) return;
-          entry.projects = projects;
+          entry.projects = projects2;
           entry.projectsLoading = false;
           cx3.notify();
         });
       } catch (e) {
         if (current()) {
           const failure = failureOf(e);
-          entry.failure = failure.notFound ? `${ref.repo} #${ref.number} isn't on GitHub, or this account can't see it.` : failure.message;
+          entry.failure = failure.notFound ? notVisible(ref) : failure.message;
         }
       } finally {
         if (current()) {
@@ -11530,176 +11413,116 @@ var Pull = class {
       }
     });
   }
-  openLink(cx, url, base) {
-    const ref = detailLink(url, base);
-    if (ref) this.host.follow(cx, ref);
-    else {
-      const external = browserUrl(url, base);
-      if (external) cx.open_url(external);
-    }
-  }
-  render(_cx) {
-    const t = colors();
+  render(wide) {
     const ref = this.ref;
     const entry = this.entry;
-    const root = v_flex5().id("pull-reader").size_full().min_h(0).overflow_hidden().bg(t.background).text_color(t.foreground).text_size(14).on_size_change((size, cx) => {
-      const wide = size.width >= 820;
-      if (wide !== this.wide) {
-        this.wide = wide;
-        cx.notify();
-      }
-    });
-    if (!ref)
-      return root.child(
-        v_flex5().flex_1().gap(8).items_center().justify_center().p(24).child(div8().font_semibold().child("Pull request details")).child(
-          div8().text_size(13).text_color(t.dim).text_center().child(
-            "Choose a pull request in the GitHub sidebar. Pull request details are not restored after restarting Herdr."
-          )
-        )
-      );
-    return root.child(this.header(ref)).child(
-      v_flex5().id(`pull-scroll-${ref.repo}-${ref.number}`).flex_1().min_h(0).overflow_y_scroll().px(24).pb(18).gap(12).when(entry?.loading, (el) => el.child(div8().text_size(12).text_color(t.dim).child("Loading pull request\u2026"))).when(
-        entry?.failure,
-        (el) => el.child(
-          div8().text_color(t.blocked).child(entry?.failure ?? "")
-        )
-      ).when(entry?.pull, (el) => el.child(entry?.pull ? this.document(entry.pull) : div8()))
+    if (!ref) return [detailEmpty("pr")];
+    const pull = entry?.pull;
+    return [
+      detailHeader(
+        this.host,
+        ref,
+        { title: pull?.title, url: pull?.url, loading: Boolean(entry?.loading) },
+        (cx) => this.load(cx)
+      ),
+      detailBody(ref, Boolean(entry?.loading), entry?.failure, pull ? this.document(pull, wide) : null)
+    ];
+  }
+  document(pull, wide) {
+    const t = colors();
+    const state = PULL_STATES[pull.state];
+    const onLink = (url, cx) => openLink(cx, this.host, url, pull.url);
+    const merged = pull.state === "merged" ? "merged changes" : "wants to merge changes";
+    return detailDocument(
+      wide,
+      [
+        stateBadge(state.label, state.color(t), state.icon),
+        div9().text_size(13).child(`${pull.author} ${merged} into ${pull.base} from ${pull.head}`)
+      ],
+      [
+        postCard("pull-body", pull, "opened this pull request", onLink),
+        ...pull.comments.map((comment) => postCard(`pull-comment-${comment.id}`, comment, "commented", onLink))
+      ],
+      [
+        ["Reviewers", this.reviewers(pull)],
+        ["Assignees", people(pull.assignees, "None yet")],
+        ["Labels", labels(pull.labels)],
+        ["Project", projects(this.entry?.projects, Boolean(this.entry?.projectsLoading))],
+        ["Milestone", milestone(pull.milestone)]
+      ]
     );
   }
-  header(ref) {
+  reviewers(pull) {
     const t = colors();
-    const url = this.entry?.pull?.url ?? `https://github.com/${ref.repo}/pull/${ref.number}`;
-    const previous3 = this.host.previous();
-    return h_flex6().flex_none().px(24).pt(18).pb(12).gap(12).items_start().when(
-      previous3,
-      (el) => el.child(
-        square(button("pull-back", "\u2190", `Back to #${previous3?.number}`, (_e, cx) => this.host.back(cx))).text_size(
-          22
-        )
-      )
-    ).child(
-      h_flex6().flex_1().min_w(0).gap(8).items_center().flex_wrap().text_size(22).child(
-        div8().min_w(0).font_semibold().child(this.entry?.pull?.title ?? "Pull request details")
-      ).child(
-        h_flex6().gap(2).items_center().flex_none().child(
-          link("pull-browser", url, `#${ref.number}`).px(2).rounded(4).text_color(t.accent).hover((s) => s.bg(t.hover)).tooltip(`Open ${ref.repo} #${ref.number} in browser`).accessibility_label(`Open #${ref.number} in browser`)
-        ).child(
-          button(
-            "pull-copy",
-            svg6("mods/github/assets/copy.svg").size(16),
-            "Copy pull request link",
-            (_e, cx) => cx.write_to_clipboard(url)
-          )
-        )
-      )
-    ).child(
-      this.entry?.loading ? square(div8()).child(spinner(18)) : square(
-        button("pull-refresh", "\u21BB", "Refresh pull request", (_e, cx) => {
-          this.load(cx);
-          cx.notify();
-        })
-      ).text_size(22)
-    );
-  }
-  document(pull) {
-    const t = colors();
-    const state = STATES[pull.state];
-    const timeline = v_flex5().min_w(0).gap(20).when(this.wide, (el) => el.flex_1()).when(!this.wide, (el) => el.w_full().flex_none()).child(postCard("pull-body", pull, "opened this pull request", (url, cx) => this.openLink(cx, url, pull.url))).children(
-      pull.comments.map(
-        (comment) => postCard(`pull-comment-${comment.id}`, comment, "commented", (url, cx) => this.openLink(cx, url, pull.url))
-      )
-    );
-    const metadata = this.metadata(pull);
-    return v_flex5().gap(18).child(
-      h_flex6().gap(10).pb(4).items_center().flex_wrap().child(
-        h_flex6().gap(6).items_center().px(10).py(4).rounded(14).bg(`${t[state.color]}26`).text_size(13).font_semibold().text_color(t[state.color]).child(svg6(`mods/github/assets/${state.icon}.svg`).size(14)).child(state.label)
-      ).child(
-        div8().text_size(13).child(
-          `${pull.author} ${pull.state === "merged" ? "merged changes" : "wants to merge changes"} into ${pull.base} from ${pull.head}`
-        )
-      )
-    ).child(
-      this.wide ? h_flex6().gap(24).items_start().child(timeline).child(metadata) : v_flex5().gap(20).child(metadata).child(timeline)
-    );
-  }
-  metadata(pull) {
-    const t = colors();
-    const quiet = (text3) => div8().text_size(12).text_color(t.dim).child(text3);
-    const section = (title, value) => v_flex5().gap(10).py(16).border_b(1).border_color(t.border).when(!this.wide, (el) => el.w(180).min_w(140).flex_1()).child(div8().text_size(13).font_semibold().child(title)).child(value);
-    const reviewers2 = pull.reviewers.length === 0 ? quiet("None yet") : v_flex5().gap(8).children(
+    if (pull.reviewers.length === 0) return quiet("None yet");
+    return v_flex5().gap(8).children(
       pull.reviewers.map((r) => {
         const state = REVIEWS[r.state];
         return h_flex6().gap(8).items_center().tooltip(state.label).accessibility_label(`${r.name}: ${state.label}`).child(
-          div8().flex_1().min_w(0).text_size(13).child(`${r.name}${r.team ? " (team)" : ""}`)
-        ).child(div8().text_color(t[state.color]).child(state.icon));
+          div9().flex_1().min_w(0).text_size(13).child(`${r.name}${r.team ? " (team)" : ""}`)
+        ).child(div9().text_color(t[state.color]).child(state.icon));
       })
     );
-    const projects = this.entry?.projects;
-    const projectList = !projects ? quiet(this.entry?.projectsLoading ? "Loading Projects\u2026" : "Projects not loaded.") : !projects.ok ? quiet("None yet").tooltip(projects.message) : projects.projects.length === 0 ? quiet("None yet") : v_flex5().gap(8).children(
-      projects.projects.map(
-        (p) => link(`pull-project-${p.url}`, p.url, p.title).text_size(13).text_color(t.accent).tooltip(p.url)
-      )
-    );
-    const sections = [
-      section("Reviewers", reviewers2),
-      section(
-        "Assignees",
-        pull.assignees.length === 0 ? quiet("None yet") : v_flex5().gap(8).children(pull.assignees.map((a) => div8().text_size(13).font_medium().child(a)))
-      ),
-      section(
-        "Labels",
-        pull.labels.length === 0 ? quiet("None yet") : h_flex6().gap(6).flex_wrap().children(
-          pull.labels.map(
-            (label) => chip(label.name, label.color ?? t.border, label.color ? `${label.color}33` : t.raised)
-          )
-        )
-      ),
-      section("Project", projectList),
-      section("Milestone", pull.milestone ? div8().text_size(13).child(pull.milestone) : quiet("No milestone"))
-    ];
-    return this.wide ? v_flex5().w(220).flex_none().children(sections) : h_flex6().gap(20).flex_wrap().children(sections);
   }
 };
 
 // src/github/views/reader.ts
+var WIDE = 820;
 var Reader = class {
-  reader = "";
   navigation = new DetailNavigation();
-  issue = new Issue();
-  pull = null;
-  initial = "issue";
-  init(cx) {
-    this.reader = typeof props4()?.reader === "string" ? props4().reader : "";
-    this.initial = props4()?.role === "pr" ? "pr" : "issue";
+  issue;
+  pull;
+  wide = false;
+  reader;
+  constructor() {
+    this.reader = typeof props3()?.reader === "string" ? props3().reader : "";
+    const navigation = this.navigation;
     const host = {
-      active: (kind) => this.navigation.ref?.kind === kind,
-      previous: () => this.navigation.previous,
-      follow: (cx2, ref) => {
-        if (this.navigation.follow(ref)) this.show(cx2, ref);
+      reader: this.reader,
+      active: (kind) => navigation.ref?.kind === kind,
+      previous: () => navigation.previous,
+      follow: (cx, ref) => {
+        if (navigation.follow(ref)) this.show(cx, ref);
       },
-      back: (cx2) => {
-        const ref = this.navigation.back();
-        if (ref) this.show(cx2, ref);
+      back: (cx) => {
+        const ref = navigation.back();
+        if (ref) this.show(cx, ref);
       }
     };
-    this.issue.init(cx, host);
-    this.pull = new Pull(this.reader, host);
+    this.issue = new Issue(host);
+    this.pull = new Pull(host);
+  }
+  /** The role the tab was opened with, until it shows something. */
+  initial() {
+    return props3()?.role === "pr" ? "pr" : "issue";
+  }
+  init(cx) {
+    this.issue.init(cx);
     cx.spawn(async (cx2) => {
       for (; ; ) {
-        const ref = detailCommand(await nextCommand2(), this.reader);
+        const ref = detailCommand(await nextCommand(), this.reader);
         if (ref && this.navigation.open(ref)) this.show(cx2, ref);
       }
     });
   }
+  /** Show `ref` here: the tab is now named after it, and the sidebar finds it here. */
   show(cx, ref) {
     navigatedDetail(this.reader, ref);
     if (ref.kind === "issue") this.issue.show(cx, ref);
-    else this.pull?.show(cx, ref);
+    else this.pull.show(cx, ref);
     cx.notify();
   }
   render(cx) {
     if (this.reader) readyDetail(this.reader);
-    return (this.navigation.ref?.kind ?? this.initial) === "pr" && this.pull ? this.pull.render(cx) : this.issue.render(cx);
+    const t = colors();
+    const kind = this.navigation.ref?.kind ?? this.initial();
+    return v_flex6().id("reader").size_full().min_h(0).overflow_hidden().bg(t.background).text_color(t.foreground).text_size(14).on_size_change((size, cx2) => {
+      const wide = size.width >= WIDE;
+      if (wide !== this.wide) {
+        this.wide = wide;
+        cx2.notify();
+      }
+    }).children(kind === "pr" ? this.pull.render(this.wide) : this.issue.render(cx, this.wide));
   }
 };
 
@@ -11708,12 +11531,12 @@ var ROLES = { panel: Panel, issue: Reader, pr: Reader, pane: Pane };
 var GitHub = class extends View {
   role = null;
   init(p, cx) {
-    const Role = ROLES[(props5() ?? p)?.role ?? "panel"];
+    const Role = ROLES[(props4() ?? p)?.role ?? "panel"];
     this.role = Role ? new Role() : null;
     this.role?.init(cx);
   }
   render(cx) {
-    return this.role ? this.role.render(cx) : `github: unknown role ${JSON.stringify(props5()?.role)}`;
+    return this.role ? this.role.render(cx) : `github: unknown role ${JSON.stringify(props4()?.role)}`;
   }
 };
 export {

@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
-import { sidebarVisible } from "../../src/github/io/visibility.ts";
+import { sidebarVisible } from "../../src/github/io/context.ts";
 import { reset, screen } from "../fake-herdr.ts";
 
 afterEach(reset);

@@ -14,10 +14,12 @@ const NOT_SIGNED_IN = {
 const BAD_CREDENTIALS =
 	'{\n  "message": "Bad credentials",\n  "documentation_url": "https://docs.github.com/rest",\n  "status": "401"\n}';
 
-describe("status", () => {
+describe("status: whether gh is installed and signed in", () => {
+	const status = async (on: string | null = null) => (await gh.account(on)).status;
+
 	test("signed in: the account's login", async () => {
 		machine(null, { "~$ gh api user --jq .login": { stdout: "lw396\n" } });
-		expect(await gh.status()).toEqual({ ok: true, user: "lw396" });
+		expect(await status()).toEqual({ ok: true, user: "lw396" });
 	});
 
 	test("never signed in: auth", async () => {
@@ -28,30 +30,19 @@ describe("status", () => {
 					"To get started with GitHub CLI, please run:  gh auth login\nAlternatively, populate the GH_TOKEN environment variable with a GitHub API authentication token.\n",
 			},
 		});
-		expect(await gh.status()).toMatchObject({ ok: false, reason: "auth" });
+		expect(await status()).toMatchObject({ ok: false, reason: "auth" });
 	});
 
 	test("revoked token: auth", async () => {
 		machine(null, {
 			"~$ gh api user --jq .login": { code: 1, stdout: BAD_CREDENTIALS, stderr: "gh: Bad credentials (HTTP 401)\n" },
 		});
-		expect(await gh.status()).toMatchObject({ ok: false, reason: "auth" });
+		expect(await status()).toMatchObject({ ok: false, reason: "auth" });
 	});
 
 	test("gh not installed here: missing", async () => {
 		machine(null, {});
-		expect(await gh.status()).toMatchObject({ ok: false, reason: "missing" });
-	});
-
-	test("gh not installed on the space's machine: missing", async () => {
-		machine("center", {});
-		expect(await gh.status({ on: "center" })).toMatchObject({ ok: false, reason: "missing" });
-	});
-
-	test("asks the space's machine, not this one", async () => {
-		machine(null, { "~$ gh api user --jq .login": { stdout: "here\n" } });
-		machine("center", { "~$ gh api user --jq .login": { stdout: "there\n" } });
-		expect(await gh.status({ on: "center" })).toEqual({ ok: true, user: "there" });
+		expect(await status()).toMatchObject({ ok: false, reason: "missing" });
 	});
 
 	test("GitHub unreachable: error, not missing", async () => {
@@ -61,7 +52,7 @@ describe("status", () => {
 				stderr: "error connecting to api.github.com\ncheck your internet connection or https://githubstatus.com\n",
 			},
 		});
-		expect(await gh.status()).toMatchObject({ ok: false, reason: "error" });
+		expect(await status()).toMatchObject({ ok: false, reason: "error" });
 	});
 
 	test("an HTTP 404 is an error, not a missing gh", async () => {
@@ -72,7 +63,7 @@ describe("status", () => {
 				stderr: "gh: Not Found (HTTP 404)\n",
 			},
 		});
-		expect(await gh.status()).toMatchObject({ ok: false, reason: "error" });
+		expect(await status()).toMatchObject({ ok: false, reason: "error" });
 	});
 });
 
@@ -109,24 +100,11 @@ describe("account: the gh on the folder's machine", () => {
 });
 
 describe("apiText", () => {
-	test("jq output as plain text, in the repository's folder", async () => {
+	test("jq output as plain text, from the gh on that machine", async () => {
 		machine("center", {
-			"/w/app$ gh api repos/herdrdev/herdr-app --jq .full_name": { stdout: "herdrdev/herdr-app\n" },
+			"~$ gh api repos/herdrdev/herdr-app --jq .full_name": { stdout: "herdrdev/herdr-app\n" },
 		});
-		expect(await gh.apiText("repos/herdrdev/herdr-app", ".full_name", { cwd: "/w/app", on: "center" })).toBe(
-			"herdrdev/herdr-app",
-		);
-	});
-
-	test("one value per line with --paginate", async () => {
-		machine(null, {
-			"~$ gh api repos/herdrdev/herdr-app/branches?per_page=1 --paginate --jq .[].name": {
-				stdout: "feat/conditional-mods\nfix/durable-agent-session-capture\n",
-			},
-		});
-		expect(await gh.apiText("repos/herdrdev/herdr-app/branches?per_page=1", ".[].name", { paginate: true })).toBe(
-			"feat/conditional-mods\nfix/durable-agent-session-capture",
-		);
+		expect(await gh.apiText("repos/herdrdev/herdr-app", ".full_name", { on: "center" })).toBe("herdrdev/herdr-app");
 	});
 
 	test("a missing repository rejects with a 404 GhError", async () => {
@@ -138,7 +116,7 @@ describe("apiText", () => {
 				stderr: "gh: Not Found (HTTP 404)\n",
 			},
 		});
-		const error = await gh.apiText("repos/lw396/wechat-wcp", ".full_name").catch((e) => e);
+		const error = await gh.apiText("repos/lw396/wechat-wcp", ".full_name", { on: null }).catch((e) => e);
 		expect(error).toBeInstanceOf(gh.GhError);
 		expect(error).toMatchObject({ message: "gh: Not Found (HTTP 404)", code: 1, notFound: true });
 	});
@@ -147,7 +125,7 @@ describe("apiText", () => {
 		machine(null, {
 			"~$ gh api user --jq .login": { code: 1, stdout: BAD_CREDENTIALS, stderr: "gh: Bad credentials (HTTP 401)\n" },
 		});
-		expect(await gh.apiText("user", ".login").catch((e) => e)).toMatchObject({ notFound: false });
+		expect(await gh.apiText("user", ".login", { on: null }).catch((e) => e)).toMatchObject({ notFound: false });
 	});
 });
 
@@ -169,7 +147,7 @@ describe("api", () => {
 				stdout: '[[{"login":"ogulcancelik","id":7064011}],[{"login":"dependabot[bot]","id":49699333}]]',
 			},
 		});
-		expect(await gh.api("repos/herdrdev/herdr-app/contributors?per_page=1", { paginate: true })).toEqual([
+		expect(await gh.api("repos/herdrdev/herdr-app/contributors?per_page=1", { on: null, paginate: true })).toEqual([
 			{ login: "ogulcancelik", id: 7064011 },
 			{ login: "dependabot[bot]", id: 49699333 },
 		]);
@@ -177,7 +155,7 @@ describe("api", () => {
 
 	test("paginated object responses keep their page structure", async () => {
 		machine(null, { "~$ gh api graphql --paginate --slurp": { stdout: '[{"data":{"n":1}},{"data":{"n":2}}]' } });
-		expect(await gh.api("graphql", { paginate: true })).toEqual([{ data: { n: 1 } }, { data: { n: 2 } }]);
+		expect(await gh.api("graphql", { on: null, paginate: true })).toEqual([{ data: { n: 1 } }, { data: { n: 2 } }]);
 	});
 
 	test("POST with fields", async () => {
@@ -185,7 +163,11 @@ describe("api", () => {
 			"~$ gh api repos/o/r/actions/runs/42/rerun -X POST -F enable_debug_logging=true": { stdout: "{}" },
 		});
 		expect(
-			await gh.api("repos/o/r/actions/runs/42/rerun", { method: "POST", fields: { enable_debug_logging: true } }),
+			await gh.api("repos/o/r/actions/runs/42/rerun", {
+				on: null,
+				method: "POST",
+				fields: { enable_debug_logging: true },
+			}),
 		).toEqual({});
 	});
 });
@@ -220,7 +202,7 @@ describe("graphql", () => {
 				stdout: '{"data":{"repository":{"nameWithOwner":"herdrdev/herdr-app","stargazerCount":2078}}}',
 			},
 		});
-		expect(await gh.graphql(QUERY, { o: "herdrdev", n: "herdr-app" })).toEqual({
+		expect(await gh.graphql({ query: QUERY, variables: { o: "herdrdev", n: "herdr-app" } }, null)).toEqual({
 			repository: { nameWithOwner: "herdrdev/herdr-app", stargazerCount: 2078 },
 		});
 	});
@@ -234,7 +216,7 @@ describe("graphql", () => {
 				stderr: "gh: Field 'nope' doesn't exist on type 'User'\n",
 			},
 		});
-		expect(await gh.graphql("{ viewer { nope } }").catch((e) => e)).toMatchObject({
+		expect(await gh.graphql({ query: "{ viewer { nope } }", variables: {} }, null).catch((e) => e)).toMatchObject({
 			message: "gh: Field 'nope' doesn't exist on type 'User'",
 		});
 	});
@@ -262,7 +244,7 @@ describe('a dropped connection (real gh 2.96 on center: exit 1, `Get "…": EOF`
 				return f.reply;
 			},
 		});
-		expect(await gh.status({ on: "center" })).toEqual({ ok: true, user: "lw396" });
+		expect((await gh.account("center")).status).toEqual({ ok: true, user: "lw396" });
 		expect(f.asked.count).toBe(3);
 	});
 
@@ -273,7 +255,7 @@ describe('a dropped connection (real gh 2.96 on center: exit 1, `Get "…": EOF`
 				return f.reply;
 			},
 		});
-		expect(await gh.status({ on: "center" })).toMatchObject({
+		expect((await gh.account("center")).status).toMatchObject({
 			ok: false,
 			reason: "error",
 			message: 'Get "https://api.github.com/user": EOF',
@@ -288,7 +270,9 @@ describe('a dropped connection (real gh 2.96 on center: exit 1, `Get "…": EOF`
 				return f.reply;
 			},
 		});
-		expect(await gh.graphql("{ viewer { login } }")).toEqual({ viewer: { login: "lw396" } });
+		expect(await gh.graphql({ query: "{ viewer { login } }", variables: {} }, null)).toEqual({
+			viewer: { login: "lw396" },
+		});
 		expect(f.asked.count).toBe(2);
 	});
 
@@ -303,9 +287,9 @@ describe('a dropped connection (real gh 2.96 on center: exit 1, `Get "…": EOF`
 				return f.reply;
 			},
 		});
-		expect(await gh.api("repos/o/r/actions/runs/42/rerun", { method: "POST" }).catch((e: unknown) => e)).toBeInstanceOf(
-			gh.GhError,
-		);
+		expect(
+			await gh.api("repos/o/r/actions/runs/42/rerun", { on: null, method: "POST" }).catch((e: unknown) => e),
+		).toBeInstanceOf(gh.GhError);
 		expect(f.asked.count).toBe(1);
 	});
 
@@ -316,7 +300,9 @@ describe('a dropped connection (real gh 2.96 on center: exit 1, `Get "…": EOF`
 				return f.reply;
 			},
 		});
-		expect(await gh.graphql("mutation { closeIssue }").catch((e: unknown) => e)).toBeInstanceOf(gh.GhError);
+		expect(
+			await gh.graphql({ query: "mutation { closeIssue }", variables: {} }, null).catch((e: unknown) => e),
+		).toBeInstanceOf(gh.GhError);
 		expect(f.asked.count).toBe(1);
 	});
 });

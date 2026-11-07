@@ -1,6 +1,6 @@
-// Read-only GitHub Projects (v2) associated with an issue; independent of the REST discussion.
-import type { DetailKind } from "./detail.ts";
-import { explain } from "./gh-args.ts";
+// Read-only GitHub Projects (v2) of an issue or PR; optional metadata, independent of the discussion.
+import type { DetailRef } from "./detail.ts";
+import { explain, type Query } from "./gh.ts";
 
 export interface Project {
 	title: string;
@@ -8,38 +8,39 @@ export interface Project {
 }
 export type Projects = { ok: true; projects: Project[] } | { ok: false; message: string };
 
-export const PROJECTS_QUERY = `query($owner: String!, $name: String!, $number: Int!, $after: String) {
+const FIELD = { issue: "issue", pr: "pullRequest" } as const;
+
+/** A page of the item's Projects (`after` null: the first). */
+export function projectsQuery(ref: DetailRef, after: string | null): Query {
+	const [owner = "", name = ""] = ref.repo.split("/");
+	return {
+		query: `query($owner: String!, $name: String!, $number: Int!, $after: String) {
   repository(owner: $owner, name: $name) {
-    issue(number: $number) {
+    ${FIELD[ref.kind]}(number: $number) {
       projectItems(first: 100, after: $after, includeArchived: true) {
         pageInfo { hasNextPage endCursor }
         nodes { project { title url } }
       }
     }
   }
-}`;
-
-export const PULL_PROJECTS_QUERY = PROJECTS_QUERY.replace("issue(number:", "pullRequest(number:");
-
-interface ProjectData {
-	repository: Partial<
-		Record<
-			"issue" | "pullRequest",
-			{
-				projectItems: {
-					pageInfo: { hasNextPage: boolean; endCursor: string | null };
-					nodes: { project: Project }[];
-				};
-			} | null
-		>
-	> | null;
+}`,
+		variables: { owner, name, number: ref.number, after },
+	};
 }
 
+interface ProjectItems {
+	pageInfo: { hasNextPage: boolean; endCursor: string | null };
+	nodes: { project: Project }[];
+}
+
+/** The reply to projectsQuery. */
 export function projectPage(
 	data: unknown,
-	kind: DetailKind = "issue",
+	kind: DetailRef["kind"],
 ): { projects: Project[]; more: boolean; cursor: string | null } {
-	const items = (data as ProjectData)?.repository?.[kind === "pr" ? "pullRequest" : "issue"]?.projectItems;
+	const repository = (data as { repository: Record<string, { projectItems: ProjectItems } | null> | null } | null)
+		?.repository;
+	const items = repository?.[FIELD[kind]]?.projectItems;
 	if (!items) throw new Error(`GitHub did not return this ${kind === "pr" ? "pull request" : "issue"}'s Projects.`);
 	return {
 		projects: items.nodes.map((n) => ({ title: n.project.title, url: n.project.url })),

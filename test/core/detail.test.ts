@@ -7,5 +7,7 @@ test("an issue keeps the key saved tab identities used before PRs; a PR with its
 });
 
 test("tab names are short: number and repository name", () => {
-	expect(detailTabName({ repo: "lw396/herdr-plugin-github", number: 42 })).toBe("#42 · herdr-plugin-github");
+	expect(detailTabName({ kind: "issue", repo: "lw396/herdr-plugin-github", number: 42 })).toBe(
+		"#42 · herdr-plugin-github",
+	);
 });

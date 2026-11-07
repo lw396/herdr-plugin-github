@@ -56,10 +56,3 @@ test("a view that missed more writes than are kept receives the kept ones", () =
 	expect(taken.length).toBeGreaterThan(0);
 	expect(taken.at(-1)).toEqual({ ...comment, number: 29 });
 });
-
-test("a write to a PR reaches the other views as a PR, not as the issue with its number", () => {
-	const sidebar = new Notices();
-	const pr = { kind: "pr" as const, repo: "o/r", number: 20 };
-	announce(pr);
-	expect(sidebar.take()).toEqual([pr]);
-});

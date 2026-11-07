@@ -1,24 +1,23 @@
 import { describe, expect, test } from "bun:test";
-import { apiArgs, errorMessage, explain, graphqlArgs, parseJson, transient } from "../../src/github/core/gh-args.ts";
+import { apiArgs, errorMessage, explain, graphqlArgs, parseJson, transient } from "../../src/github/core/gh.ts";
 
 describe("apiArgs", () => {
 	test("GET is the default and adds no -X", () => {
-		expect(apiArgs("repos/{owner}/{repo}")).toEqual(["api", "repos/{owner}/{repo}"]);
+		expect(apiArgs("repos/cli/cli")).toEqual(["api", "repos/cli/cli"]);
 	});
 
 	test("method, fields and flags", () => {
 		expect(
-			apiArgs("repos/{owner}/{repo}/actions/runs/1/rerun", {
+			apiArgs("repos/cli/cli/actions/runs/1/rerun", {
 				method: "post",
 				fields: { debug: true },
 				rawFields: { note: "x" },
 				paginate: true,
 				jq: ".id",
-				cache: "60s",
 			}),
 		).toEqual([
 			"api",
-			"repos/{owner}/{repo}/actions/runs/1/rerun",
+			"repos/cli/cli/actions/runs/1/rerun",
 			"-X",
 			"POST",
 			"-F",
@@ -28,15 +27,13 @@ describe("apiArgs", () => {
 			"--paginate",
 			"--jq",
 			".id",
-			"--cache",
-			"60s",
 		]);
 	});
 });
 
 describe("graphqlArgs", () => {
 	test("strings go as -f, other values as -F", () => {
-		expect(graphqlArgs("query($n:Int!,$o:String!){x}", { n: 5, o: "me" })).toEqual([
+		expect(graphqlArgs({ query: "query($n:Int!,$o:String!){x}", variables: { n: 5, o: "me" } })).toEqual([
 			"api",
 			"graphql",
 			"-F",

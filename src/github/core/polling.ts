@@ -1,19 +1,24 @@
-import type { Change } from "./conditional.ts";
+// Polling with conditional requests (ADR 0006): only while shown, one check at a time, the ETag of
+// the last answer that was taken in, and answers to an older check or another place dropped.
+import type { Change } from "./gh.ts";
 
 interface Request {
 	etag: string | null;
 	force: boolean;
 }
 
-/** One reader's polling state: visibility, single-flight reads, validators and stale-answer rejection. */
-export class IssuePolling {
+export class ConditionalPoll {
 	private key: string | null = null;
 	private visible = false;
 	private etag: string | null = null;
 	private failed = false;
 	private pending: Request | null = null;
 
-	/** Returns whether the newly shown issue needs an immediate refresh. */
+	get shown(): boolean {
+		return this.visible;
+	}
+
+	/** What is polled (null: nothing) and whether it is shown; returns whether it needs a refresh now. */
 	sync(key: string | null, visible: boolean): boolean {
 		const changed = key !== this.key;
 		const refresh = visible && key !== null && (changed || !this.visible);
@@ -27,14 +32,15 @@ export class IssuePolling {
 		return refresh;
 	}
 
-	/** A local/shared write wins over an older read, and the next tick checks again without a validator. */
+	/** A local write or failed reload wins over an older read, and the next check asks without a validator. */
 	invalidate(): void {
 		this.pending = null;
 		this.etag = null;
 	}
 
+	/** A check to make, or null while hidden or another is out; a forced one replaces the one out. */
 	begin(force = false): Request | null {
-		if (!this.key || !this.visible || this.pending) return null;
+		if (!this.key || !this.visible || (this.pending && !force)) return null;
 		const request = { etag: this.etag, force };
 		this.pending = request;
 		return request;
@@ -44,11 +50,15 @@ export class IssuePolling {
 		return this.visible && this.pending === request;
 	}
 
+	/** Whether the check's answer calls for reading the contents again. */
 	reload(request: Request, change: Change): boolean {
 		return this.current(request) && (request.force || change.changed);
 	}
 
-	/** Finish only after any required discussion reload succeeds; failed reloads must be retried. */
+	/**
+	 * Finish only after any required reload succeeds (no `change`: it failed, so the next check asks
+	 * again without a validator). `notify`: what is shown changed or recovered.
+	 */
 	finish(request: Request, change?: Change): { accepted: boolean; notify: boolean } {
 		if (!this.current(request)) return { accepted: false, notify: false };
 		const notify = !change || change.changed || request.force || this.failed;

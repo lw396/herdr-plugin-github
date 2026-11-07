@@ -1,5 +1,5 @@
 // The PR description page: REST replies become ready-to-render Markdown and read-only metadata.
-import { type Comment, parseComment, parseReactions, type Reaction } from "./issue-detail.ts";
+import { type Comment, login, parseComments, parseReactions, type Reaction } from "./discussion.ts";
 import { type Label, parseLabel } from "./labels.ts";
 import { readerMarkdown } from "./markdown.ts";
 import type { PullState } from "./pulls.ts";
@@ -63,7 +63,7 @@ function reviewers(pull: RestPull, reviews: RestReview[]): Reviewer[] {
 		(a, b) => (b.submitted_at ?? "").localeCompare(a.submitted_at ?? "") || b.id - a.id,
 	)) {
 		if (review.state === "PENDING" || !review.submitted_at) continue;
-		const name = review.user?.login ?? "deleted user";
+		const name = login(review.user);
 		const key = name.toLowerCase();
 		if (key === pull.user?.login.toLowerCase() || byName.has(key)) continue;
 		byName.set(key, { name, state: review.state.toLowerCase() as ReviewState, team: false });
@@ -83,7 +83,7 @@ export function parsePullDetail(pull: unknown, issue: unknown, comments: unknown
 		number: p.number,
 		title: p.title,
 		state: p.merged ? "merged" : p.state === "closed" ? "closed" : p.draft ? "draft" : "open",
-		author: p.user?.login ?? "deleted user",
+		author: login(p.user),
 		createdAt: p.created_at,
 		url: p.html_url,
 		head: crossOwner ? p.head.label || p.head.ref : p.head.ref,
@@ -95,8 +95,6 @@ export function parsePullDetail(pull: unknown, issue: unknown, comments: unknown
 		markdown: readerMarkdown(p.body ?? "", p.html_url),
 		reactions: parseReactions(reactions),
 		reviewers: reviewers(p, reviews as RestReview[]),
-		comments: (comments as unknown[])
-			.map((c) => parseComment(c, p.html_url))
-			.sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id - b.id),
+		comments: parseComments(comments as unknown[], p.html_url),
 	};
 }

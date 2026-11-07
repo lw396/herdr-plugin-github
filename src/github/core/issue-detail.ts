@@ -1,29 +1,7 @@
 import { type Activity, parseActivity } from "./activity.ts";
-import { detailKey } from "./detail.ts";
+import { type Comment, login, parseComments } from "./discussion.ts";
 import { type Label, parseLabel } from "./labels.ts";
 import { readerMarkdown } from "./markdown.ts";
-
-export type { Label };
-export interface IssueRef {
-	repo: string;
-	number: number;
-}
-export const issueKey = (ref: IssueRef): string => detailKey({ kind: "issue", ...ref });
-
-export interface Reaction {
-	emoji: string;
-	count: number;
-}
-
-export interface Comment {
-	id: number;
-	author: string;
-	createdAt: string;
-	body: string;
-	/** body as the reader renders it: prepared once here, not on every render (parsing is slow in QuickJS). */
-	markdown: string;
-	reactions: Reaction[];
-}
 
 export interface IssueDetail {
 	number: number;
@@ -41,16 +19,6 @@ export interface IssueDetail {
 	activities: Activity[];
 }
 
-/** A comments endpoint's comment; a timeline "commented" event has the same fields and its `event`. */
-interface RestComment {
-	event?: string;
-	id: number;
-	user: { login: string } | null;
-	created_at: string;
-	body: string | null;
-	reactions: Record<string, number | string>;
-}
-
 interface RestIssue {
 	number: number;
 	title: string;
@@ -64,47 +32,15 @@ interface RestIssue {
 	body: string | null;
 }
 
-const EMOJI: [string, string][] = [
-	["+1", "👍"],
-	["-1", "👎"],
-	["laugh", "😄"],
-	["hooray", "🎉"],
-	["confused", "😕"],
-	["heart", "❤️"],
-	["rocket", "🚀"],
-	["eyes", "👀"],
-];
-
-/** Non-zero REST reaction counts, shared by issue and PR posts. */
-export function parseReactions(reactions: Record<string, number | string> = {}): Reaction[] {
-	return EMOJI.flatMap(([key, emoji]) => {
-		const count = reactions[key];
-		return typeof count === "number" && count > 0 ? [{ emoji, count }] : [];
-	});
-}
-
-/** A REST comment as the reader shows it (non-zero reaction counts); `issueUrl` resolves its #123 references. */
-export function parseComment(comment: unknown, issueUrl: string): Comment {
-	const c = comment as RestComment;
-	return {
-		id: c.id,
-		author: c.user?.login ?? "deleted user",
-		createdAt: c.created_at,
-		body: c.body ?? "",
-		markdown: readerMarkdown(c.body ?? "", issueUrl),
-		reactions: parseReactions(c.reactions),
-	};
-}
-
-/** GitHub's REST issue and timeline, with comments in creation order and non-zero reaction counts. */
+/** GitHub's REST issue and its timeline, which carries both the comments and the activity. */
 export function parseIssueDetail(issue: unknown, timeline: unknown): IssueDetail {
 	const i = issue as RestIssue,
-		events = timeline as RestComment[];
+		events = timeline as { event?: string }[];
 	return {
 		number: i.number,
 		title: i.title,
 		state: i.state,
-		author: i.user?.login ?? "deleted user",
+		author: login(i.user),
 		createdAt: i.created_at,
 		url: i.html_url,
 		labels: i.labels.map(parseLabel),
@@ -113,9 +49,9 @@ export function parseIssueDetail(issue: unknown, timeline: unknown): IssueDetail
 		body: i.body ?? "",
 		markdown: readerMarkdown(i.body ?? "", i.html_url),
 		activities: parseActivity(events),
-		comments: events
-			.filter((e) => e.event === "commented")
-			.map((c) => parseComment(c, i.html_url))
-			.sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id - b.id),
+		comments: parseComments(
+			events.filter((e) => e.event === "commented"),
+			i.html_url,
+		),
 	};
 }

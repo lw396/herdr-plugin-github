@@ -44,5 +44,12 @@ export class DetailNavigation {
 }
 
 /** Keep native tabs compact; the full repository remains visible in the reader's link tooltip. */
-export const detailTabName = (ref: { repo: string; number: number }): string =>
-	`#${ref.number} · ${ref.repo.split("/").at(-1)}`;
+export const detailTabName = (ref: DetailRef): string => `#${ref.number} · ${ref.repo.split("/").at(-1)}`;
+
+/** Its page on github.com, before GitHub has answered with its own. */
+export const detailUrl = (ref: DetailRef): string =>
+	`https://github.com/${ref.repo}/${ref.kind === "pr" ? "pull" : "issues"}/${ref.number}`;
+
+/** What a reader says when GitHub answers 404. */
+export const notVisible = (ref: DetailRef): string =>
+	`${ref.repo} #${ref.number} isn't on GitHub, or this account can't see it.`;

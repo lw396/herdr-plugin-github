@@ -1,38 +1,24 @@
-// The panel role (the sidebar): the current repository's lists, starting with Issues.
+// The panel role (the sidebar): the current repository's Issues and Pull Requests.
 
 import { h_flex, v_flex } from "gpui-base";
 import { type AsyncContext, type Context, div, type Element, svg } from "gpui-kit";
 import { closeOverlay, props } from "herdr";
-import { describeAccount } from "../core/account.ts";
-import {
-	type Failure,
-	type GroupKind,
-	type Issue,
-	type IssueGroup,
-	issuesNotice,
-	noRepository,
-} from "../core/issues.ts";
+import { type Account, describeAccount } from "../core/account.ts";
+import type { DetailRef } from "../core/detail.ts";
+import type { Change, Failure } from "../core/gh.ts";
+import { ConditionalPoll } from "../core/polling.ts";
 import type { RemoteRepo } from "../core/remote.ts";
-import { footerStatus, POLL_SECONDS } from "../core/status.ts";
-import { relativeTime } from "../core/time.ts";
-import { isIssueNotice, Notices } from "../io/changes.ts";
-import { location, locationKey } from "../io/context.ts";
+import { footerStatus, listNotice, noRepository, POLL_SECONDS } from "../core/sidebar.ts";
+import { Notices } from "../io/changes.ts";
+import { location, sidebarVisible } from "../io/context.ts";
 import { DetailTabs } from "../io/detail-tabs.ts";
 import * as gh from "../io/gh.ts";
 import { listChanges } from "../io/issues.ts";
 import * as known from "../io/known.ts";
-import { sidebarVisible } from "../io/visibility.ts";
-import { GroupList, type GroupSpec, type Ready } from "./groups.ts";
+import type { ListHost } from "./groups.ts";
+import { issueList } from "./issues.ts";
 import { pullList } from "./pulls.ts";
 import { button, colors, type Role, spinner, stop } from "./ui.ts";
-
-/** The Issues tab's groups, in order: title, and what an empty one says. */
-const GROUPS: GroupSpec<GroupKind>[] = [
-	// One word like the others; the empty text says whose.
-	{ kind: "assigned", title: "Assigned", empty: "No open issues assigned to you." },
-	{ kind: "open", title: "Open", empty: "No open issues." },
-	{ kind: "closed", title: "Closed", empty: "No closed issues." },
-];
 
 /** The sidebar's tabs, in order: id and label (the VS Code extension's view name for PRs). */
 type SidebarTab = "issues" | "prs";
@@ -41,61 +27,42 @@ const TABS: { id: SidebarTab; label: string }[] = [
 	{ id: "prs", label: "Pull Requests" },
 ];
 
-export class Panel implements Role {
-	/** The place shown (locationKey()), and which refresh is the latest: older ones drop their results. */
-	context: string | null = null;
-	latest = 0;
-	// undefined: not known yet for this place.
-	account: gh.Account | undefined;
-	remote: RemoteRepo | null | undefined;
-	failure: Failure | undefined;
-	loading = false;
-	/** The tab shown; each keeps its own state (folded groups and pages) while the other is shown. */
-	tab: SidebarTab = "issues";
-	details = new DetailTabs();
-	openFailure: string | null = null;
-	/** The Issues tab's groups. Folded groups ask for nothing; which are expanded stays as the place changes. */
-	issues = new GroupList<GroupKind, IssueGroup, Issue>({
-		id: "issue",
-		groups: GROUPS,
-		expanded: ["assigned"],
-		ready: () => this.ready(),
-		run: () => this.latest,
-		asking: () => this.isVisible(),
-		peek: (kind, r) => known.peekGroup(kind, r.remote, r.login, r.on),
-		ask: (kind, r, force) => known.group(kind, r.remote, r.login, r.on, force),
-		more: (kind, r, loaded) => known.more(kind, r.remote, r.login, r.on, loaded),
-		rows: (page) => page.issues,
-		key: (issue) => issue.number,
-		open: (cx, issue) => this.openIssue(cx, issue),
-		cells: (kind, issue, hovered) => issueCells(kind, issue, hovered),
-		// Retry a failed refresh next tick even if the list itself has not changed.
-		failed: () => {
-			this.etag = null;
-		},
-	});
-	/** The Pull Requests tab's groups; they load only while that tab is shown. */
-	pulls = pullList({
-		ready: () => this.ready(),
-		run: () => this.latest,
-		asking: () => this.isVisible(),
-		details: this.details,
-		openFailed: (message) => {
-			this.openFailure = message;
-		},
-	});
-	notices = new Notices();
+/** Why the place is asked again: focus moved to another, the sidebar was shown, or ↻ was pressed. */
+type Refresh = "moved" | "shown" | "asked";
 
-	visible = false;
-	etag: string | null = null;
-	checking: object | null = null;
-	/** When this place's lists were last confirmed fresh (a successful change check), for the footer. */
-	checkedAt: number | null = null;
+export class Panel implements Role {
+	/** The place shown (the focused folder and its machine), and which refresh is the latest: older ones drop their results. */
+	private context: string | null = null;
+	private latest = 0;
+	// undefined: not known yet for this place.
+	private account: Account | undefined;
+	private remote: RemoteRepo | null | undefined;
+	private failure: Failure | undefined;
+	private loading = false;
+	/** The tab shown; each keeps its own state (folded groups and pages) while the other is shown. */
+	private tab: SidebarTab = "issues";
+	private details = new DetailTabs();
+	private openFailure: string | null = null;
+	private notices = new Notices();
+	/** The repository's issue list, checked for changes while the sidebar is shown. */
+	private poll = new ConditionalPoll();
+	/** When this place's lists were last confirmed fresh, for the footer. */
+	private checkedAt: number | null = null;
+	private host: ListHost = {
+		ready: () => this.ready(),
+		run: () => this.latest,
+		asking: () => this.isVisible(),
+		open: (cx, ref) => this.open(cx, ref),
+	};
+	/** Folded groups ask for nothing; which are expanded stays as the place changes. */
+	private issues = issueList(this.host, () => this.poll.invalidate());
+	/** They load only while their tab is shown. */
+	private pulls = pullList(this.host);
 
 	init(cx: AsyncContext): void {
 		cx.timer.every(POLL_SECONDS * 1000, (cx) => {
 			if (!this.isVisible()) {
-				this.visible = false;
+				this.poll.sync(this.context, false);
 				return;
 			}
 			if (!this.loading) {
@@ -110,64 +77,59 @@ export class Panel implements Role {
 		return Boolean(props()?.overlay) || sidebarVisible();
 	}
 
-	/** Only a changed list re-asks expanded groups. A shown/explicit refresh asks even on 304. */
-	private check(cx: Context, refresh = false, asked = false): void {
+	/** Only a changed list re-asks expanded groups; a refresh asks them even on 304. */
+	private check(cx: Context, refresh?: Refresh): void {
 		const r = this.ready(),
 			run = this.latest;
-		if (!r || !this.isVisible() || this.checking) return;
-		const checking = {};
-		this.checking = checking;
+		const request = r && this.poll.begin(refresh !== undefined);
+		if (!r || !request) return;
 		cx.spawn(async (cx) => {
-			const current = () => run === this.latest && this.checking === checking && this.isVisible();
-			let changed = false;
+			const current = () => run === this.latest && this.poll.current(request);
+			let change: Change | undefined;
 			try {
-				const result = await listChanges(`${r.remote.owner}/${r.remote.repo}`, this.etag, r.on);
+				change = await listChanges(`${r.remote.owner}/${r.remote.repo}`, request.etag, r.on);
 				if (!current()) return;
-				if (result.changed) {
-					this.etag = result.etag;
-					changed = true;
-				}
 				this.checkedAt = Date.now();
 				this.failure = undefined;
 			} catch (e) {
 				if (current()) this.failure = gh.failureOf(e);
 			} finally {
 				if (current()) {
-					if (changed || refresh) this.issues.load(cx, true);
+					if (change?.changed || refresh) this.issues.load(cx, true);
 					// PR lists have their own change check later (#34); a refresh asks the shown tab's groups now.
 					// Two of them are searches (30 a minute for the whole account, ADR 0006): kept pages under a minute
 					// old are reused, and only ↻ asks them all again.
-					if (refresh && this.tab === "prs") this.pulls.load(cx, asked);
+					if (refresh && this.tab === "prs") this.pulls.load(cx, refresh === "asked");
 					// Every finished check redraws: the footer shows a failed check and its recovery.
 					cx.notify();
 				}
-				if (this.checking === checking) this.checking = null;
+				this.poll.finish(request, change);
 			}
 		});
 	}
 
 	/** The gh account's login on the folder's machine and the remote, once both are known and usable. */
-	ready(): Ready | null {
+	private ready(): known.Ready | null {
 		const status = this.account?.status;
 		return this.remote && status?.ok && this.account
 			? { remote: this.remote, login: status.user, on: this.account.on, cwd: location().cwd }
 			: null;
 	}
 
-	/** Shows what is known about the focused place at once, then asks for what is stale (all of it when `force`, ↻). */
-	refresh(cx: Context, force = false, asked = false): void {
+	/** Shows what is known about the focused place at once, then asks for what is stale (all of it unless it only moved). */
+	private refresh(cx: Context, why: Refresh): void {
 		const where = location(),
 			run = ++this.latest,
 			current = () => run === this.latest,
-			context = JSON.stringify(where);
+			context = JSON.stringify(where),
+			force = why !== "moved";
 		// Another place has other rows: the pointer is over none of them until it moves.
 		if (context !== this.context) {
 			this.issues.hovered = this.pulls.hovered = null;
-			this.etag = null;
 			this.checkedAt = null;
 		}
-		this.checking = null;
 		this.context = context;
+		this.poll.sync(context, true);
 		// Never the previous place's facts: this place's known ones, or "…" until they arrive.
 		this.account = known.peekAccount(where.on);
 		this.remote = known.peekRemote(where);
@@ -177,8 +139,7 @@ export class Panel implements Role {
 		this.loading = true;
 		cx.spawn(async (cx) => {
 			try {
-				// git and gh both where the folder is (ADR 0003). account() never rejects: show its
-				// status even when git fails there.
+				// account() never rejects: show its status even when git fails there.
 				const [, remote] = await Promise.all([
 					known.account(where.on, force).then((a) => {
 						if (current()) this.account = a;
@@ -187,7 +148,7 @@ export class Panel implements Role {
 				]);
 				if (!current()) return;
 				this.remote = remote;
-				this.check(cx, true, asked);
+				this.check(cx, why);
 			} catch (e) {
 				if (current()) this.failure = gh.failureOf(e);
 			} finally {
@@ -203,15 +164,25 @@ export class Panel implements Role {
 	 * An issue closed or reopened in a reader: every kept group of its repository shows it at once,
 	 * then the shown expanded groups ask GitHub again (the change made them stale).
 	 */
-	receive(cx: Context): void {
-		const changes = this.notices
-			.take()
-			.filter(isIssueNotice)
-			.flatMap((n) => (n.state ? [n.state] : []));
+	private receive(cx: Context): void {
+		const changes = this.notices.take().flatMap((n) => (n.state ? [n.state] : []));
 		if (changes.length === 0) return;
 		changes.forEach(known.issueChanged);
 		this.issues.show();
 		this.issues.load(cx);
+	}
+
+	/** A click on a row opens (or selects) its reader tab. */
+	private open(cx: Context, ref: DetailRef): void {
+		this.openFailure = null;
+		cx.spawn(async (cx) => {
+			try {
+				await this.details.open(ref);
+			} catch (e) {
+				this.openFailure = e instanceof Error ? e.message : String(e);
+			}
+			cx.notify();
+		});
 	}
 
 	render(cx: Context): Element {
@@ -219,12 +190,12 @@ export class Panel implements Role {
 		this.details.deliver();
 		this.receive(cx);
 		// Follow the focused folder: live data re-renders us, so compare here.
-		const visible = this.isVisible();
-		const shown = visible && !this.visible;
-		this.visible = visible;
-		if (visible && (shown || locationKey() !== this.context)) this.refresh(cx, shown);
-		const t = colors();
 		const where = location();
+		const visible = this.isVisible();
+		if (!visible) this.poll.sync(this.context, false);
+		else if (!this.poll.shown) this.refresh(cx, "shown");
+		else if (JSON.stringify(where) !== this.context) this.refresh(cx, "moved");
+		const t = colors();
 		const overlay: string | undefined = props()?.overlay;
 		// A gh problem is still said first; otherwise a folder without a GitHub remote is an empty state.
 		const noRemote = this.remote === null && !(this.account && !this.account.status.ok);
@@ -241,7 +212,7 @@ export class Panel implements Role {
 				.when(!overlay, (el) => el.rounded(10).border_1().border_color(t.border))
 				.child(this.header(overlay, where.cwd ?? "no folder"))
 				.when(noRemote, (el) => el.child(this.noRemote(where.cwd)))
-				.when(!noRemote, (el) => el.child(this.tabs()).child(this.tab === "issues" ? this.list() : this.pullList()))
+				.when(!noRemote, (el) => el.child(this.tabs()).child(this.list()))
 				// A fixed sibling of the scrolling list: Herdr already shows the branch, so this says who gh is and how fresh.
 				.child(this.statusCard(where.on, where.cwd))
 		);
@@ -252,9 +223,10 @@ export class Panel implements Role {
 		const t = colors();
 		const busy = this.loading || this.issues.busy || this.pulls.busy;
 		const refresh = button("gh-refresh", "↻", "Refresh", (_e, cx) => {
-			this.refresh(cx, true, true);
+			this.refresh(cx, "asked");
 			cx.notify(); // a click doesn't redraw by itself: show the spinner now, not when it's done
 		});
+		const repo = this.remote ? `${this.remote.owner}/${this.remote.repo}` : "";
 		return h_flex()
 			.h(42)
 			.flex_none()
@@ -264,9 +236,9 @@ export class Panel implements Role {
 			.border_b(1)
 			.border_color(t.border)
 			.child(div().font_semibold().tooltip(context).child("GitHub"))
-			.child(div().flex_1().min_w(0).truncate().text_right().text_size(12).text_color(t.dim).child(this.repo()))
+			.child(div().flex_1().min_w(0).truncate().text_right().text_size(12).text_color(t.dim).child(repo))
 			.child(busy ? div().size(24).flex_none().flex().items_center().justify_center().child(spinner()) : refresh)
-			.when(overlay, (el) => el.child(button("gh-close", "×", "Close", () => closeOverlay(overlay!))));
+			.when(overlay !== undefined, (el) => el.child(button("gh-close", "×", "Close", () => closeOverlay(overlay!))));
 	}
 
 	/** The gh account on the folder's machine, then how fresh the lists are. What to do about a problem is said in the list. */
@@ -311,7 +283,7 @@ export class Panel implements Role {
 					.child(div().flex_none().text_color(t.dim).child("·"))
 					.child(div().flex_1().min_w(0).truncate().text_color(t.dim).child(s.machine)),
 			)
-			.when(s.sync, (el) =>
+			.when(s.sync !== null, (el) =>
 				el.child(
 					div()
 						.pl(18)
@@ -320,10 +292,6 @@ export class Panel implements Role {
 						.child(s.sync ?? ""),
 				),
 			);
-	}
-
-	private repo(): string {
-		return this.remote ? `${this.remote.owner}/${this.remote.repo}` : "";
 	}
 
 	/** No GitHub remote here: nothing is wrong, there is just no repository. Said calmly, in place of the tabs and lists. */
@@ -380,93 +348,30 @@ export class Panel implements Role {
 			);
 	}
 
-	/** The Pull Requests tab: gh, a missing repository or another shared problem in the list's place, else the groups. */
-	private pullList(): Element {
-		const t = colors();
-		const notice = issuesNotice({
-			account: this.account,
-			remote: this.remote,
-			failure: this.failure ?? this.pulls.notFound,
-		});
-		const problem = (text: string) => div().p(8).text_size(12).text_color(t.blocked).child(text);
-		return v_flex()
-			.id("gh-pulls")
-			.flex_1()
-			.min_h(0)
-			.overflow_y_scroll()
-			.p(6)
-			.gap(4)
-			.when(this.openFailure, (el) => el.child(problem(this.openFailure ?? "")))
-			.when(notice, (el) => el.child(problem(notice ?? "")))
-			.when(!notice && this.ready(), (el) => el.children(this.pulls.render()))
-			.when(!notice && !this.ready() && this.loading, (el) => el.child(div().p(8).text_color(t.dim).child("…")));
-	}
-
 	/**
-	 * The groups, or what stands in their place. A missing repository (404) or Issues turned off is the same for
-	 * every group: said once, in the list's place. Any other failure stays in its own group, beside the others' rows.
+	 * The shown tab's groups, or what stands in their place. A missing repository (404), gh or Issues turned off is
+	 * the same for every group: said once, in the list's place. Any other failure stays in its own group.
 	 */
 	private list(): Element {
 		const t = colors();
-		const notice = issuesNotice({
+		const list = this.tab === "issues" ? this.issues : this.pulls;
+		const notice = listNotice({
 			account: this.account,
 			remote: this.remote,
-			group: this.issues.anyPage,
-			failure: this.failure ?? this.issues.notFound,
+			issuesEnabled: this.tab === "issues" ? this.issues.anyPage?.issuesEnabled : undefined,
+			failure: this.failure ?? list.notFound,
 		});
 		const problem = (text: string) => div().p(8).text_size(12).text_color(t.blocked).child(text);
 		return v_flex()
-			.id("gh-list")
+			.id(`gh-list-${this.tab}`)
 			.flex_1()
 			.min_h(0)
 			.overflow_y_scroll()
 			.p(6)
 			.gap(4)
-			.when(this.openFailure, (el) => el.child(problem(this.openFailure ?? "")))
-			.when(notice, (el) => el.child(problem(notice ?? "")))
-			.when(!notice && this.ready(), (el) => el.children(this.issues.render()))
+			.when(this.openFailure !== null, (el) => el.child(problem(this.openFailure ?? "")))
+			.when(notice !== null, (el) => el.child(problem(notice ?? "")))
+			.when(!notice && this.ready() !== null, (el) => el.children(list.render()))
 			.when(!notice && !this.ready() && this.loading, (el) => el.child(div().p(8).text_color(t.dim).child("…")));
 	}
-
-	/** A click on an issue row opens (or selects) its tab. */
-	private openIssue(cx: Context, issue: Issue): void {
-		this.openFailure = null;
-		const repo = this.repo();
-		cx.spawn(async (cx) => {
-			try {
-				await this.details.open({ kind: "issue", repo, number: issue.number });
-			} catch (e) {
-				this.openFailure = e instanceof Error ? e.message : String(e);
-			}
-			cx.notify();
-		});
-	}
-}
-
-/** One issue: number and title; assignees and age, which hovering swaps for Copy and Open in browser. */
-function issueCells(kind: GroupKind, issue: Issue, hovered: boolean): Element[] {
-	const t = colors();
-	const start = [
-		div().flex_none().text_color(t.dim).child(`#${issue.number}`),
-		div().flex_1().min_w(0).truncate().child(issue.title),
-	];
-	if (hovered)
-		return [
-			...start,
-			button(`copy-${kind}-${issue.number}`, "#", `Copy #${issue.number}`, (_e, cx) =>
-				cx.write_to_clipboard(`#${issue.number}`),
-			),
-			button(`open-${kind}-${issue.number}`, "↗", "Open in browser", (_e, cx) => cx.open_url(issue.url)),
-		];
-	return [
-		...start,
-		div().flex_none().max_w(90).truncate().text_size(12).text_color(t.dim).child(issue.assignees.join(", ")),
-		div()
-			.flex_none()
-			.w(28)
-			.text_right()
-			.text_size(12)
-			.text_color(t.dim)
-			.child(relativeTime(issue.updatedAt, Date.now())),
-	];
 }
