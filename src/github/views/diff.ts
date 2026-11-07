@@ -4,7 +4,7 @@ import { div, type Element } from "gpui-kit";
 import { type DiffLine, parsePatch } from "../core/diff.ts";
 import type { ChangedFile } from "../core/files.ts";
 import { type ReviewThread, threadRow } from "../core/review-threads.ts";
-import type { ReviewThreads } from "./review-threads.ts";
+import { type ReviewThreads, THREAD_HEIGHT } from "./review-threads.ts";
 import { colors, link } from "./ui.ts";
 
 const ROW_HEIGHT = 22;
@@ -15,12 +15,14 @@ export class FileDiff {
 	private width = 0;
 	private scroll: VirtualListScrollHandle | null = null;
 	private target: number | null = null;
+	private viewportWidth = 320;
 
 	init(): void {
 		this.scroll = VirtualListScrollHandle.new();
 	}
 	jump(comment: number | null): void {
 		this.target = comment;
+		this.scroll?.scroll_to_item(0);
 	}
 
 	render(file: ChangedFile, discussions?: ReviewThreads): Element {
@@ -46,8 +48,8 @@ export class FileDiff {
 			for (const thread of anchors.get(row) ?? []) {
 				items.push({
 					key: thread.id,
-					height: 340,
-					element: discussions!.card(thread, row === null),
+					height: THREAD_HEIGHT,
+					element: discussions!.card(thread, row === null, this.viewportWidth),
 					commentIds: thread.comments.map((c) => c.id),
 				});
 			}
@@ -56,6 +58,13 @@ export class FileDiff {
 			items.push({ key: `line-${index}`, height: ROW_HEIGHT, line: row });
 			appendThreads(index);
 		});
+		// Native layout measures a representative row twice; keep it non-interactive even without a patch.
+		if (!rows.length && threads.length)
+			items.push({
+				key: "discussions",
+				height: ROW_HEIGHT,
+				line: { kind: "notice", text: "Discussions", oldLine: null, newLine: null, comment: null },
+			});
 		appendThreads(null);
 		if (this.target !== null) {
 			const index = items.findIndex((item) => item.commentIds?.includes(this.target!));
@@ -105,6 +114,7 @@ export class FileDiff {
 										(index) => items[index]!.key,
 										(range) => items.slice(range.start, range.end).map((item) => item.element ?? diffRow(item.line!)),
 									)
+										.with_item_to_measure_index(0)
 										.when(this.scroll !== null, (el) => el.track_scroll(this.scroll!))
 										.h_full()
 										.w_full()
@@ -125,6 +135,12 @@ export class FileDiff {
 			.min_h(0)
 			.min_w(0)
 			.overflow_hidden()
+			.on_size_change((size, cx) => {
+				if (size.width > 0 && size.width !== this.viewportWidth) {
+					this.viewportWidth = size.width;
+					cx.notify();
+				}
+			})
 			.child(header)
 			.when(Boolean(discussions), (el) => el.child(discussions!.status()))
 			.when(!file.patch && items.length > 0, (el) =>

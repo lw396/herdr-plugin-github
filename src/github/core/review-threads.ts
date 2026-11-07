@@ -1,5 +1,5 @@
 import type { DiffLine } from "./diff.ts";
-import { type Comment, parseComment } from "./discussion.ts";
+import { type Comment, parseComments } from "./discussion.ts";
 
 export interface ReviewThread {
 	id: string;
@@ -42,10 +42,10 @@ export function parseThreads(nodes: ThreadNode[], comments: unknown[], url: stri
 			resolved: n.isResolved,
 			canResolve: n.viewerCanResolve,
 			canUnresolve: n.viewerCanUnresolve,
-			comments: all
-				.filter((c) => c.id === root || c.in_reply_to_id === root)
-				.map((c) => parseComment(c, url))
-				.sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id - b.id),
+			comments: parseComments(
+				all.filter((c) => c.id === root || c.in_reply_to_id === root),
+				url,
+			),
 		};
 	});
 }

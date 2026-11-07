@@ -6,8 +6,10 @@ import type { ReviewThread } from "../core/review-threads.ts";
 import { Notices } from "../io/changes.ts";
 import { failureOf } from "../io/gh.ts";
 import { readPullThreads, replyPullThread, resolvePullThread } from "../io/pulls.ts";
-import { postCard } from "./detail.ts";
+import { type DetailHost, openLink, postCard } from "./detail.ts";
 import { button, colors, link, stop } from "./ui.ts";
+
+export const THREAD_HEIGHT = 340;
 
 export class ReviewThreads {
 	threads: ReviewThread[] = [];
@@ -19,12 +21,14 @@ export class ReviewThreads {
 	private failures = new Map<string, string>();
 	private boxes = new Map<string, TextareaState>();
 	private dirty = false;
-	constructor(privateRef: DetailRef, on: string | null) {
-		this.ref = privateRef;
+	constructor(ref: DetailRef, on: string | null, host: DetailHost) {
+		this.ref = ref;
 		this.on = on;
+		this.host = host;
 	}
 	private readonly ref: DetailRef;
 	private readonly on: string | null;
+	private readonly host: DetailHost;
 
 	load(cx: Context): void {
 		if (this.writing.size) {
@@ -70,14 +74,14 @@ export class ReviewThreads {
 	}
 
 	/** Built during render, NOT in the virtual list's deferred row callback. */
-	card(thread: ReviewThread, unavailable: boolean): Element {
+	card(thread: ReviewThread, unavailable: boolean, width: number): Element {
 		const t = colors();
 		const box = this.boxes.get(thread.id);
 		const busy = this.writing.has(thread.id);
 		const url = `https://github.com/${this.ref.repo}/pull/${this.ref.number}#discussion_r${thread.root}`;
 		return v_flex()
-			.h(340)
-			.w_full()
+			.h(THREAD_HEIGHT)
+			.w(width)
 			.min_w(0)
 			.p(12)
 			.gap(8)
@@ -109,7 +113,7 @@ export class ReviewThreads {
 						.child(
 							thread.outdated
 								? "Outdated — this discussion is no longer in the current diff."
-								: "This discussion's line is not in the available diff.",
+								: "This discussion is not attached to a line in the available diff.",
 						),
 				),
 			)
@@ -121,7 +125,11 @@ export class ReviewThreads {
 					.overflow_y_scrollbar()
 					.gap(8)
 					.children(
-						thread.comments.map((c) => postCard(`diff-comment-${c.id}`, c, "commented", (url, cx) => cx.open_url(url))),
+						thread.comments.map((c) =>
+							postCard(`diff-comment-${c.id}`, c, "commented", (url, cx) =>
+								openLink(cx, this.host, url, `https://github.com/${this.ref.repo}/pull/${this.ref.number}`),
+							),
+						),
 					),
 			)
 			.when(Boolean(box), (el) =>

@@ -2,8 +2,10 @@
 import { h_flex, v_flex } from "gpui-base";
 import { type Context, div, type Element } from "gpui-kit";
 import { type DetailRef, notVisible } from "../core/detail.ts";
+import type { ChangedFile } from "../core/files.ts";
 import type { Projects } from "../core/projects.ts";
 import type { PullDetail, ReviewState } from "../core/pull-detail.ts";
+import { Notices } from "../io/changes.ts";
 import { detailLocation } from "../io/detail-tabs.ts";
 import * as gh from "../io/gh.ts";
 import { readProjects } from "../io/projects.ts";
@@ -53,6 +55,8 @@ export class Pull {
 	private selected: string | null = null;
 	private diff = new FileDiff();
 	private discussions: ReviewThreads | null = null;
+	private notices = new Notices();
+	private missingFile: ChangedFile | null = null;
 
 	init(): void {
 		this.diff.init();
@@ -70,6 +74,7 @@ export class Pull {
 		this.entry = null;
 		this.files = null;
 		this.discussions = null;
+		this.missingFile = null;
 		this.diff.jump(null);
 		this.selected = null;
 		this.load(cx);
@@ -83,14 +88,14 @@ export class Pull {
 		cx.notify();
 	}
 
-	private load(cx: Context): void {
+	private load(cx: Context, refreshRelated = true): void {
 		const ref = this.ref;
 		const place = detailLocation(this.host.reader);
 		if (!ref || !place || !this.host.active("pr")) return;
-		this.discussions ??= new ReviewThreads(ref, place.on);
-		this.discussions.load(cx);
+		this.discussions ??= new ReviewThreads(ref, place.on, this.host);
+		if (refreshRelated) this.discussions.load(cx);
 		this.files ??= new ChangedFiles(`reader-${this.host.reader}`, ref, place.on, (cx, path) => this.select(cx, path));
-		if (this.selected !== null) this.files.load(cx, true);
+		if (refreshRelated && this.selected !== null) this.files.load(cx, true);
 		const entry: Loaded = { pull: this.entry?.pull, loading: true, projectsLoading: false };
 		this.entry = entry;
 		cx.spawn(async (cx) => {
@@ -124,6 +129,13 @@ export class Pull {
 	}
 
 	render(cx: Context, layout: DetailLayout): Element[] {
+		const on = detailLocation(this.host.reader)?.on;
+		if (
+			this.notices
+				.take()
+				.some((n) => n.repo === this.ref?.repo && n.number === this.ref.number && n.threads?.on === on && n.threads)
+		)
+			this.load(cx, false);
 		this.files?.sync(cx);
 		this.discussions?.sync(cx);
 		const ref = this.ref;
@@ -184,25 +196,22 @@ export class Pull {
 			this.files?.files &&
 			this.discussions?.threads.some((thread) => thread.path === this.selected)
 		) {
+			if (this.missingFile?.path !== this.selected)
+				this.missingFile = {
+					path: this.selected,
+					previousPath: null,
+					status: "unchanged",
+					additions: 0,
+					deletions: 0,
+					patch: null,
+					viewed: false,
+					url: this.entry?.pull?.url ?? `https://github.com/${this.ref?.repo}/pull/${this.ref?.number}`,
+				};
 			return v_flex()
 				.flex_1()
 				.min_h(0)
 				.child(quiet("This file is no longer in the changed-files list. Its discussions are shown below."))
-				.child(
-					this.diff.render(
-						{
-							path: this.selected,
-							previousPath: null,
-							status: "unchanged",
-							additions: 0,
-							deletions: 0,
-							patch: null,
-							viewed: false,
-							url: this.entry?.pull?.url ?? `https://github.com/${this.ref?.repo}/pull/${this.ref?.number}`,
-						},
-						this.discussions,
-					),
-				);
+				.child(this.diff.render(this.missingFile, this.discussions));
 		}
 		const failure = this.files?.failure ?? this.discussions?.failure;
 		const message =

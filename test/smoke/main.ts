@@ -51,7 +51,13 @@ export default class Smoke extends View {
 		const files = parseFiles(filePages.flat()).map((file, index) => ({ ...file, viewed: index === 0 }));
 		const fileRef = { kind: "pr", repo: "lw396/herdr-plugin-github", number: 35 } as const;
 		this.threadDiff.init();
-		this.discussions = new ReviewThreads(fileRef, "center");
+		this.discussions = new ReviewThreads(fileRef, "center", {
+			reader: "smoke-threads",
+			active: () => true,
+			previous: () => null,
+			follow: () => {},
+			back: () => {},
+		});
 		this.discussions.threads = parseThreads(
 			threadPages.data.repository.pullRequest.reviewThreads
 				.nodes as import("../../src/github/core/review-threads.ts").ThreadNode[],

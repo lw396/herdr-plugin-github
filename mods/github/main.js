@@ -10492,7 +10492,10 @@ function parseThreads(nodes, comments, url) {
       resolved: n.isResolved,
       canResolve: n.viewerCanResolve,
       canUnresolve: n.viewerCanUnresolve,
-      comments: all2.filter((c) => c.id === root || c.in_reply_to_id === root).map((c) => parseComment(c, url)).sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id - b.id)
+      comments: parseComments(
+        all2.filter((c) => c.id === root || c.in_reply_to_id === root),
+        url
+      )
     };
   });
 }
@@ -12026,8 +12029,8 @@ import { h_flex as h_flex10, v_flex as v_flex9 } from "gpui-base";
 import { div as div13 } from "gpui-kit";
 
 // src/github/views/diff.ts
-import { h_flex as h_flex8, Scrollbar, VirtualListScrollHandle, v_flex as v_flex7, v_virtual_list } from "gpui-base";
-import { div as div11 } from "gpui-kit";
+import { h_flex as h_flex9, Scrollbar, VirtualListScrollHandle, v_flex as v_flex8, v_virtual_list } from "gpui-base";
+import { div as div12 } from "gpui-kit";
 
 // src/github/core/diff.ts
 function parsePatch(patch) {
@@ -12080,102 +12083,10 @@ function parsePatch(patch) {
   return rows;
 }
 
-// src/github/views/diff.ts
-var ROW_HEIGHT = 22;
-var FileDiff = class {
-  file = null;
-  rows = [];
-  width = 0;
-  scroll = null;
-  target = null;
-  init() {
-    this.scroll = VirtualListScrollHandle.new();
-  }
-  jump(comment) {
-    this.target = comment;
-  }
-  render(file, discussions) {
-    const t = colors();
-    if (this.file !== file) {
-      this.file = file;
-      this.rows = parsePatch(file.patch ?? "");
-      this.width = this.rows.reduce((width, row) => Math.max(width, row.text.length * 16 + 152), 240);
-    }
-    const rows = this.rows;
-    const items = [];
-    const threads = (discussions?.threads ?? []).filter((thread) => thread.path === file.path);
-    const anchors = /* @__PURE__ */ new Map();
-    for (const thread of threads) {
-      const row = threadRow(rows, thread);
-      const group = anchors.get(row) ?? [];
-      group.push(thread);
-      anchors.set(row, group);
-    }
-    const appendThreads = (row) => {
-      for (const thread of anchors.get(row) ?? []) {
-        items.push({
-          key: thread.id,
-          height: 340,
-          element: discussions.card(thread, row === null),
-          commentIds: thread.comments.map((c) => c.id)
-        });
-      }
-    };
-    rows.forEach((row, index2) => {
-      items.push({ key: `line-${index2}`, height: ROW_HEIGHT, line: row });
-      appendThreads(index2);
-    });
-    appendThreads(null);
-    if (this.target !== null) {
-      const index2 = items.findIndex((item) => item.commentIds?.includes(this.target));
-      if (index2 >= 0) {
-        this.scroll?.scroll_to_item(index2, "center");
-        this.target = null;
-      }
-    }
-    const id = `pull-diff-${file.path}`;
-    const header = v_flex7().flex_none().px(16).py(8).gap(6).border_b(1).border_color(t.border).child(
-      h_flex8().gap(10).items_center().flex_wrap().child(div11().min_w(0).font_medium().child(file.path)).child(div11().text_color(t.done).child(`+${file.additions}`)).child(div11().text_color(t.blocked).child(`\u2212${file.deletions}`)).child(link(`${id}-browser`, file.url, "Open File on GitHub").text_size(12).text_color(t.accent))
-    ).when(
-      file.previousPath !== null,
-      (el) => el.child(div11().text_size(12).text_color(t.dim).child(`Renamed from ${file.previousPath}`))
-    );
-    const body = items.length > 0 ? div11().flex_1().min_h(0).min_w(0).relative().child(
-      div11().id(`${id}-horizontal`).size_full().overflow_x_scrollbar().child(
-        v_virtual_list(
-          id,
-          items.length,
-          items.map((item) => item.height),
-          (index2) => items[index2].key,
-          (range) => items.slice(range.start, range.end).map((item) => item.element ?? diffRow(item.line))
-        ).when(this.scroll !== null, (el) => el.track_scroll(this.scroll)).h_full().w_full().min_w(this.width)
-      )
-    ).child(Scrollbar.vertical(id).absolute().inset_0()) : div11().p(20).text_color(t.dim).child(
-      file.additions === 0 && file.deletions === 0 ? "No textual changes in this file. Open it on GitHub to view the full file." : "GitHub did not provide a patch for this file (it may be binary or too large). Open it on GitHub to view the changes."
-    );
-    return v_flex7().flex_1().min_h(0).min_w(0).overflow_hidden().child(header).when(Boolean(discussions), (el) => el.child(discussions.status())).when(
-      !file.patch && items.length > 0,
-      (el) => el.child(
-        div11().p(12).text_color(t.dim).child("GitHub did not provide a patch for this file. Discussions are shown below.")
-      )
-    ).child(body);
-  }
-};
-function diffRow(row) {
-  const t = colors();
-  const added = row.kind === "add", deleted = row.kind === "delete";
-  return h_flex8().h(ROW_HEIGHT).w_full().flex_none().items_center().font_family("monospace").text_size(13).when(added, (el) => el.bg(`${t.done}20`)).when(deleted, (el) => el.bg(`${t.blocked}20`)).when(row.kind === "hunk", (el) => el.bg(`${t.accent}18`).text_color(t.accent)).when(row.kind === "notice", (el) => el.text_color(t.dim)).child(
-    div11().w(54).flex_none().pr(8).text_right().text_color(t.dim).child(row.oldLine ?? "")
-  ).child(
-    div11().w(54).flex_none().pr(8).text_right().text_color(t.dim).child(row.newLine ?? "")
-  ).child(
-    div11().w(20).flex_none().text_color(added ? t.done : deleted ? t.blocked : t.dim).child(added ? "+" : deleted ? "\u2212" : "")
-  ).child(div11().flex_none().whitespace_nowrap().child(row.text));
-}
-
 // src/github/views/review-threads.ts
-import { h_flex as h_flex9, Textarea as Textarea2, TextareaState as TextareaState2, v_flex as v_flex8 } from "gpui-base";
-import { div as div12 } from "gpui-kit";
+import { h_flex as h_flex8, Textarea as Textarea2, TextareaState as TextareaState2, v_flex as v_flex7 } from "gpui-base";
+import { div as div11 } from "gpui-kit";
+var THREAD_HEIGHT = 340;
 var ReviewThreads = class {
   threads = [];
   loading = false;
@@ -12186,12 +12097,14 @@ var ReviewThreads = class {
   failures = /* @__PURE__ */ new Map();
   boxes = /* @__PURE__ */ new Map();
   dirty = false;
-  constructor(privateRef, on) {
-    this.ref = privateRef;
+  constructor(ref, on, host) {
+    this.ref = ref;
     this.on = on;
+    this.host = host;
   }
   ref;
   on;
+  host;
   load(cx) {
     if (this.writing.size) {
       this.dirty = true;
@@ -12223,41 +12136,48 @@ var ReviewThreads = class {
     }
   }
   status() {
-    return div12().text_size(12).text_color(this.failure ? colors().blocked : colors().dim).child(this.failure ?? (this.loading ? "Loading discussions\u2026" : ""));
+    return div11().text_size(12).text_color(this.failure ? colors().blocked : colors().dim).child(this.failure ?? (this.loading ? "Loading discussions\u2026" : ""));
   }
   /** Built during render, NOT in the virtual list's deferred row callback. */
-  card(thread, unavailable) {
+  card(thread, unavailable, width) {
     const t = colors();
     const box = this.boxes.get(thread.id);
     const busy = this.writing.has(thread.id);
     const url = `https://github.com/${this.ref.repo}/pull/${this.ref.number}#discussion_r${thread.root}`;
-    return v_flex8().h(340).w_full().min_w(0).p(12).gap(8).border_1().border_color(t.border).bg(t.surface).child(
-      h_flex9().gap(10).items_center().child(
-        div12().font_medium().child(thread.resolved ? "Resolved" : "Discussion")
+    return v_flex7().h(THREAD_HEIGHT).w(width).min_w(0).p(12).gap(8).border_1().border_color(t.border).bg(t.surface).child(
+      h_flex8().gap(10).items_center().child(
+        div11().font_medium().child(thread.resolved ? "Resolved" : "Discussion")
       ).child(
-        div12().text_size(12).text_color(t.dim).child(`${thread.side} ${thread.line ?? ""}`)
+        div11().text_size(12).text_color(t.dim).child(`${thread.side} ${thread.line ?? ""}`)
       ).child(link(`thread-browser-${thread.id}`, url, "Open on GitHub").text_size(12).text_color(t.accent))
     ).when(
       unavailable,
       (el) => el.child(
-        div12().text_size(12).text_color(t.dim).child(
-          thread.outdated ? "Outdated \u2014 this discussion is no longer in the current diff." : "This discussion's line is not in the available diff."
+        div11().text_size(12).text_color(t.dim).child(
+          thread.outdated ? "Outdated \u2014 this discussion is no longer in the current diff." : "This discussion is not attached to a line in the available diff."
         )
       )
     ).child(
-      v_flex8().id(`thread-comments-${thread.id}`).flex_1().min_h(0).overflow_y_scrollbar().gap(8).children(
-        thread.comments.map((c) => postCard(`diff-comment-${c.id}`, c, "commented", (url2, cx) => cx.open_url(url2)))
+      v_flex7().id(`thread-comments-${thread.id}`).flex_1().min_h(0).overflow_y_scrollbar().gap(8).children(
+        thread.comments.map(
+          (c) => postCard(
+            `diff-comment-${c.id}`,
+            c,
+            "commented",
+            (url2, cx) => openLink(cx, this.host, url2, `https://github.com/${this.ref.repo}/pull/${this.ref.number}`)
+          )
+        )
       )
     ).when(
       Boolean(box),
-      (el) => el.child(div12().h(66).on_mouse_down("left", stop).child(Textarea2.new(box).w_full().text_size(13)))
+      (el) => el.child(div11().h(66).on_mouse_down("left", stop).child(Textarea2.new(box).w_full().text_size(13)))
     ).when(
       this.failures.has(thread.id),
       (el) => el.child(
-        div12().text_size(12).text_color(t.blocked).child(this.failures.get(thread.id) ?? "")
+        div11().text_size(12).text_color(t.blocked).child(this.failures.get(thread.id) ?? "")
       )
     ).child(
-      h_flex9().gap(8).child(
+      h_flex8().gap(8).child(
         button(
           `reply-${thread.id}`,
           busy ? "Saving\u2026" : box ? "Comment" : "Reply",
@@ -12323,6 +12243,112 @@ var ReviewThreads = class {
   }
 };
 
+// src/github/views/diff.ts
+var ROW_HEIGHT = 22;
+var FileDiff = class {
+  file = null;
+  rows = [];
+  width = 0;
+  scroll = null;
+  target = null;
+  viewportWidth = 320;
+  init() {
+    this.scroll = VirtualListScrollHandle.new();
+  }
+  jump(comment) {
+    this.target = comment;
+    this.scroll?.scroll_to_item(0);
+  }
+  render(file, discussions) {
+    const t = colors();
+    if (this.file !== file) {
+      this.file = file;
+      this.rows = parsePatch(file.patch ?? "");
+      this.width = this.rows.reduce((width, row) => Math.max(width, row.text.length * 16 + 152), 240);
+    }
+    const rows = this.rows;
+    const items = [];
+    const threads = (discussions?.threads ?? []).filter((thread) => thread.path === file.path);
+    const anchors = /* @__PURE__ */ new Map();
+    for (const thread of threads) {
+      const row = threadRow(rows, thread);
+      const group = anchors.get(row) ?? [];
+      group.push(thread);
+      anchors.set(row, group);
+    }
+    const appendThreads = (row) => {
+      for (const thread of anchors.get(row) ?? []) {
+        items.push({
+          key: thread.id,
+          height: THREAD_HEIGHT,
+          element: discussions.card(thread, row === null, this.viewportWidth),
+          commentIds: thread.comments.map((c) => c.id)
+        });
+      }
+    };
+    rows.forEach((row, index2) => {
+      items.push({ key: `line-${index2}`, height: ROW_HEIGHT, line: row });
+      appendThreads(index2);
+    });
+    if (!rows.length && threads.length)
+      items.push({
+        key: "discussions",
+        height: ROW_HEIGHT,
+        line: { kind: "notice", text: "Discussions", oldLine: null, newLine: null, comment: null }
+      });
+    appendThreads(null);
+    if (this.target !== null) {
+      const index2 = items.findIndex((item) => item.commentIds?.includes(this.target));
+      if (index2 >= 0) {
+        this.scroll?.scroll_to_item(index2, "center");
+        this.target = null;
+      }
+    }
+    const id = `pull-diff-${file.path}`;
+    const header = v_flex8().flex_none().px(16).py(8).gap(6).border_b(1).border_color(t.border).child(
+      h_flex9().gap(10).items_center().flex_wrap().child(div12().min_w(0).font_medium().child(file.path)).child(div12().text_color(t.done).child(`+${file.additions}`)).child(div12().text_color(t.blocked).child(`\u2212${file.deletions}`)).child(link(`${id}-browser`, file.url, "Open File on GitHub").text_size(12).text_color(t.accent))
+    ).when(
+      file.previousPath !== null,
+      (el) => el.child(div12().text_size(12).text_color(t.dim).child(`Renamed from ${file.previousPath}`))
+    );
+    const body = items.length > 0 ? div12().flex_1().min_h(0).min_w(0).relative().child(
+      div12().id(`${id}-horizontal`).size_full().overflow_x_scrollbar().child(
+        v_virtual_list(
+          id,
+          items.length,
+          items.map((item) => item.height),
+          (index2) => items[index2].key,
+          (range) => items.slice(range.start, range.end).map((item) => item.element ?? diffRow(item.line))
+        ).with_item_to_measure_index(0).when(this.scroll !== null, (el) => el.track_scroll(this.scroll)).h_full().w_full().min_w(this.width)
+      )
+    ).child(Scrollbar.vertical(id).absolute().inset_0()) : div12().p(20).text_color(t.dim).child(
+      file.additions === 0 && file.deletions === 0 ? "No textual changes in this file. Open it on GitHub to view the full file." : "GitHub did not provide a patch for this file (it may be binary or too large). Open it on GitHub to view the changes."
+    );
+    return v_flex8().flex_1().min_h(0).min_w(0).overflow_hidden().on_size_change((size, cx) => {
+      if (size.width > 0 && size.width !== this.viewportWidth) {
+        this.viewportWidth = size.width;
+        cx.notify();
+      }
+    }).child(header).when(Boolean(discussions), (el) => el.child(discussions.status())).when(
+      !file.patch && items.length > 0,
+      (el) => el.child(
+        div12().p(12).text_color(t.dim).child("GitHub did not provide a patch for this file. Discussions are shown below.")
+      )
+    ).child(body);
+  }
+};
+function diffRow(row) {
+  const t = colors();
+  const added = row.kind === "add", deleted = row.kind === "delete";
+  return h_flex9().h(ROW_HEIGHT).w_full().flex_none().items_center().font_family("monospace").text_size(13).when(added, (el) => el.bg(`${t.done}20`)).when(deleted, (el) => el.bg(`${t.blocked}20`)).when(row.kind === "hunk", (el) => el.bg(`${t.accent}18`).text_color(t.accent)).when(row.kind === "notice", (el) => el.text_color(t.dim)).child(
+    div12().w(54).flex_none().pr(8).text_right().text_color(t.dim).child(row.oldLine ?? "")
+  ).child(
+    div12().w(54).flex_none().pr(8).text_right().text_color(t.dim).child(row.newLine ?? "")
+  ).child(
+    div12().w(20).flex_none().text_color(added ? t.done : deleted ? t.blocked : t.dim).child(added ? "+" : deleted ? "\u2212" : "")
+  ).child(div12().flex_none().whitespace_nowrap().child(row.text));
+}
+
 // src/github/views/pull.ts
 var REVIEWS = {
   requested: { label: "Awaiting requested review", icon: "\u25CB", color: "dim" },
@@ -12338,6 +12364,8 @@ var Pull = class {
   selected = null;
   diff = new FileDiff();
   discussions = null;
+  notices = new Notices();
+  missingFile = null;
   init() {
     this.diff.init();
   }
@@ -12352,6 +12380,7 @@ var Pull = class {
     this.entry = null;
     this.files = null;
     this.discussions = null;
+    this.missingFile = null;
     this.diff.jump(null);
     this.selected = null;
     this.load(cx);
@@ -12363,14 +12392,14 @@ var Pull = class {
     if (path !== null) this.files?.load(cx);
     cx.notify();
   }
-  load(cx) {
+  load(cx, refreshRelated = true) {
     const ref = this.ref;
     const place = detailLocation(this.host.reader);
     if (!ref || !place || !this.host.active("pr")) return;
-    this.discussions ??= new ReviewThreads(ref, place.on);
-    this.discussions.load(cx);
+    this.discussions ??= new ReviewThreads(ref, place.on, this.host);
+    if (refreshRelated) this.discussions.load(cx);
     this.files ??= new ChangedFiles(`reader-${this.host.reader}`, ref, place.on, (cx2, path) => this.select(cx2, path));
-    if (this.selected !== null) this.files.load(cx, true);
+    if (refreshRelated && this.selected !== null) this.files.load(cx, true);
     const entry = { pull: this.entry?.pull, loading: true, projectsLoading: false };
     this.entry = entry;
     cx.spawn(async (cx2) => {
@@ -12403,6 +12432,9 @@ var Pull = class {
     });
   }
   render(cx, layout2) {
+    const on = detailLocation(this.host.reader)?.on;
+    if (this.notices.take().some((n) => n.repo === this.ref?.repo && n.number === this.ref.number && n.threads?.on === on && n.threads))
+      this.load(cx, false);
     this.files?.sync(cx);
     this.discussions?.sync(cx);
     const ref = this.ref;
@@ -12443,21 +12475,18 @@ var Pull = class {
         )
       ).child(this.diff.render(file, this.discussions ?? void 0));
     if (this.selected && this.files?.files && this.discussions?.threads.some((thread) => thread.path === this.selected)) {
-      return v_flex9().flex_1().min_h(0).child(quiet("This file is no longer in the changed-files list. Its discussions are shown below.")).child(
-        this.diff.render(
-          {
-            path: this.selected,
-            previousPath: null,
-            status: "unchanged",
-            additions: 0,
-            deletions: 0,
-            patch: null,
-            viewed: false,
-            url: this.entry?.pull?.url ?? `https://github.com/${this.ref?.repo}/pull/${this.ref?.number}`
-          },
-          this.discussions
-        )
-      );
+      if (this.missingFile?.path !== this.selected)
+        this.missingFile = {
+          path: this.selected,
+          previousPath: null,
+          status: "unchanged",
+          additions: 0,
+          deletions: 0,
+          patch: null,
+          viewed: false,
+          url: this.entry?.pull?.url ?? `https://github.com/${this.ref?.repo}/pull/${this.ref?.number}`
+        };
+      return v_flex9().flex_1().min_h(0).child(quiet("This file is no longer in the changed-files list. Its discussions are shown below.")).child(this.diff.render(this.missingFile, this.discussions));
     }
     const failure = this.files?.failure ?? this.discussions?.failure;
     const message = failure ?? (this.files?.loading ? "Loading changed files\u2026" : "This file is not in the changed-files list. Choose another file in the GitHub sidebar or refresh.");
