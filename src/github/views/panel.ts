@@ -13,9 +13,10 @@ import {
 	noRepository,
 } from "../core/issues.ts";
 import type { RemoteRepo } from "../core/remote.ts";
+import { footerStatus, POLL_SECONDS } from "../core/status.ts";
 import { relativeTime } from "../core/time.ts";
 import { Notices } from "../io/changes.ts";
-import { currentBranch, location, locationKey } from "../io/context.ts";
+import { location, locationKey } from "../io/context.ts";
 import { DetailTabs } from "../io/detail-tabs.ts";
 import * as gh from "../io/gh.ts";
 import { listChanges } from "../io/issues.ts";
@@ -64,9 +65,11 @@ export class Panel implements Role {
 	visible = false;
 	etag: string | null = null;
 	checking: object | null = null;
+	/** When this place's lists were last confirmed fresh (a successful change check), for the footer. */
+	checkedAt: number | null = null;
 
 	init(cx: AsyncContext): void {
-		cx.timer.every(60_000, (cx) => {
+		cx.timer.every(POLL_SECONDS * 1000, (cx) => {
 			if (!this.isVisible()) {
 				this.visible = false;
 				return;
@@ -89,7 +92,6 @@ export class Panel implements Role {
 		cx.spawn(async (cx) => {
 			const current = () => run === this.latest && this.checking === checking && this.isVisible();
 			let changed = false;
-			let recovered = false;
 			try {
 				const result = await listChanges(`${r.remote.owner}/${r.remote.repo}`, this.etag, r.on);
 				if (!current()) return;
@@ -97,7 +99,7 @@ export class Panel implements Role {
 					this.etag = result.etag;
 					changed = true;
 				}
-				recovered = this.failure !== undefined;
+				this.checkedAt = Date.now();
 				this.failure = undefined;
 			} catch (e) {
 				if (current()) this.failure = gh.failureOf(e);
@@ -106,7 +108,8 @@ export class Panel implements Role {
 					if (changed || refresh) {
 						for (const { kind } of GROUPS) this.load(cx, kind, true);
 					}
-					if (changed || refresh || recovered || this.failure) cx.notify();
+					// Every finished check redraws: the footer shows a failed check and its recovery.
+					cx.notify();
 				}
 				if (this.checking === checking) this.checking = null;
 			}
@@ -131,6 +134,7 @@ export class Panel implements Role {
 		if (context !== this.context) {
 			this.hovered = null;
 			this.etag = null;
+			this.checkedAt = null;
 		}
 		this.checking = null;
 		this.context = context;
@@ -264,10 +268,6 @@ export class Panel implements Role {
 		const overlay: string | undefined = props()?.overlay;
 		// A gh problem is still said first; otherwise a folder without a GitHub remote is an empty state.
 		const noRemote = this.remote === null && !(this.account && !this.account.status.ok);
-		// What the sidebar says about gh: who is signed in where, or what to do on which machine.
-		const ghLine = this.account ? describeAccount(this.account) : null;
-		const context = `${ghLine?.text ?? "checking gh…"} · ${where.cwd ?? "no folder"}`;
-		const branch = currentBranch();
 		// A card like Herdr's Files and Changes panels; a window overlay gets Herdr's own frame instead.
 		return (
 			v_flex()
@@ -279,11 +279,11 @@ export class Panel implements Role {
 				.text_color(t.foreground)
 				.text_size(13)
 				.when(!overlay, (el) => el.rounded(10).border_1().border_color(t.border))
-				.child(this.header(overlay, context))
+				.child(this.header(overlay, where.cwd ?? "no folder"))
 				.when(noRemote, (el) => el.child(this.noRemote(where.cwd)))
 				.when(!noRemote, (el) => el.child(this.tabs()).child(this.list()))
-				// A fixed sibling of the scrolling list, independent of GitHub access or remote detection.
-				.children(branch ? [this.branchCard(branch)] : [])
+				// A fixed sibling of the scrolling list: Herdr already shows the branch, so this says who gh is and how fresh.
+				.child(this.statusCard(where.on, where.cwd))
 		);
 	}
 
@@ -309,25 +309,57 @@ export class Panel implements Role {
 			.when(overlay, (el) => el.child(button("gh-close", "×", "Close", () => closeOverlay(overlay!))));
 	}
 
-	/** Only Herdr's current branch for now; linked PRs and runs join this card later. */
-	private branchCard(branch: string): Element {
+	/** The gh account on the folder's machine, then how fresh the lists are. What to do about a problem is said in the list. */
+	private statusCard(on: string | null, cwd: string | null): Element {
 		const t = colors();
-		return h_flex()
-			.id("gh-current-branch")
+		const s = footerStatus(
+			{
+				account: this.account,
+				on,
+				checkedAt: this.checkedAt,
+				failed: this.failure !== undefined && this.ready() !== null,
+				polling: this.ready() !== null,
+			},
+			Date.now(),
+		);
+		const tip = `${this.account ? describeAccount(this.account).text : "checking gh…"} · ${cwd ?? "no folder"}`;
+		const dot =
+			s.tone === "pending"
+				? spinner(10)
+				: div()
+						.size(8)
+						.rounded(4)
+						.bg(s.tone === "ok" ? t.done : t.blocked);
+		return v_flex()
+			.id("gh-status")
 			.flex_none()
-			.min_h(44)
 			.px(14)
-			.py(10)
-			.gap(8)
-			.items_center()
+			.py(8)
+			.gap(2)
 			.border_t(1)
 			.border_color(t.border)
 			.bg(t.surface)
 			.text_size(12)
-			.tooltip(branch)
-			.accessibility_label(`Current branch: ${branch}`)
-			.child(div().flex_none().text_color(t.dim).child("⎇"))
-			.child(div().flex_1().min_w(0).truncate().font_medium().child(branch));
+			.tooltip(tip)
+			.accessibility_label(`${s.account} on ${s.machine}${s.sync ? `. ${s.sync}` : ""}`)
+			.child(
+				h_flex()
+					.gap(8)
+					.items_center()
+					.child(div().w(10).flex_none().flex().items_center().justify_center().child(dot))
+					.child(div().flex_none().max_w(160).truncate().font_medium().child(s.account))
+					.child(div().flex_none().text_color(t.dim).child("·"))
+					.child(div().flex_1().min_w(0).truncate().text_color(t.dim).child(s.machine)),
+			)
+			.when(s.sync, (el) =>
+				el.child(
+					div()
+						.pl(18)
+						.truncate()
+						.text_color(s.tone === "problem" ? t.blocked : t.dim)
+						.child(s.sync ?? ""),
+				),
+			);
 	}
 
 	private repo(): string {

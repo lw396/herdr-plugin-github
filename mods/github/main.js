@@ -9616,13 +9616,13 @@ var MINUTE = 6e4;
 var HOUR = 60 * MINUTE;
 var DAY = 24 * HOUR;
 function relativeTime(iso, now) {
-  const ago = now - Date.parse(iso);
-  if (ago < MINUTE) return "now";
-  if (ago < HOUR) return `${Math.floor(ago / MINUTE)}m`;
-  if (ago < DAY) return `${Math.floor(ago / HOUR)}h`;
-  if (ago < 30 * DAY) return `${Math.floor(ago / DAY)}d`;
-  if (ago < 365 * DAY) return `${Math.floor(ago / (30 * DAY))}mo`;
-  return `${Math.floor(ago / (365 * DAY))}y`;
+  const ago2 = now - Date.parse(iso);
+  if (ago2 < MINUTE) return "now";
+  if (ago2 < HOUR) return `${Math.floor(ago2 / MINUTE)}m`;
+  if (ago2 < DAY) return `${Math.floor(ago2 / HOUR)}h`;
+  if (ago2 < 30 * DAY) return `${Math.floor(ago2 / DAY)}d`;
+  if (ago2 < 365 * DAY) return `${Math.floor(ago2 / (30 * DAY))}mo`;
+  return `${Math.floor(ago2 / (365 * DAY))}y`;
 }
 
 // src/github/io/changes.ts
@@ -10456,20 +10456,23 @@ import { h_flex as h_flex3, v_flex as v_flex2 } from "gpui-base";
 import { div as div4, svg as svg4 } from "gpui-kit";
 import { closeOverlay, props as props3 } from "herdr";
 
+// src/github/core/status.ts
+var POLL_SECONDS = 60;
+var PROBLEM = { missing: "gh is not installed", auth: "Not signed in to gh", error: "gh is not working" };
+var ago = (ms) => ms < 6e4 ? "just now" : `${Math.floor(ms / 6e4)}m ago`;
+function footerStatus(s, now) {
+  const machine = s.on ?? "this computer";
+  if (!s.account) return { tone: "pending", account: "Checking gh\u2026", machine, sync: null };
+  const { status: status2 } = s.account;
+  if (!status2.ok) return { tone: "problem", account: PROBLEM[status2.reason], machine, sync: null };
+  if (!s.polling || !s.failed) return { tone: "ok", account: status2.user, machine, sync: null };
+  const last = s.checkedAt === null ? null : ago(Math.max(0, now - s.checkedAt));
+  const sync = last ? `Check failed \xB7 last ok ${last}` : `Check failed \xB7 retrying every ${POLL_SECONDS}s`;
+  return { tone: "problem", account: status2.user, machine, sync };
+}
+
 // src/github/io/context.ts
 import { focused as focused2, panes as panes3, spaces as spaces2 } from "herdr";
-
-// src/github/core/branch.ts
-function folderBranch(herdr, where) {
-  if (!where.cwd) return null;
-  const matching = herdr.panes.filter((p) => {
-    if (!p.terminal || p.cwd !== where.cwd) return false;
-    const on = p.terminal.includes("/") ? p.terminal.split("/")[0] : null;
-    return on === where.on;
-  });
-  const pane = matching.find((p) => p.pane === herdr.focused?.pane || p.terminal === herdr.focused?.terminal) ?? matching[0];
-  return pane?.branch || null;
-}
 
 // src/github/core/location.ts
 function focusedFolder(herdr, previous3) {
@@ -10489,9 +10492,6 @@ var previous2 = null;
 function location() {
   previous2 = focusedFolder({ spaces: spaces2(), panes: panes3(), focused: focused2() }, previous2);
   return previous2;
-}
-function currentBranch() {
-  return folderBranch({ panes: panes3(), focused: focused2() }, location());
 }
 var locationKey = () => JSON.stringify(location());
 
@@ -10680,8 +10680,10 @@ var Panel = class {
   visible = false;
   etag = null;
   checking = null;
+  /** When this place's lists were last confirmed fresh (a successful change check), for the footer. */
+  checkedAt = null;
   init(cx) {
-    cx.timer.every(6e4, (cx2) => {
+    cx.timer.every(POLL_SECONDS * 1e3, (cx2) => {
       if (!this.isVisible()) {
         this.visible = false;
         return;
@@ -10701,7 +10703,6 @@ var Panel = class {
     cx.spawn(async (cx2) => {
       const current = () => run3 === this.latest && this.checking === checking && this.isVisible();
       let changed = false;
-      let recovered = false;
       try {
         const result = await listChanges(`${r.remote.owner}/${r.remote.repo}`, this.etag, r.on);
         if (!current()) return;
@@ -10709,7 +10710,7 @@ var Panel = class {
           this.etag = result.etag;
           changed = true;
         }
-        recovered = this.failure !== void 0;
+        this.checkedAt = Date.now();
         this.failure = void 0;
       } catch (e) {
         if (current()) this.failure = failureOf(e);
@@ -10718,7 +10719,7 @@ var Panel = class {
           if (changed || refresh) {
             for (const { kind } of GROUPS) this.load(cx2, kind, true);
           }
-          if (changed || refresh || recovered || this.failure) cx2.notify();
+          cx2.notify();
         }
         if (this.checking === checking) this.checking = null;
       }
@@ -10735,6 +10736,7 @@ var Panel = class {
     if (context !== this.context) {
       this.hovered = null;
       this.etag = null;
+      this.checkedAt = null;
     }
     this.checking = null;
     this.context = context;
@@ -10848,10 +10850,7 @@ var Panel = class {
     const where = location();
     const overlay = props3()?.overlay;
     const noRemote = this.remote === null && !(this.account && !this.account.status.ok);
-    const ghLine = this.account ? describeAccount(this.account) : null;
-    const context = `${ghLine?.text ?? "checking gh\u2026"} \xB7 ${where.cwd ?? "no folder"}`;
-    const branch = currentBranch();
-    return v_flex2().id("github").size_full().min_h(0).overflow_hidden().bg(t.background).text_color(t.foreground).text_size(13).when(!overlay, (el) => el.rounded(10).border_1().border_color(t.border)).child(this.header(overlay, context)).when(noRemote, (el) => el.child(this.noRemote(where.cwd))).when(!noRemote, (el) => el.child(this.tabs()).child(this.list())).children(branch ? [this.branchCard(branch)] : []);
+    return v_flex2().id("github").size_full().min_h(0).overflow_hidden().bg(t.background).text_color(t.foreground).text_size(13).when(!overlay, (el) => el.rounded(10).border_1().border_color(t.border)).child(this.header(overlay, where.cwd ?? "no folder")).when(noRemote, (el) => el.child(this.noRemote(where.cwd))).when(!noRemote, (el) => el.child(this.tabs()).child(this.list())).child(this.statusCard(where.on, where.cwd));
   }
   /** The repository, then ↻ (Herdr's own spinner while anything loads, as its tab bar shows a working agent). */
   header(overlay, context) {
@@ -10863,10 +10862,29 @@ var Panel = class {
     });
     return h_flex3().h(42).flex_none().px(14).gap(8).items_center().border_b(1).border_color(t.border).child(div4().font_semibold().tooltip(context).child("GitHub")).child(div4().flex_1().min_w(0).truncate().text_right().text_size(12).text_color(t.dim).child(this.repo())).child(busy ? div4().size(24).flex_none().flex().items_center().justify_center().child(spinner()) : refresh).when(overlay, (el) => el.child(button("gh-close", "\xD7", "Close", () => closeOverlay(overlay))));
   }
-  /** Only Herdr's current branch for now; linked PRs and runs join this card later. */
-  branchCard(branch) {
+  /** The gh account on the folder's machine, then how fresh the lists are. What to do about a problem is said in the list. */
+  statusCard(on, cwd) {
     const t = colors();
-    return h_flex3().id("gh-current-branch").flex_none().min_h(44).px(14).py(10).gap(8).items_center().border_t(1).border_color(t.border).bg(t.surface).text_size(12).tooltip(branch).accessibility_label(`Current branch: ${branch}`).child(div4().flex_none().text_color(t.dim).child("\u2387")).child(div4().flex_1().min_w(0).truncate().font_medium().child(branch));
+    const s = footerStatus(
+      {
+        account: this.account,
+        on,
+        checkedAt: this.checkedAt,
+        failed: this.failure !== void 0 && this.ready() !== null,
+        polling: this.ready() !== null
+      },
+      Date.now()
+    );
+    const tip = `${this.account ? describeAccount(this.account).text : "checking gh\u2026"} \xB7 ${cwd ?? "no folder"}`;
+    const dot = s.tone === "pending" ? spinner(10) : div4().size(8).rounded(4).bg(s.tone === "ok" ? t.done : t.blocked);
+    return v_flex2().id("gh-status").flex_none().px(14).py(8).gap(2).border_t(1).border_color(t.border).bg(t.surface).text_size(12).tooltip(tip).accessibility_label(`${s.account} on ${s.machine}${s.sync ? `. ${s.sync}` : ""}`).child(
+      h_flex3().gap(8).items_center().child(div4().w(10).flex_none().flex().items_center().justify_center().child(dot)).child(div4().flex_none().max_w(160).truncate().font_medium().child(s.account)).child(div4().flex_none().text_color(t.dim).child("\xB7")).child(div4().flex_1().min_w(0).truncate().text_color(t.dim).child(s.machine))
+    ).when(
+      s.sync,
+      (el) => el.child(
+        div4().pl(18).truncate().text_color(s.tone === "problem" ? t.blocked : t.dim).child(s.sync ?? "")
+      )
+    );
   }
   repo() {
     return this.remote ? `${this.remote.owner}/${this.remote.repo}` : "";

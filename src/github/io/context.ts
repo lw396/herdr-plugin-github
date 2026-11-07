@@ -2,7 +2,6 @@
 // The rule is core/location.ts; this feeds it Herdr's live data and remembers the last answer,
 // so focus on a pane without a folder (a detail pane, Files) keeps the current repository.
 import { focused, panes, spaces } from "herdr";
-import { folderBranch } from "../core/branch.ts";
 import { focusedFolder, type Location } from "../core/location.ts";
 
 export type { Location };
@@ -12,11 +11,6 @@ let previous: Location | null = null;
 export function location(): Location {
 	previous = focusedFolder({ spaces: spaces(), panes: panes(), focused: focused() }, previous);
 	return previous;
-}
-
-/** Live branch metadata for the same kept folder as the sidebar; no git call or branch in its cache key. */
-export function currentBranch(): string | null {
-	return folderBranch({ panes: panes(), focused: focused() }, location());
 }
 
 /** A stable key for "the same place", to drop stale async results. */
