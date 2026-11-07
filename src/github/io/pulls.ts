@@ -1,5 +1,6 @@
 // Pull requests from GitHub, through gh on the folder's or reader tab's machine (ADR 0003).
 import { type PullDetail, parsePullDetail } from "../core/pull-detail.ts";
+import { parseChecks, pullTimeline } from "../core/pull-timeline.ts";
 import {
 	localPullsQuery,
 	type Pull,
@@ -33,7 +34,23 @@ export async function readPull(repo: string, number: number, on: string | null):
 		api(`repos/${repo}/issues/${number}/comments?per_page=100`, { on, paginate: true }),
 		api(`repos/${repo}/pulls/${number}/reviews?per_page=100`, { on, paginate: true }),
 	]);
-	return parsePullDetail(pull, issue, comments, reviews);
+	const detail = parsePullDetail(pull, issue, comments, reviews);
+	const sha = (pull as { head: { sha: string } }).head.sha;
+	const [events, inline, checks, statuses] = await Promise.all([
+		api(`repos/${repo}/issues/${number}/timeline?per_page=100`, { on, paginate: true }),
+		api(`repos/${repo}/pulls/${number}/comments?per_page=100`, { on, paginate: true }),
+		api(`repos/${repo}/commits/${sha}/check-runs?per_page=100`, { on, paginate: true }),
+		api(`repos/${repo}/commits/${sha}/statuses?per_page=100`, { on, paginate: true }),
+	]);
+	detail.timeline = pullTimeline(
+		detail.comments,
+		events as unknown[],
+		reviews as unknown[],
+		inline as unknown[],
+		detail.url,
+	);
+	detail.checks = parseChecks(Array.isArray(checks) ? checks : [checks], statuses as unknown[]);
+	return detail;
 }
 
 /** The local branches' latest PRs, in one batch. */

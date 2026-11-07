@@ -22,7 +22,14 @@ const projectsQuery = `query($owner: String!, $name: String!, $number: Int!, $af
 
 function replies(number: number) {
 	const prefix = `pull-cli-${number}`;
+	const sha = JSON.parse(fixture(`${prefix}.json`)).head.sha;
 	return {
+		[`~$ gh api repos/cli/cli/issues/${number}/timeline?per_page=100 --paginate --slurp`]: { stdout: "[[]]" },
+		[`~$ gh api repos/cli/cli/pulls/${number}/comments?per_page=100 --paginate --slurp`]: { stdout: "[[]]" },
+		[`~$ gh api repos/cli/cli/commits/${sha}/check-runs?per_page=100 --paginate --slurp`]: {
+			stdout: '[{"check_runs":[]}]',
+		},
+		[`~$ gh api repos/cli/cli/commits/${sha}/statuses?per_page=100 --paginate --slurp`]: { stdout: "[[]]" },
 		[`~$ gh api repos/cli/cli/pulls/${number}`]: { stdout: fixture(`${prefix}.json`) },
 		[`~$ gh api repos/cli/cli/issues/${number}`]: { stdout: fixture(`${prefix}-issue.json`) },
 		[`~$ gh api repos/cli/cli/issues/${number}/comments?per_page=100 --paginate --slurp`]: {
@@ -33,6 +40,50 @@ function replies(number: number) {
 		},
 	};
 }
+
+test("timeline pages and check-run object pages are read on the PR machine", async () => {
+	const responses = replies(14974);
+	const sha = JSON.parse(fixture("pull-cli-14974.json")).head.sha;
+	responses["~$ gh api repos/cli/cli/issues/14974/timeline?per_page=100 --paginate --slurp"] = {
+		stdout: JSON.stringify([
+			[{ id: 1, event: "closed", actor: { login: "owner" }, created_at: "2026-11-07T00:00:00Z" }],
+			[{ id: 2, event: "reopened", actor: { login: "owner" }, created_at: "2026-11-08T00:00:00Z" }],
+		]),
+	};
+	responses[`~$ gh api repos/cli/cli/commits/${sha}/check-runs?per_page=100 --paginate --slurp`] = {
+		stdout: JSON.stringify([
+			{
+				check_runs: [
+					{
+						id: 1,
+						name: "CI",
+						status: "queued",
+						conclusion: null,
+						html_url: "https://github.com/cli/cli/actions/runs/1",
+					},
+				],
+			},
+			{
+				check_runs: [
+					{
+						id: 2,
+						name: "Lint",
+						status: "in_progress",
+						conclusion: null,
+						html_url: "https://github.com/cli/cli/actions/runs/2",
+					},
+				],
+			},
+		]),
+	};
+	machine("center", responses);
+	const pull = await pulls.readPull("cli/cli", 14974, "center");
+	expect(pull.timeline?.map((x) => x.verb)).toEqual(["commented", "reviewed", "closed this", "reopened this"]);
+	expect(pull.checks?.map((x) => [x.name, x.status, x.duration])).toEqual([
+		["CI", "queued", "—"],
+		["Lint", "in_progress", "—"],
+	]);
+});
 
 test("PR Projects load every page through the reader's machine", async () => {
 	const query = projectsQuery;

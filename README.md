@@ -17,7 +17,8 @@ The mod uses GitHub CLI (`gh`) on the machine hosting the repository, so local a
 - **Issue and PR links** — links to the repository's issues and PRs open the appropriate reader in the same tab, with **←** to go back across both kinds; `#123` references open as issue links. Other links open in your browser.
 - **Comment, close and reopen** — post a new comment (⌘/Ctrl+Enter) or close and reopen an issue from its tab; the sidebar's groups update at once.
 - **Issue and PR metadata** — view colored labels, assignees, linked Projects, and milestones. PR descriptions also show reviewers with their review states and the source and target branches.
-- **Activity timeline** — see label and assignment changes between comments in chronological order.
+- **Activity timeline** — see label and assignment changes between comments in chronological order. PR descriptions also include reviews with inline discussions and code snippets, commits, force-pushes, merges, and close/reopen events.
+- **PR checks** — see check runs and commit statuses below the timeline, including recorded duration when available; open each check in your browser.
 - **Quick actions** — refresh an issue or PR, copy its URL, or open it in your browser.
 
 ## Requirements

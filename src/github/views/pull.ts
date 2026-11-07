@@ -1,4 +1,4 @@
-// The PR description page. Timeline events, files, review writes and polling follow in later tickets.
+// The PR description page: published timeline and checks. Writes, files and polling follow.
 import { h_flex, v_flex } from "gpui-base";
 import { type Context, div, type Element } from "gpui-kit";
 import { type DetailRef, notVisible } from "../core/detail.ts";
@@ -23,7 +23,7 @@ import {
 	quiet,
 	stateBadge,
 } from "./detail.ts";
-import { colors, PULL_STATES } from "./ui.ts";
+import { colors, link, PULL_STATES } from "./ui.ts";
 
 interface Loaded {
 	pull?: PullDetail;
@@ -118,7 +118,30 @@ export class Pull {
 			],
 			[
 				postCard("pull-body", pull, "opened this pull request", onLink),
-				...pull.comments.map((comment) => postCard(`pull-comment-${comment.id}`, comment, "commented", onLink)),
+				...(pull.timeline ?? []).map((item, index) =>
+					v_flex()
+						.gap(8)
+						.child(postCard(`pull-event-${index}`, item, item.verb, onLink))
+						.children(
+							item.discussion.map((d) =>
+								v_flex()
+									.gap(6)
+									.child(div().text_size(12).child(d.path))
+									.when(Boolean(d.snippet), (el) => el.child(div().text_size(12).child(d.snippet)))
+									.child(postCard(`inline-${d.comment.id}`, d.comment, "commented", onLink)),
+							),
+						),
+				),
+				v_flex()
+					.gap(10)
+					.child(div().font_semibold().child("Checks"))
+					.children(
+						(pull.checks ?? []).map((c) =>
+							c.url
+								? link(c.id, c.url, `${c.name} · ${c.status} · ${c.duration}`).text_color(t.accent)
+								: quiet(`${c.name} · ${c.status} · ${c.duration}`),
+						),
+					),
 			],
 			[
 				["Reviewers", this.reviewers(pull)],
