@@ -1,6 +1,7 @@
 import { Parser } from "htmlparser2";
 import type { Image, ImageReference, Nodes } from "mdast";
 import { fromMarkdown } from "mdast-util-from-markdown";
+import type { DetailRef } from "./detail.ts";
 
 /** A link resolved against the issue page (Herdr's QuickJS has the WHATWG URL); only HTTP(S) opens. */
 export function browserUrl(href: string, base: string): string | null {
@@ -31,6 +32,24 @@ function githubPath(href: string): string[] | null {
 function ownRepository(issueUrl: string): string | null {
 	const own = githubPath(issueUrl);
 	return own && own.length >= 2 ? `${own[0]}/${own[1]}` : null;
+}
+
+/** A PR or issue of the reader's repository; foreign repositories and non-detail paths stay in the browser. */
+export function detailLink(href: string, base: string): DetailRef | null {
+	const target = browserUrl(href, base);
+	const repo = ownRepository(base);
+	const path = target ? githubPath(target) : null;
+	if (
+		!repo ||
+		!path ||
+		path.length !== 4 ||
+		(path[2] !== "issues" && path[2] !== "pull") ||
+		!/^[1-9]\d*$/.test(path[3]!)
+	)
+		return null;
+	if (`${path[0]}/${path[1]}`.toLowerCase() !== repo.toLowerCase()) return null;
+	const number = Number(path[3]);
+	return Number.isSafeInteger(number) ? { kind: path[2] === "pull" ? "pr" : "issue", repo, number } : null;
 }
 
 /** An issue of the reader's own repository (the issue URL's repository), resolved like browserUrl; otherwise null. */

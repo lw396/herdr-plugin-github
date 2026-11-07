@@ -12,6 +12,37 @@ export interface DetailRef {
 export const detailKey = (ref: DetailRef): string =>
 	`${ref.repo.toLowerCase()}${ref.kind === "pr" ? "/pull/" : "#"}${ref.number}`;
 
+/** Session-only navigation; issue and PR links share one history inside a native tab. */
+export class DetailNavigation {
+	ref: DetailRef | null = null;
+	private history: DetailRef[] = [];
+
+	get previous(): DetailRef | null {
+		return this.history.at(-1) ?? null;
+	}
+
+	open(ref: DetailRef): boolean {
+		if (this.ref && detailKey(this.ref) === detailKey(ref)) return false;
+		this.history = [];
+		this.ref = ref;
+		return true;
+	}
+
+	follow(ref: DetailRef): boolean {
+		if (this.ref && detailKey(this.ref) === detailKey(ref)) return false;
+		if (this.ref) this.history.push(this.ref);
+		this.ref = ref;
+		return true;
+	}
+
+	back(): DetailRef | null {
+		const previous = this.history.pop();
+		if (!previous) return null;
+		this.ref = previous;
+		return previous;
+	}
+}
+
 /** Keep native tabs compact; the full repository remains visible in the reader's link tooltip. */
 export const detailTabName = (ref: { repo: string; number: number }): string =>
 	`#${ref.number} · ${ref.repo.split("/").at(-1)}`;

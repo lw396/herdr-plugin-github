@@ -10,9 +10,10 @@ import {
 	parseIssueChange,
 	parseIssueGroup,
 } from "../core/issues.ts";
-import { PROJECTS_QUERY, type Project, type Projects, projectPage, projectsFailure } from "../core/projects.ts";
+import type { Projects } from "../core/projects.ts";
 import type { RemoteRepo } from "../core/remote.ts";
 import { api, changes, graphql } from "./gh.ts";
+import { readProjects } from "./projects.ts";
 
 /** Detects repository list changes without spending a search request on unchanged groups. */
 export const listChanges = (repo: string, etag: string | null, on: string | null) =>
@@ -69,20 +70,6 @@ export async function setIssueState(
 }
 
 /** Optional metadata: lack of Projects access must never hide the issue body or comments. */
-export async function readIssueProjects(repo: string, number: number, on: string | null): Promise<Projects> {
-	const [owner, name] = repo.split("/");
-	const projects: Project[] = [];
-	let after: string | null = null;
-	try {
-		do {
-			const page = projectPage(await graphql(PROJECTS_QUERY, { owner: owner!, name: name!, number, after }, { on }));
-			projects.push(...page.projects);
-			if (!page.more) return { ok: true, projects };
-			if (!page.cursor || page.cursor === after) throw new Error("GitHub did not return the next Projects page.");
-			after = page.cursor;
-		} while (after);
-	} catch (e) {
-		return projectsFailure(e instanceof Error ? e.message : String(e), on);
-	}
-	return { ok: true, projects };
+export function readIssueProjects(repo: string, number: number, on: string | null): Promise<Projects> {
+	return readProjects({ kind: "issue", repo, number }, on);
 }

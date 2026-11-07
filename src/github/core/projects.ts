@@ -1,4 +1,5 @@
 // Read-only GitHub Projects (v2) associated with an issue; independent of the REST discussion.
+import type { DetailKind } from "./detail.ts";
 import { explain } from "./gh-args.ts";
 
 export interface Project {
@@ -18,20 +19,28 @@ export const PROJECTS_QUERY = `query($owner: String!, $name: String!, $number: I
   }
 }`;
 
+export const PULL_PROJECTS_QUERY = PROJECTS_QUERY.replace("issue(number:", "pullRequest(number:");
+
 interface ProjectData {
-	repository: {
-		issue: {
-			projectItems: {
-				pageInfo: { hasNextPage: boolean; endCursor: string | null };
-				nodes: { project: Project }[];
-			};
-		} | null;
-	} | null;
+	repository: Partial<
+		Record<
+			"issue" | "pullRequest",
+			{
+				projectItems: {
+					pageInfo: { hasNextPage: boolean; endCursor: string | null };
+					nodes: { project: Project }[];
+				};
+			} | null
+		>
+	> | null;
 }
 
-export function projectPage(data: unknown): { projects: Project[]; more: boolean; cursor: string | null } {
-	const items = (data as ProjectData)?.repository?.issue?.projectItems;
-	if (!items) throw new Error("GitHub did not return this issue's Projects.");
+export function projectPage(
+	data: unknown,
+	kind: DetailKind = "issue",
+): { projects: Project[]; more: boolean; cursor: string | null } {
+	const items = (data as ProjectData)?.repository?.[kind === "pr" ? "pullRequest" : "issue"]?.projectItems;
+	if (!items) throw new Error(`GitHub did not return this ${kind === "pr" ? "pull request" : "issue"}'s Projects.`);
 	return {
 		projects: items.nodes.map((n) => ({ title: n.project.title, url: n.project.url })),
 		more: items.pageInfo.hasNextPage,

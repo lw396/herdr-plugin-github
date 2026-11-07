@@ -8,10 +8,85 @@ var __export = (target, all2) => {
 import { View } from "gpui-kit";
 import { props as props5 } from "herdr";
 
-// src/github/views/issue.ts
-import { h_flex, Textarea, TextareaState, TextView, v_flex } from "gpui-base";
-import { div as div2, svg as svg2 } from "gpui-kit";
-import { nextCommand, props } from "herdr";
+// src/github/views/pane.ts
+import { h_flex } from "gpui-base";
+import { div as div2, image, svg as svg2 } from "gpui-kit";
+import { home, panes, props, run } from "herdr";
+
+// src/github/views/ui.ts
+import { div, svg } from "gpui-kit";
+import { theme } from "herdr";
+var colors = () => theme();
+var spinner = (size = 12) => svg("mods/github/assets/spinner.svg").size(size).flex_none().text_color(colors().dim).spin(900);
+var stop = (_e, cx) => cx.stop_propagation();
+function link(id, url, label) {
+  return div().id(id).cursor_pointer().on_mouse_down("left", stop).on_click((_e, cx) => {
+    cx.stop_propagation();
+    cx.open_url(url);
+  }).child(label);
+}
+function chip(label, border, background) {
+  return div().px(8).py(3).rounded(12).border_1().border_color(border).bg(background).text_size(12).child(label);
+}
+var square = (el) => el.size(36).flex_none().flex().items_center().justify_center();
+function button(id, label, tip, act) {
+  const t = colors();
+  return div().id(id).px(6).py(2).rounded(6).text_size(12).text_color(t.dim).cursor_pointer().hover((s) => s.bg(t.hover).text_color(t.foreground)).tooltip(tip).accessibility_label(tip).on_mouse_down("left", stop).on_click((e, cx) => {
+    cx.stop_propagation();
+    act(e, cx);
+  }).child(label);
+}
+
+// src/github/views/pane.ts
+function icon(program, color) {
+  if (!program?.icon) return null;
+  return program.tint ? svg2(program.icon).size(14).flex_none().text_color(color) : image(program.icon).w(14).h(14).flex_none();
+}
+function folder(cwd) {
+  if (!cwd) return "";
+  const h = home();
+  return cwd === h ? "~" : cwd.startsWith(`${h}/`) ? `~${cwd.slice(h.length)}` : cwd;
+}
+var Pane = class {
+  hovered = false;
+  init() {
+  }
+  button(id, picture, command, args) {
+    const t = colors();
+    return div2().id(id).p(3).rounded(4).text_color(t.dim).hover((s) => s.bg(t.hover).text_color(t.foreground)).on_click((_e, cx) => {
+      cx.stop_propagation();
+      run(command, args);
+    }).child(svg2(`mods/pane/${picture}.svg`).size(14));
+  }
+  render(_cx) {
+    const t = colors(), p = panes().find((p2) => p2.pane === props()?.pane);
+    if (!p) return div2();
+    const github = p.mod === "github";
+    const name = github ? "GitHub" : (p.program?.agent || p.program?.shell) && p.program.name || p.title || p.program?.name || "shell";
+    const pic = github ? svg2("mods/github/assets/github.svg").size(14).flex_none().text_color(t.dim) : icon(p.program, t.dim);
+    const st = p.status, pane = p.pane;
+    return h_flex().id(`pane-head-${pane}`).size_full().px(10).gap(8).items_center().bg(t.background).border_b(1).border_color(t.border).text_size(12).on_hover((hovered, cx) => {
+      this.hovered = hovered;
+      cx.notify();
+    }).on_click(() => run("pane.focus", { pane })).when(Boolean(pic), (el) => el.child(pic ?? div2())).child(div2().flex_none().truncate().max_w(260).font_medium().text_color(t.foreground).child(name)).child(div2().flex_1().truncate().text_color(t.dim).child(folder(p.cwd))).when(
+      st === "working",
+      (el) => el.child(svg2("mods/workspace-chrome/spinner.svg").size(12).flex_none().text_color(t.working).spin(900))
+    ).when(
+      st === "blocked",
+      (el) => el.child(
+        div2().flex_none().px(6).h(18).flex().items_center().rounded(5).bg(`${t.blocked}26`).text_size(10.5).font_semibold().text_color(t.blocked).child("Needs you")
+      )
+    ).when(st === "done", (el) => el.child(div2().size(7).flex_none().rounded(4).bg(t.done))).when(
+      this.hovered,
+      (el) => el.child(this.button(`ph-r-${pane}`, "split-right", "pane.split", { direction: "right", pane })).child(this.button(`ph-d-${pane}`, "split-down", "pane.split", { direction: "down", pane })).child(this.button(`ph-z-${pane}`, p.zoomed ? "unzoom" : "zoom", "pane.zoom", { pane })).child(this.button(`ph-x-${pane}`, "close", "pane.close", { pane }))
+    );
+  }
+};
+
+// src/github/views/panel.ts
+import { h_flex as h_flex3, v_flex as v_flex2 } from "gpui-base";
+import { div as div5, svg as svg4 } from "gpui-kit";
+import { closeOverlay, props as props2 } from "herdr";
 
 // src/github/core/gh-args.ts
 function apiArgs(path, options = {}) {
@@ -73,6 +148,387 @@ function describeAccount(account3) {
   return { ok: false, text: `gh on ${machine}: ${explain(status2.message)}` };
 }
 
+// src/github/core/issues.ts
+function parseIssueChange(data, repo) {
+  const i = data;
+  return {
+    repo,
+    state: i.state,
+    issue: {
+      number: i.number,
+      title: i.title,
+      assignees: i.assignees.map((a) => a.login),
+      updatedAt: i.updated_at,
+      url: i.html_url
+    }
+  };
+}
+var PAGE = 30;
+function groupQuery(kind) {
+  const assigned = kind === "assigned";
+  return `query($owner: String!, $name: String!, $after: String${assigned ? ", $assignee: String!" : ""}) {
+  repository(owner: $owner, name: $name) {
+    hasIssuesEnabled
+    issues(first: ${PAGE}, after: $after, states: ${kind === "closed" ? "CLOSED" : "OPEN"}${assigned ? ", filterBy: {assignee: $assignee}" : ""}, orderBy: {field: UPDATED_AT, direction: DESC}) {
+      totalCount
+      pageInfo { hasNextPage endCursor }
+      nodes { number title updatedAt url assignees(first: 10) { nodes { login } } }
+    }
+  }
+}`;
+}
+function groupVariables(kind, remote2, login, after) {
+  return { owner: remote2.owner, name: remote2.repo, after, ...kind === "assigned" ? { assignee: login } : {} };
+}
+function applyChange(kind, group2, change, login) {
+  const belongs = change.state === "closed" ? kind === "closed" : kind === "open" || kind === "assigned" && change.issue.assignees.some((a) => a.toLowerCase() === login.toLowerCase());
+  const others = group2.issues.filter((i) => i.number !== change.issue.number);
+  const shown = others.length < group2.issues.length;
+  if (belongs) return { ...group2, total: group2.total + (shown ? 0 : 1), issues: [change.issue, ...others] };
+  return shown ? { ...group2, total: group2.total - 1, issues: others } : group2;
+}
+function appendPage(group2, page) {
+  const shown = new Set(group2.issues.map((i) => i.number));
+  return { ...page, issues: [...group2.issues, ...page.issues.filter((i) => !shown.has(i.number))] };
+}
+function noRepository(cwd) {
+  const hint = "Focus a terminal in a repository cloned from GitHub.";
+  const name = cwd ? cwd.replace(/\/+$/, "").split("/").pop() || "/" : null;
+  return { title: "No GitHub repository", detail: name ? `${name} has no GitHub remote. ${hint}` : hint };
+}
+function issuesNotice(s) {
+  if (s.account && !s.account.status.ok) return describeAccount(s.account).text;
+  if (s.remote === null) return null;
+  const repo = s.remote ? `${s.remote.owner}/${s.remote.repo}` : "the repository";
+  if (s.failure?.notFound && s.remote) {
+    const user = s.account?.status.ok ? s.account.status.user : "this account";
+    return `${repo} (remote "${s.remote.remote}") isn't on GitHub, or ${user} can't see it. Check git remote -v.`;
+  }
+  if (s.failure) return s.failure.message;
+  if (s.group && !s.group.issuesEnabled) return `Issues are turned off for ${repo}.`;
+  return null;
+}
+function parseIssueGroup(data) {
+  const { hasIssuesEnabled, issues } = data.repository;
+  return {
+    issuesEnabled: hasIssuesEnabled,
+    total: issues.totalCount,
+    more: issues.pageInfo.hasNextPage,
+    cursor: issues.pageInfo.endCursor,
+    issues: issues.nodes.map((n) => ({
+      number: n.number,
+      title: n.title,
+      assignees: n.assignees.nodes.map((a) => a.login),
+      updatedAt: n.updatedAt,
+      url: n.url
+    }))
+  };
+}
+
+// src/github/core/status.ts
+var POLL_SECONDS = 60;
+var PROBLEM = { missing: "gh is not installed", auth: "Not signed in to gh", error: "gh is not working" };
+var ago = (ms) => ms < 6e4 ? "just now" : `${Math.floor(ms / 6e4)}m ago`;
+function footerStatus(s, now) {
+  const machine = s.on ?? "this computer";
+  if (!s.account) return { tone: "pending", account: "Checking gh\u2026", machine, sync: null };
+  const { status: status2 } = s.account;
+  if (!status2.ok) return { tone: "problem", account: PROBLEM[status2.reason], machine, sync: null };
+  if (!s.polling || !s.failed) return { tone: "ok", account: status2.user, machine, sync: null };
+  const last = s.checkedAt === null ? null : ago(Math.max(0, now - s.checkedAt));
+  const sync = last ? `Check failed \xB7 last ok ${last}` : `Check failed \xB7 retrying every ${POLL_SECONDS}s`;
+  return { tone: "problem", account: status2.user, machine, sync };
+}
+
+// src/github/core/time.ts
+var MINUTE = 6e4;
+var HOUR = 60 * MINUTE;
+var DAY = 24 * HOUR;
+function relativeTime(iso, now) {
+  const ago2 = now - Date.parse(iso);
+  if (ago2 < MINUTE) return "now";
+  if (ago2 < HOUR) return `${Math.floor(ago2 / MINUTE)}m`;
+  if (ago2 < DAY) return `${Math.floor(ago2 / HOUR)}h`;
+  if (ago2 < 30 * DAY) return `${Math.floor(ago2 / DAY)}d`;
+  if (ago2 < 365 * DAY) return `${Math.floor(ago2 / (30 * DAY))}mo`;
+  return `${Math.floor(ago2 / (365 * DAY))}y`;
+}
+
+// src/github/io/changes.ts
+import { setShared, shared } from "herdr";
+var isIssueNotice = (n) => n.kind !== "pr";
+var CHANGES = "github.changes";
+var KEPT = 20;
+var log = () => shared(CHANGES)?.notices ?? [];
+function announce(notice) {
+  const id = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  setShared(CHANGES, { notices: [...log(), { id, notice }].slice(-KEPT) });
+}
+var Notices = class {
+  taken = new Set(log().map((n) => n.id));
+  /** Notices announced since the last take, oldest first. */
+  take() {
+    const notices = log(), fresh = notices.filter((n) => !this.taken.has(n.id));
+    this.taken = new Set(notices.map((n) => n.id));
+    return fresh.map((n) => n.notice);
+  }
+};
+
+// src/github/io/context.ts
+import { focused, panes as panes2, spaces } from "herdr";
+
+// src/github/core/location.ts
+function focusedFolder(herdr, previous3) {
+  const space = herdr.spaces.find((s) => s.active), f = herdr.focused, id = space?.id ?? null;
+  if (f && !f.pane && f.terminal && f.cwd) {
+    return { cwd: f.cwd, on: f.terminal.includes("/") ? f.terminal.split("/")[0] ?? null : null, space: id };
+  }
+  const pane = f?.pane ? herdr.panes.find((p) => p.pane === f.pane) : null;
+  if (pane?.terminal)
+    return { cwd: pane.cwd || f?.cwd || space?.folder || null, on: space?.machine ?? null, space: id };
+  if (previous3 && previous3.space === id) return previous3;
+  return { cwd: space?.folder || null, on: space?.machine ?? null, space: id };
+}
+
+// src/github/io/context.ts
+var previous = null;
+function location() {
+  previous = focusedFolder({ spaces: spaces(), panes: panes2(), focused: focused() }, previous);
+  return previous;
+}
+var locationKey = () => JSON.stringify(location());
+
+// src/github/io/detail-tabs.ts
+import { exec, focused as focused2, panes as panes3, run as run2, setShared as setShared2, shared as shared2, spaces as spaces2 } from "herdr";
+
+// src/github/core/detail.ts
+var detailKey = (ref) => `${ref.repo.toLowerCase()}${ref.kind === "pr" ? "/pull/" : "#"}${ref.number}`;
+var DetailNavigation = class {
+  ref = null;
+  history = [];
+  get previous() {
+    return this.history.at(-1) ?? null;
+  }
+  open(ref) {
+    if (this.ref && detailKey(this.ref) === detailKey(ref)) return false;
+    this.history = [];
+    this.ref = ref;
+    return true;
+  }
+  follow(ref) {
+    if (this.ref && detailKey(this.ref) === detailKey(ref)) return false;
+    if (this.ref) this.history.push(this.ref);
+    this.ref = ref;
+    return true;
+  }
+  back() {
+    const previous3 = this.history.pop();
+    if (!previous3) return null;
+    this.ref = previous3;
+    return previous3;
+  }
+};
+var detailTabName = (ref) => `#${ref.number} \xB7 ${ref.repo.split("/").at(-1)}`;
+
+// src/github/io/detail-tabs.ts
+var READERS = "github.readers";
+var COMMAND = "detail:";
+var readers = () => shared2(READERS) ?? {};
+var reader = (id) => readers()[id];
+function remember(id, value) {
+  const live = new Set(spaces2().flatMap((s) => s.tabs.map((t) => t.id)));
+  const kept = Object.fromEntries(Object.entries(readers()).filter(([key, r]) => key === id || live.has(r.tab)));
+  setShared2(READERS, { ...kept, [id]: value });
+}
+function readyDetail(id) {
+  const r = reader(id);
+  if (r && r.ready !== r.request) remember(id, { ...r, ready: r.request });
+}
+var DetailTabs = class {
+  opened = /* @__PURE__ */ new Map();
+  pending = /* @__PURE__ */ new Map();
+  creating = /* @__PURE__ */ new Map();
+  async open(ref) {
+    const space = focused2()?.space, owner = spaces2().find((s) => s.id === space);
+    if (!space || !owner)
+      throw new Error(`Select a Herdr space before opening ${ref.kind === "pr" ? "a pull request" : "an issue"}.`);
+    const identity = `${space}:${detailKey(ref)}`;
+    const oldName = ref.kind === "issue" ? `#${ref.number} \xB7 ${ref.repo}`.toLowerCase() : null;
+    const openedId = this.opened.get(identity);
+    const existingId = (openedId && reader(openedId)?.identity === identity ? openedId : void 0) ?? Object.entries(readers()).find(
+      ([, r]) => r.identity === identity || !r.identity && owner.tabs.some((t) => t.id === r.tab && t.name.toLowerCase() === oldName)
+    )?.[0];
+    const existing = existingId ? reader(existingId) : void 0;
+    let target;
+    if (existingId && existing && panes3().some((p) => p.tab === existing.tab && p.mod === "github")) {
+      target = { id: existingId, reader: existing };
+    } else {
+      if (existingId) this.pending.delete(existingId);
+      let opening = this.creating.get(identity);
+      if (!opening) {
+        opening = this.create(space, ref);
+        this.creating.set(identity, opening);
+      }
+      try {
+        target = await opening;
+      } finally {
+        this.creating.delete(identity);
+      }
+      this.opened.set(identity, target.id);
+    }
+    this.pending.set(target.id, ref);
+    remember(target.id, { ...target.reader, identity, request: `${Date.now()}-${Math.random()}`, ready: null });
+    const tabName = owner.tabs.find((t) => t.id === target.reader.tab)?.name;
+    if (oldName && tabName?.toLowerCase() === oldName && tabName !== detailTabName(ref)) {
+      run2("tab.rename", { id: target.reader.tab, name: detailTabName(ref) });
+    }
+    if (focused2()?.space === space) run2("tab.select", { id: target.reader.tab });
+  }
+  async create(space, ref) {
+    const id = `detail-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    const args = { space, name: detailTabName(ref), mod: "github", props: { role: ref.kind, reader: id } };
+    const result = await exec("herdr-app", ["do", "tab.new", JSON.stringify(args)]);
+    if (result.code !== 0) throw new Error(result.stderr.trim() || result.stdout.trim() || "Could not open the tab.");
+    let reply;
+    try {
+      reply = JSON.parse(result.stdout);
+    } catch {
+      throw new Error("Herdr returned an unreadable tab reply.");
+    }
+    if (!reply.tab || reply.error) throw new Error(reply.error ?? "Herdr did not return a new tab.");
+    return { id, reader: { tab: reply.tab, pane: reply.pane, request: "", ready: null } };
+  }
+  /** Live shared metadata re-renders the sidebar: no polling and no persisted mailbox. */
+  deliver() {
+    const tab = focused2()?.tab;
+    if (!tab) return;
+    for (const [id, ref] of this.pending) {
+      const r = reader(id);
+      if (!r) {
+        this.pending.delete(id);
+        continue;
+      }
+      if (r.tab !== tab || r.ready !== r.request) continue;
+      this.pending.delete(id);
+      run2(`github.${COMMAND}${JSON.stringify({ reader: id, ...ref })}`);
+    }
+  }
+};
+function navigatedDetail(id, ref) {
+  const r = reader(id), space = spaces2().find((s) => s.tabs.some((t) => t.id === r?.tab));
+  if (!r || !space) return;
+  remember(id, { ...r, identity: `${space.id}:${detailKey(ref)}` });
+  const name = detailTabName(ref);
+  if (space.tabs.find((t) => t.id === r.tab)?.name !== name) run2("tab.rename", { id: r.tab, name });
+}
+function detailLocation(id) {
+  const r = reader(id);
+  if (!r) return null;
+  const space = spaces2().find((s) => s.tabs.some((t) => t.id === r.tab));
+  const tab = space?.tabs.find((t) => t.id === r.tab);
+  const all2 = panes3().filter((p) => p.tab === r.tab);
+  const pane = all2.find((p) => p.mod === "github" && (!r.pane || p.pane === r.pane));
+  if (!space || !tab || !pane) return null;
+  return {
+    pane: pane.pane,
+    on: space.machine,
+    visible: Boolean(space.active && tab.active && !all2.some((p) => p.zoomed && p.pane !== pane.pane))
+  };
+}
+function detailCommand(command, id) {
+  if (!command.startsWith(COMMAND)) return null;
+  try {
+    const value = JSON.parse(command.slice(COMMAND.length));
+    if (value?.reader !== id || value.kind !== "issue" && value.kind !== "pr" || typeof value.repo !== "string" || !/^[\w.-]+\/[\w.-]+$/.test(value.repo) || typeof value.number !== "number" || !Number.isSafeInteger(value.number) || value.number <= 0)
+      return null;
+    return { kind: value.kind, repo: value.repo, number: value.number };
+  } catch {
+    return null;
+  }
+}
+
+// src/github/io/gh.ts
+import { exec as exec2 } from "herdr";
+
+// src/github/core/conditional.ts
+function responseHeaders(stdout) {
+  const headers = stdout.split(/\r?\n\r?\n/, 1)[0] ?? "";
+  return {
+    status: Number(/^HTTP\/\S+\s+(\d+)/.exec(headers)?.[1]),
+    etag: /^etag:\s*(.+)$/im.exec(headers)?.[1]?.trim() ?? null
+  };
+}
+
+// src/github/io/gh.ts
+var GhError = class extends Error {
+  code;
+  stderr;
+  constructor(message, code, stderr) {
+    super(message);
+    this.code = code;
+    this.stderr = stderr;
+  }
+  /** Not there, or not visible to this account: REST's 404, GraphQL's NOT_FOUND for a repository. */
+  get notFound() {
+    return /HTTP 404|Could not resolve to a Repository/.test(this.stderr + this.message);
+  }
+};
+function failureOf(e) {
+  if (e instanceof GhError) return { notFound: e.notFound, message: explain(e.message) };
+  return { notFound: false, message: e instanceof Error ? e.message : String(e) };
+}
+var TRIES = 3;
+async function gh(args, where = {}, read = false) {
+  return (await execute(args, where, read)).stdout;
+}
+async function execute(args, where, read, conditional = false) {
+  for (let tried = 1; ; tried++) {
+    const r = await exec2("gh", args, { cwd: where.cwd ?? void 0, on: where.on ?? null });
+    if (r.code === 0 || conditional && responseHeaders(r.stdout).status === 304) return r;
+    if (!read || tried >= TRIES || !transient(r.stderr)) throw new GhError(errorMessage(r.stderr), r.code, r.stderr);
+  }
+}
+async function changes(path, etag, where = {}) {
+  const args = ["api", path, "--include"];
+  if (etag) args.push("-H", `If-None-Match: ${etag}`);
+  const result = await execute(args, where, true, true);
+  const headers = responseHeaders(result.stdout);
+  if (headers.status === 304) return { changed: false };
+  if (headers.status !== 200) throw new Error("GitHub did not return an HTTP 200 or 304 response.");
+  return { changed: true, etag: headers.etag };
+}
+var reads = (method) => !method || method.toUpperCase() === "GET";
+async function api(path, options = {}) {
+  const { cwd, on, ...rest } = options;
+  const data = parseJson(await gh(apiArgs(path, { ...rest, slurp: rest.paginate }), { cwd, on }, reads(rest.method)));
+  return rest.paginate && Array.isArray(data) && data.every(Array.isArray) ? data.flat() : data;
+}
+async function apiText(path, jq, options = {}) {
+  const { cwd, on, ...rest } = options;
+  return (await gh(apiArgs(path, { ...rest, jq }), { cwd, on }, reads(rest.method))).trim();
+}
+async function graphql(query, variables = {}, where = {}) {
+  const read = !/^\s*mutation\b/.test(query);
+  const out = parseJson(await gh(graphqlArgs(query, variables), where, read));
+  if (out?.errors?.length) throw new GhError(out.errors.map((e) => e.message).join("; "), 1, "");
+  return out?.data;
+}
+async function account(on) {
+  return { on, status: await status({ on }) };
+}
+async function status(where = {}) {
+  try {
+    const user = await apiText("user", ".login", where);
+    return { ok: true, user };
+  } catch (e) {
+    const message = e instanceof Error ? e.message : String(e);
+    if (!(e instanceof GhError))
+      return { ok: false, reason: /^cannot (run|start) gh\b/.test(message) ? "missing" : "error", message };
+    if (/gh auth login|HTTP 401/.test(e.stderr)) return { ok: false, reason: "auth", message };
+    return { ok: false, reason: "error", message };
+  }
+}
+
 // src/github/core/labels.ts
 function parseLabel(label) {
   return typeof label === "string" ? { name: label, color: null } : {
@@ -119,10 +575,6 @@ function parseActivity(data) {
     return [];
   });
 }
-
-// src/github/core/detail.ts
-var detailKey = (ref) => `${ref.repo.toLowerCase()}${ref.kind === "pr" ? "/pull/" : "#"}${ref.number}`;
-var detailTabName = (ref) => `#${ref.number} \xB7 ${ref.repo.split("/").at(-1)}`;
 
 // node_modules/entities/dist/decode-codepoint.js
 var c1 = [
@@ -5651,7 +6103,7 @@ function tokenizeFurtherStart(effects, ok, nok) {
 // node_modules/micromark-core-commonmark/lib/code-text.js
 var codeText = {
   name: "codeText",
-  previous,
+  previous: previous2,
   resolve: resolveCodeText,
   tokenize: tokenizeCodeText
 };
@@ -5692,7 +6144,7 @@ function resolveCodeText(events) {
   }
   return events;
 }
-function previous(code) {
+function previous2(code) {
   return code !== 96 || this.events[this.events.length - 1][1].type === "characterEscape";
 }
 function tokenizeCodeText(effects, ok, nok) {
@@ -9445,6 +9897,16 @@ function ownRepository(issueUrl) {
   const own3 = githubPath(issueUrl);
   return own3 && own3.length >= 2 ? `${own3[0]}/${own3[1]}` : null;
 }
+function detailLink(href, base) {
+  const target = browserUrl(href, base);
+  const repo = ownRepository(base);
+  const path = target ? githubPath(target) : null;
+  if (!repo || !path || path.length !== 4 || path[2] !== "issues" && path[2] !== "pull" || !/^[1-9]\d*$/.test(path[3]))
+    return null;
+  if (`${path[0]}/${path[1]}`.toLowerCase() !== repo.toLowerCase()) return null;
+  const number = Number(path[3]);
+  return Number.isSafeInteger(number) ? { kind: path[2] === "pull" ? "pr" : "issue", repo, number } : null;
+}
 function issueLink(href, issueUrl) {
   const target = browserUrl(href, issueUrl);
   const repo = ownRepository(issueUrl), own3 = repo?.split("/"), path = target ? githubPath(target) : null;
@@ -9453,7 +9915,7 @@ function issueLink(href, issueUrl) {
   const number = Number(path[3]);
   return Number.isSafeInteger(number) ? { repo, number } : null;
 }
-var link = (text3, url) => `[${text3}](<${url.replace(/</g, "%3C").replace(/>/g, "%3E")}>)`;
+var link2 = (text3, url) => `[${text3}](<${url.replace(/</g, "%3C").replace(/>/g, "%3E")}>)`;
 function readerMarkdown(body, issueUrl) {
   return links(body || "_No text._", issueUrl);
 }
@@ -9514,7 +9976,7 @@ function links(markdown, issueUrl) {
   patches.sort((a, b) => a.start - b.start);
   let result = "", copied = 0;
   for (const patch of patches) {
-    result += markdown.slice(copied, patch.start) + link(patch.text, patch.url);
+    result += markdown.slice(copied, patch.start) + link2(patch.text, patch.url);
     copied = patch.end;
   }
   return result + markdown.slice(copied);
@@ -9532,6 +9994,12 @@ var EMOJI = [
   ["rocket", "\u{1F680}"],
   ["eyes", "\u{1F440}"]
 ];
+function parseReactions(reactions = {}) {
+  return EMOJI.flatMap(([key, emoji]) => {
+    const count = reactions[key];
+    return typeof count === "number" && count > 0 ? [{ emoji, count }] : [];
+  });
+}
 function parseComment(comment, issueUrl) {
   const c = comment;
   return {
@@ -9540,10 +10008,7 @@ function parseComment(comment, issueUrl) {
     createdAt: c.created_at,
     body: c.body ?? "",
     markdown: readerMarkdown(c.body ?? "", issueUrl),
-    reactions: EMOJI.flatMap(([key, emoji]) => {
-      const count = c.reactions[key];
-      return typeof count === "number" && count > 0 ? [{ emoji, count }] : [];
-    })
+    reactions: parseReactions(c.reactions)
   };
 }
 function parseIssueDetail(issue, timeline) {
@@ -9565,366 +10030,6 @@ function parseIssueDetail(issue, timeline) {
   };
 }
 
-// src/github/core/issue-polling.ts
-var IssuePolling = class {
-  key = null;
-  visible = false;
-  etag = null;
-  failed = false;
-  pending = null;
-  /** Returns whether the newly shown issue needs an immediate refresh. */
-  sync(key, visible) {
-    const changed = key !== this.key;
-    const refresh = visible && key !== null && (changed || !this.visible);
-    if (changed) {
-      this.etag = null;
-      this.failed = false;
-    }
-    if (changed || !visible) this.pending = null;
-    this.key = key;
-    this.visible = visible;
-    return refresh;
-  }
-  /** A local/shared write wins over an older read, and the next tick checks again without a validator. */
-  invalidate() {
-    this.pending = null;
-    this.etag = null;
-  }
-  begin(force = false) {
-    if (!this.key || !this.visible || this.pending) return null;
-    const request = { etag: this.etag, force };
-    this.pending = request;
-    return request;
-  }
-  current(request) {
-    return this.visible && this.pending === request;
-  }
-  reload(request, change) {
-    return this.current(request) && (request.force || change.changed);
-  }
-  /** Finish only after any required discussion reload succeeds; failed reloads must be retried. */
-  finish(request, change) {
-    if (!this.current(request)) return { accepted: false, notify: false };
-    const notify = !change || change.changed || request.force || this.failed;
-    this.pending = null;
-    this.failed = !change;
-    if (!change) this.etag = null;
-    else if (change.changed) this.etag = change.etag;
-    return { accepted: true, notify };
-  }
-};
-
-// src/github/core/time.ts
-var MINUTE = 6e4;
-var HOUR = 60 * MINUTE;
-var DAY = 24 * HOUR;
-function relativeTime(iso, now) {
-  const ago2 = now - Date.parse(iso);
-  if (ago2 < MINUTE) return "now";
-  if (ago2 < HOUR) return `${Math.floor(ago2 / MINUTE)}m`;
-  if (ago2 < DAY) return `${Math.floor(ago2 / HOUR)}h`;
-  if (ago2 < 30 * DAY) return `${Math.floor(ago2 / DAY)}d`;
-  if (ago2 < 365 * DAY) return `${Math.floor(ago2 / (30 * DAY))}mo`;
-  return `${Math.floor(ago2 / (365 * DAY))}y`;
-}
-
-// src/github/io/changes.ts
-import { setShared, shared } from "herdr";
-var isIssueNotice = (n) => n.kind !== "pr";
-var CHANGES = "github.changes";
-var KEPT = 20;
-var log = () => shared(CHANGES)?.notices ?? [];
-function announce(notice) {
-  const id = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
-  setShared(CHANGES, { notices: [...log(), { id, notice }].slice(-KEPT) });
-}
-var Notices = class {
-  taken = new Set(log().map((n) => n.id));
-  /** Notices announced since the last take, oldest first. */
-  take() {
-    const notices = log(), fresh = notices.filter((n) => !this.taken.has(n.id));
-    this.taken = new Set(notices.map((n) => n.id));
-    return fresh.map((n) => n.notice);
-  }
-};
-
-// src/github/io/detail-tabs.ts
-import { exec, focused, panes, run, setShared as setShared2, shared as shared2, spaces } from "herdr";
-var READERS = "github.readers";
-var COMMAND = "detail:";
-var readers = () => shared2(READERS) ?? {};
-var reader = (id) => readers()[id];
-function remember(id, value) {
-  const live = new Set(spaces().flatMap((s) => s.tabs.map((t) => t.id)));
-  const kept = Object.fromEntries(Object.entries(readers()).filter(([key, r]) => key === id || live.has(r.tab)));
-  setShared2(READERS, { ...kept, [id]: value });
-}
-function readyDetail(id) {
-  const r = reader(id);
-  if (r && r.ready !== r.request) remember(id, { ...r, ready: r.request });
-}
-var DetailTabs = class {
-  opened = /* @__PURE__ */ new Map();
-  pending = /* @__PURE__ */ new Map();
-  creating = /* @__PURE__ */ new Map();
-  async open(ref) {
-    const space = focused()?.space, owner = spaces().find((s) => s.id === space);
-    if (!space || !owner)
-      throw new Error(`Select a Herdr space before opening ${ref.kind === "pr" ? "a pull request" : "an issue"}.`);
-    const identity = `${space}:${detailKey(ref)}`;
-    const oldName = ref.kind === "issue" ? `#${ref.number} \xB7 ${ref.repo}`.toLowerCase() : null;
-    const openedId = this.opened.get(identity);
-    const existingId = (openedId && reader(openedId)?.identity === identity ? openedId : void 0) ?? Object.entries(readers()).find(
-      ([, r]) => r.identity === identity || !r.identity && owner.tabs.some((t) => t.id === r.tab && t.name.toLowerCase() === oldName)
-    )?.[0];
-    const existing = existingId ? reader(existingId) : void 0;
-    let target;
-    if (existingId && existing && panes().some((p) => p.tab === existing.tab && p.mod === "github")) {
-      target = { id: existingId, reader: existing };
-    } else {
-      if (existingId) this.pending.delete(existingId);
-      let opening = this.creating.get(identity);
-      if (!opening) {
-        opening = this.create(space, ref);
-        this.creating.set(identity, opening);
-      }
-      try {
-        target = await opening;
-      } finally {
-        this.creating.delete(identity);
-      }
-      this.opened.set(identity, target.id);
-    }
-    this.pending.set(target.id, ref);
-    remember(target.id, { ...target.reader, identity, request: `${Date.now()}-${Math.random()}`, ready: null });
-    const tabName = owner.tabs.find((t) => t.id === target.reader.tab)?.name;
-    if (oldName && tabName?.toLowerCase() === oldName && tabName !== detailTabName(ref)) {
-      run("tab.rename", { id: target.reader.tab, name: detailTabName(ref) });
-    }
-    if (focused()?.space === space) run("tab.select", { id: target.reader.tab });
-  }
-  async create(space, ref) {
-    const id = `detail-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-    const args = { space, name: detailTabName(ref), mod: "github", props: { role: ref.kind, reader: id } };
-    const result = await exec("herdr-app", ["do", "tab.new", JSON.stringify(args)]);
-    if (result.code !== 0) throw new Error(result.stderr.trim() || result.stdout.trim() || "Could not open the tab.");
-    let reply;
-    try {
-      reply = JSON.parse(result.stdout);
-    } catch {
-      throw new Error("Herdr returned an unreadable tab reply.");
-    }
-    if (!reply.tab || reply.error) throw new Error(reply.error ?? "Herdr did not return a new tab.");
-    return { id, reader: { tab: reply.tab, pane: reply.pane, request: "", ready: null } };
-  }
-  /** Live shared metadata re-renders the sidebar: no polling and no persisted mailbox. */
-  deliver() {
-    const tab = focused()?.tab;
-    if (!tab) return;
-    for (const [id, ref] of this.pending) {
-      const r = reader(id);
-      if (!r) {
-        this.pending.delete(id);
-        continue;
-      }
-      if (r.tab !== tab || r.ready !== r.request) continue;
-      this.pending.delete(id);
-      run(`github.${COMMAND}${JSON.stringify({ reader: id, ...ref })}`);
-    }
-  }
-};
-function navigatedDetail(id, ref) {
-  const r = reader(id), space = spaces().find((s) => s.tabs.some((t) => t.id === r?.tab));
-  if (!r || !space) return;
-  remember(id, { ...r, identity: `${space.id}:${detailKey(ref)}` });
-  const name = detailTabName(ref);
-  if (space.tabs.find((t) => t.id === r.tab)?.name !== name) run("tab.rename", { id: r.tab, name });
-}
-function detailLocation(id) {
-  const r = reader(id);
-  if (!r) return null;
-  const space = spaces().find((s) => s.tabs.some((t) => t.id === r.tab));
-  const tab = space?.tabs.find((t) => t.id === r.tab);
-  const all2 = panes().filter((p) => p.tab === r.tab);
-  const pane = all2.find((p) => p.mod === "github" && (!r.pane || p.pane === r.pane));
-  if (!space || !tab || !pane) return null;
-  return {
-    pane: pane.pane,
-    on: space.machine,
-    visible: Boolean(space.active && tab.active && !all2.some((p) => p.zoomed && p.pane !== pane.pane))
-  };
-}
-function detailCommand(command, id) {
-  if (!command.startsWith(COMMAND)) return null;
-  try {
-    const value = JSON.parse(command.slice(COMMAND.length));
-    if (value?.reader !== id || value.kind !== "issue" && value.kind !== "pr" || typeof value.repo !== "string" || !/^[\w.-]+\/[\w.-]+$/.test(value.repo) || typeof value.number !== "number" || !Number.isSafeInteger(value.number) || value.number <= 0)
-      return null;
-    return { kind: value.kind, repo: value.repo, number: value.number };
-  } catch {
-    return null;
-  }
-}
-
-// src/github/io/gh.ts
-import { exec as exec2 } from "herdr";
-
-// src/github/core/conditional.ts
-function responseHeaders(stdout) {
-  const headers = stdout.split(/\r?\n\r?\n/, 1)[0] ?? "";
-  return {
-    status: Number(/^HTTP\/\S+\s+(\d+)/.exec(headers)?.[1]),
-    etag: /^etag:\s*(.+)$/im.exec(headers)?.[1]?.trim() ?? null
-  };
-}
-
-// src/github/io/gh.ts
-var GhError = class extends Error {
-  code;
-  stderr;
-  constructor(message, code, stderr) {
-    super(message);
-    this.code = code;
-    this.stderr = stderr;
-  }
-  /** Not there, or not visible to this account: REST's 404, GraphQL's NOT_FOUND for a repository. */
-  get notFound() {
-    return /HTTP 404|Could not resolve to a Repository/.test(this.stderr + this.message);
-  }
-};
-function failureOf(e) {
-  if (e instanceof GhError) return { notFound: e.notFound, message: explain(e.message) };
-  return { notFound: false, message: e instanceof Error ? e.message : String(e) };
-}
-var TRIES = 3;
-async function gh(args, where = {}, read = false) {
-  return (await execute(args, where, read)).stdout;
-}
-async function execute(args, where, read, conditional = false) {
-  for (let tried = 1; ; tried++) {
-    const r = await exec2("gh", args, { cwd: where.cwd ?? void 0, on: where.on ?? null });
-    if (r.code === 0 || conditional && responseHeaders(r.stdout).status === 304) return r;
-    if (!read || tried >= TRIES || !transient(r.stderr)) throw new GhError(errorMessage(r.stderr), r.code, r.stderr);
-  }
-}
-async function changes(path, etag, where = {}) {
-  const args = ["api", path, "--include"];
-  if (etag) args.push("-H", `If-None-Match: ${etag}`);
-  const result = await execute(args, where, true, true);
-  const headers = responseHeaders(result.stdout);
-  if (headers.status === 304) return { changed: false };
-  if (headers.status !== 200) throw new Error("GitHub did not return an HTTP 200 or 304 response.");
-  return { changed: true, etag: headers.etag };
-}
-var reads = (method) => !method || method.toUpperCase() === "GET";
-async function api(path, options = {}) {
-  const { cwd, on, ...rest } = options;
-  const data = parseJson(await gh(apiArgs(path, { ...rest, slurp: rest.paginate }), { cwd, on }, reads(rest.method)));
-  return rest.paginate && Array.isArray(data) && data.every(Array.isArray) ? data.flat() : data;
-}
-async function apiText(path, jq, options = {}) {
-  const { cwd, on, ...rest } = options;
-  return (await gh(apiArgs(path, { ...rest, jq }), { cwd, on }, reads(rest.method))).trim();
-}
-async function graphql(query, variables = {}, where = {}) {
-  const read = !/^\s*mutation\b/.test(query);
-  const out = parseJson(await gh(graphqlArgs(query, variables), where, read));
-  if (out?.errors?.length) throw new GhError(out.errors.map((e) => e.message).join("; "), 1, "");
-  return out?.data;
-}
-async function account(on) {
-  return { on, status: await status({ on }) };
-}
-async function status(where = {}) {
-  try {
-    const user = await apiText("user", ".login", where);
-    return { ok: true, user };
-  } catch (e) {
-    const message = e instanceof Error ? e.message : String(e);
-    if (!(e instanceof GhError))
-      return { ok: false, reason: /^cannot (run|start) gh\b/.test(message) ? "missing" : "error", message };
-    if (/gh auth login|HTTP 401/.test(e.stderr)) return { ok: false, reason: "auth", message };
-    return { ok: false, reason: "error", message };
-  }
-}
-
-// src/github/core/issues.ts
-function parseIssueChange(data, repo) {
-  const i = data;
-  return {
-    repo,
-    state: i.state,
-    issue: {
-      number: i.number,
-      title: i.title,
-      assignees: i.assignees.map((a) => a.login),
-      updatedAt: i.updated_at,
-      url: i.html_url
-    }
-  };
-}
-var PAGE = 30;
-function groupQuery(kind) {
-  const assigned = kind === "assigned";
-  return `query($owner: String!, $name: String!, $after: String${assigned ? ", $assignee: String!" : ""}) {
-  repository(owner: $owner, name: $name) {
-    hasIssuesEnabled
-    issues(first: ${PAGE}, after: $after, states: ${kind === "closed" ? "CLOSED" : "OPEN"}${assigned ? ", filterBy: {assignee: $assignee}" : ""}, orderBy: {field: UPDATED_AT, direction: DESC}) {
-      totalCount
-      pageInfo { hasNextPage endCursor }
-      nodes { number title updatedAt url assignees(first: 10) { nodes { login } } }
-    }
-  }
-}`;
-}
-function groupVariables(kind, remote2, login, after) {
-  return { owner: remote2.owner, name: remote2.repo, after, ...kind === "assigned" ? { assignee: login } : {} };
-}
-function applyChange(kind, group2, change, login) {
-  const belongs = change.state === "closed" ? kind === "closed" : kind === "open" || kind === "assigned" && change.issue.assignees.some((a) => a.toLowerCase() === login.toLowerCase());
-  const others = group2.issues.filter((i) => i.number !== change.issue.number);
-  const shown = others.length < group2.issues.length;
-  if (belongs) return { ...group2, total: group2.total + (shown ? 0 : 1), issues: [change.issue, ...others] };
-  return shown ? { ...group2, total: group2.total - 1, issues: others } : group2;
-}
-function appendPage(group2, page) {
-  const shown = new Set(group2.issues.map((i) => i.number));
-  return { ...page, issues: [...group2.issues, ...page.issues.filter((i) => !shown.has(i.number))] };
-}
-function noRepository(cwd) {
-  const hint = "Focus a terminal in a repository cloned from GitHub.";
-  const name = cwd ? cwd.replace(/\/+$/, "").split("/").pop() || "/" : null;
-  return { title: "No GitHub repository", detail: name ? `${name} has no GitHub remote. ${hint}` : hint };
-}
-function issuesNotice(s) {
-  if (s.account && !s.account.status.ok) return describeAccount(s.account).text;
-  if (s.remote === null) return null;
-  const repo = s.remote ? `${s.remote.owner}/${s.remote.repo}` : "the repository";
-  if (s.failure?.notFound && s.remote) {
-    const user = s.account?.status.ok ? s.account.status.user : "this account";
-    return `${repo} (remote "${s.remote.remote}") isn't on GitHub, or ${user} can't see it. Check git remote -v.`;
-  }
-  if (s.failure) return s.failure.message;
-  if (s.group && !s.group.issuesEnabled) return `Issues are turned off for ${repo}.`;
-  return null;
-}
-function parseIssueGroup(data) {
-  const { hasIssuesEnabled, issues } = data.repository;
-  return {
-    issuesEnabled: hasIssuesEnabled,
-    total: issues.totalCount,
-    more: issues.pageInfo.hasNextPage,
-    cursor: issues.pageInfo.endCursor,
-    issues: issues.nodes.map((n) => ({
-      number: n.number,
-      title: n.title,
-      assignees: n.assignees.nodes.map((a) => a.login),
-      updatedAt: n.updatedAt,
-      url: n.url
-    }))
-  };
-}
-
 // src/github/core/projects.ts
 var PROJECTS_QUERY = `query($owner: String!, $name: String!, $number: Int!, $after: String) {
   repository(owner: $owner, name: $name) {
@@ -9936,9 +10041,10 @@ var PROJECTS_QUERY = `query($owner: String!, $name: String!, $number: Int!, $aft
     }
   }
 }`;
-function projectPage(data) {
-  const items = data?.repository?.issue?.projectItems;
-  if (!items) throw new Error("GitHub did not return this issue's Projects.");
+var PULL_PROJECTS_QUERY = PROJECTS_QUERY.replace("issue(number:", "pullRequest(number:");
+function projectPage(data, kind = "issue") {
+  const items = data?.repository?.[kind === "pr" ? "pullRequest" : "issue"]?.projectItems;
+  if (!items) throw new Error(`GitHub did not return this ${kind === "pr" ? "pull request" : "issue"}'s Projects.`);
   return {
     projects: items.nodes.map((n) => ({ title: n.project.title, url: n.project.url })),
     more: items.pageInfo.hasNextPage,
@@ -9951,6 +10057,29 @@ function projectsFailure(message, on) {
     ok: false,
     message: /read:project/.test(message) ? `Projects require read:project. Run gh auth refresh -h github.com -s read:project on ${machine}.` : `Projects unavailable on ${machine}. ${explain(message)}`
   };
+}
+
+// src/github/io/projects.ts
+async function readProjects(ref, on) {
+  const [owner, name] = ref.repo.split("/");
+  const projects = [];
+  let after = null;
+  try {
+    do {
+      const query = ref.kind === "pr" ? PULL_PROJECTS_QUERY : PROJECTS_QUERY;
+      const page = projectPage(
+        await graphql(query, { owner, name, number: ref.number, after }, { on }),
+        ref.kind
+      );
+      projects.push(...page.projects);
+      if (!page.more) return { ok: true, projects };
+      if (!page.cursor || page.cursor === after) throw new Error("GitHub did not return the next Projects page.");
+      after = page.cursor;
+    } while (after);
+  } catch (e) {
+    return projectsFailure(e instanceof Error ? e.message : String(e), on);
+  }
+  return { ok: true, projects };
 }
 
 // src/github/io/issues.ts
@@ -9977,530 +10106,9 @@ async function setIssueState(repo, number, state, on) {
     repo
   );
 }
-async function readIssueProjects(repo, number, on) {
-  const [owner, name] = repo.split("/");
-  const projects = [];
-  let after = null;
-  try {
-    do {
-      const page = projectPage(await graphql(PROJECTS_QUERY, { owner, name, number, after }, { on }));
-      projects.push(...page.projects);
-      if (!page.more) return { ok: true, projects };
-      if (!page.cursor || page.cursor === after) throw new Error("GitHub did not return the next Projects page.");
-      after = page.cursor;
-    } while (after);
-  } catch (e) {
-    return projectsFailure(e instanceof Error ? e.message : String(e), on);
-  }
-  return { ok: true, projects };
+function readIssueProjects(repo, number, on) {
+  return readProjects({ kind: "issue", repo, number }, on);
 }
-
-// src/github/views/ui.ts
-import { div, svg } from "gpui-kit";
-import { theme } from "herdr";
-var colors = () => theme();
-var spinner = (size = 12) => svg("mods/github/assets/spinner.svg").size(size).flex_none().text_color(colors().dim).spin(900);
-var stop = (_e, cx) => cx.stop_propagation();
-function link2(id, url, label) {
-  return div().id(id).cursor_pointer().on_mouse_down("left", stop).on_click((_e, cx) => {
-    cx.stop_propagation();
-    cx.open_url(url);
-  }).child(label);
-}
-function chip(label, border, background) {
-  return div().px(8).py(3).rounded(12).border_1().border_color(border).bg(background).text_size(12).child(label);
-}
-var square = (el) => el.size(36).flex_none().flex().items_center().justify_center();
-function button(id, label, tip, act) {
-  const t = colors();
-  return div().id(id).px(6).py(2).rounded(6).text_size(12).text_color(t.dim).cursor_pointer().hover((s) => s.bg(t.hover).text_color(t.foreground)).tooltip(tip).accessibility_label(tip).on_mouse_down("left", stop).on_click((e, cx) => {
-    cx.stop_propagation();
-    act(e, cx);
-  }).child(label);
-}
-
-// src/github/views/issue.ts
-var Issue = class {
-  reader = "";
-  ref = null;
-  /** Issues this tab showed before following links, most recent last. */
-  history = [];
-  entry = null;
-  wide = false;
-  notices = new Notices();
-  /** The new comment being written; kept when posting fails, and through refreshes. */
-  box = null;
-  draft = "";
-  /** Unsent comments of the issues Back can return to. */
-  drafts = /* @__PURE__ */ new Map();
-  writing = null;
-  writeFailure = null;
-  polling = new IssuePolling();
-  init(cx) {
-    this.reader = typeof props()?.reader === "string" ? props().reader : "";
-    const box = TextareaState.new({ placeholder: "Leave a comment (Markdown)" });
-    box.set_auto_grow(3, 12);
-    box.on("change", (_e, cx2) => {
-      this.draft = box.value();
-      cx2.notify();
-    });
-    box.on("submit", (e, cx2) => {
-      if (e.secondary) this.comment(cx2);
-    });
-    this.box = box;
-    cx.timer.every(1e4, (cx2) => {
-      const shown = this.syncPolling();
-      if (!this.writing) this.load(cx2, shown);
-    });
-    cx.spawn(async (cx2) => {
-      for (; ; ) {
-        const opened = detailCommand(await nextCommand(), this.reader);
-        if (opened?.kind !== "issue") continue;
-        const ref = { repo: opened.repo, number: opened.number };
-        if (!this.ref || issueKey(this.ref) !== issueKey(ref)) {
-          this.history = [];
-          this.ref = ref;
-          this.load(cx2);
-        }
-        cx2.notify();
-      }
-    });
-  }
-  /** Follow a link: Back returns to the issue shown now. */
-  follow(cx, ref) {
-    if (this.ref) this.history.push(this.ref);
-    this.show(cx, ref);
-  }
-  goBack(cx) {
-    const ref = this.history.pop();
-    if (ref) this.show(cx, ref);
-  }
-  /** The tab now shows, and is named after, that issue. */
-  show(cx, ref) {
-    if (this.ref) this.drafts.set(issueKey(this.ref), this.draft);
-    this.draft = this.drafts.get(issueKey(ref)) ?? "";
-    this.drafts.delete(issueKey(ref));
-    this.box?.set_value(this.draft);
-    this.ref = ref;
-    this.writeFailure = null;
-    navigatedDetail(this.reader, { kind: "issue", ...ref });
-    this.load(cx);
-    cx.notify();
-  }
-  /** Visibility is the reader's own native tab, not keyboard focus or the sidebar's repository. */
-  syncPolling() {
-    const place = detailLocation(this.reader);
-    const key = this.ref && place ? `${place.on ?? ""}
-${place.pane}
-${issueKey(this.ref)}` : null;
-    return this.polling.sync(key, Boolean(place?.visible));
-  }
-  /** A forced refresh reloads even on 304; normal ticks leave unchanged discussions alone. Never touches the draft. */
-  load(cx, force = true) {
-    const ref = this.ref;
-    const place = detailLocation(this.reader);
-    this.syncPolling();
-    const request = this.polling.begin(force);
-    if (!ref || !place || !request) return;
-    const key = issueKey(ref);
-    const previous3 = this.entry?.key === key ? this.entry : null;
-    let entry = !force && previous3 && previous3.on === place.on ? previous3 : {
-      key,
-      issue: previous3?.issue,
-      on: previous3?.on === place.on ? previous3.on : void 0,
-      failure: previous3?.failure,
-      projects: previous3?.projects,
-      loading: force,
-      projectsLoading: false
-    };
-    this.entry = entry;
-    cx.spawn(async (cx2) => {
-      const current = () => this.entry === entry && this.polling.current(request) && detailLocation(this.reader)?.visible;
-      let completed;
-      try {
-        let on = entry.on;
-        if (on === void 0) {
-          const account3 = await account(place.on);
-          if (!account3.status.ok) throw new Error(describeAccount(account3).text);
-          on = account3.on;
-        }
-        if (!current()) return;
-        const change = await issueChanges(ref.repo, ref.number, request.etag, on);
-        if (!current()) return;
-        if (this.polling.reload(request, change)) {
-          if (!force) {
-            entry = { ...entry, projectsLoading: false };
-            this.entry = entry;
-          }
-          const issue = await readIssue(ref.repo, ref.number, on);
-          if (!current()) return;
-          entry.issue = issue;
-          entry.on = on;
-          entry.projectsLoading = true;
-          cx2.spawn(async (cx3) => {
-            const projects = await readIssueProjects(ref.repo, ref.number, on);
-            if (this.entry !== entry) return;
-            entry.projects = projects;
-            entry.projectsLoading = false;
-            cx3.notify();
-          });
-        }
-        completed = change;
-        entry.failure = void 0;
-      } catch (e) {
-        if (!current()) return;
-        const failure = failureOf(e);
-        entry.failure = failure.notFound ? `${ref.repo} #${ref.number} isn't on GitHub, or this account can't see it.` : failure.message;
-      } finally {
-        if (!detailLocation(this.reader)?.visible) this.syncPolling();
-        const result = this.polling.finish(request, completed);
-        if (this.entry === entry) entry.loading = false;
-        if (result.accepted && result.notify) cx2.notify();
-      }
-    });
-  }
-  /** Posts the comment box's text; the box is emptied once GitHub has it. */
-  comment(cx) {
-    const body = this.draft;
-    this.write(cx, "comment", body.trim() !== "", async (repo, number, on) => {
-      const comment = await addComment(repo, number, body, on);
-      this.publish({ repo, number, comment });
-      const sentKey = issueKey({ repo, number });
-      if (this.ref && issueKey(this.ref) === sentKey && this.draft === body) {
-        this.draft = "";
-        this.box?.set_value("");
-      } else if (this.drafts.get(sentKey) === body) this.drafts.delete(sentKey);
-    });
-  }
-  setState(cx, state) {
-    this.write(cx, "state", true, async (repo, number, on) => {
-      this.publish({ repo, number, state: await setIssueState(repo, number, state, on) });
-    });
-  }
-  /** Shows this view's own write at once, then tells the other views. */
-  publish(notice) {
-    this.apply(notice);
-    announce(notice);
-  }
-  /** One write at a time, through the gh that read the issue; a failure is said with gh's words. */
-  write(cx, kind, ready, act) {
-    const ref = this.ref;
-    const entry = this.entry;
-    if (!ref || !entry?.issue || entry.on === void 0 || this.writing || !ready) return;
-    const on = entry.on;
-    this.writing = kind;
-    this.writeFailure = null;
-    cx.notify();
-    cx.spawn(async (cx2) => {
-      try {
-        await act(ref.repo, ref.number, on);
-      } catch (e) {
-        this.writeFailure = failureOf(e).message;
-        if (e instanceof GhError && transient(e.stderr) && this.entry === entry) this.load(cx2);
-      } finally {
-        this.writing = null;
-        cx2.notify();
-      }
-    });
-  }
-  /** A write to the shown issue: a new comment joins the timeline (once), a new state shows. */
-  apply(notice) {
-    const issue = this.entry?.issue;
-    if (!isIssueNotice(notice)) return;
-    const comment = notice.comment;
-    if (!issue || !this.ref || issueKey(notice) !== issueKey(this.ref)) return;
-    this.polling.invalidate();
-    if (this.entry) this.entry.loading = false;
-    if (comment && !issue.comments.some((c) => c.id === comment.id)) issue.comments = [...issue.comments, comment];
-    if (notice.state) issue.state = notice.state.state;
-  }
-  /** A link in a post: an issue of this repository opens here; any other web link, in the browser. */
-  openLink(cx, url, issue) {
-    const linked = issueLink(url, issue.url);
-    if (!linked) {
-      const external = browserUrl(url, issue.url);
-      if (external) cx.open_url(external);
-    } else if (this.ref && issueKey(linked) !== issueKey(this.ref)) this.follow(cx, linked);
-  }
-  render(cx) {
-    if (this.reader) readyDetail(this.reader);
-    for (const notice of this.notices.take()) this.apply(notice);
-    if (this.syncPolling()) this.load(cx);
-    const t = colors();
-    const root = v_flex().id("issue-reader").size_full().min_h(0).overflow_hidden().bg(t.background).text_color(t.foreground).text_size(14).on_size_change((size, cx2) => {
-      const wide = size.width >= 820;
-      if (wide !== this.wide) {
-        this.wide = wide;
-        cx2.notify();
-      }
-    });
-    const ref = this.ref;
-    if (!ref) return root.child(this.empty());
-    return root.child(this.header(ref)).child(this.body(ref));
-  }
-  /** No issue yet: this tab was restored after a restart, or its issue hasn't arrived. */
-  empty() {
-    const t = colors();
-    const hint = "Choose an issue in the GitHub sidebar. Issue details are not restored after restarting Herdr.";
-    return v_flex().flex_1().gap(8).items_center().justify_center().p(24).child(div2().font_semibold().child("Issue details")).child(div2().text_size(13).text_color(t.dim).text_center().child(hint));
-  }
-  /** Back, the title with its number (opens the browser) and copy, and refresh. */
-  header(ref) {
-    const t = colors();
-    const entry = this.entry;
-    const url = entry?.issue?.url ?? `https://github.com/${ref.repo}/issues/${ref.number}`;
-    const number = link2("issue-browser", url, `#${ref.number}`).px(2).rounded(4).text_color(t.accent).hover((s) => s.bg(t.hover)).tooltip(`Open ${ref.repo} #${ref.number} in browser`).accessibility_label(`Open #${ref.number} in browser`);
-    const copy = button(
-      "issue-copy",
-      svg2("mods/github/assets/copy.svg").size(16),
-      "Copy issue link",
-      (_e, cx) => cx.write_to_clipboard(url)
-    );
-    const refresh = entry?.loading ? square(div2()).child(spinner(18)) : square(
-      button("issue-refresh", "\u21BB", "Refresh issue", (_e, cx) => {
-        this.load(cx);
-        cx.notify();
-      })
-    ).text_size(22);
-    return h_flex().flex_none().px(24).pt(18).pb(12).gap(12).items_start().when(this.history.length > 0, (el) => el.child(this.back())).child(
-      h_flex().flex_1().min_w(0).gap(8).items_center().flex_wrap().text_size(22).child(
-        div2().min_w(0).font_semibold().child(entry?.issue?.title ?? "Issue details")
-      ).child(h_flex().gap(2).items_center().flex_none().child(number).child(copy))
-    ).child(refresh);
-  }
-  back() {
-    const previous3 = this.history.at(-1);
-    return square(button("issue-back", "\u2190", `Back to #${previous3.number}`, (_e, cx) => this.goBack(cx))).text_size(22);
-  }
-  /** The scrolling part: loading and failure notes, then the issue. */
-  body(ref) {
-    const t = colors();
-    const entry = this.entry;
-    return v_flex().id(`issue-scroll-${issueKey(ref)}`).flex_1().min_h(0).overflow_y_scroll().px(24).pb(18).gap(12).when(entry?.loading, (el) => el.child(div2().text_size(12).text_color(t.dim).child("Loading issue\u2026"))).when(
-      entry?.failure,
-      (el) => el.child(
-        div2().text_color(t.blocked).child(entry?.failure ?? "")
-      )
-    ).child(entry?.issue ? this.document(entry.issue) : div2());
-  }
-  /** State and author, then the timeline beside (wide) or below (narrow) the metadata. */
-  document(issue) {
-    const timeline = v_flex().min_w(0).gap(20).when(this.wide, (el) => el.flex_1()).when(!this.wide, (el) => el.w_full().flex_none()).child(this.card("issue-body", issue, issue, "opened this issue")).children(
-      issueTimeline(issue.comments, issue.activities).map(
-        (row) => row.type === "comment" ? this.card(`comment-${row.comment.id}`, issue, row.comment, "commented") : this.activity(row.activity)
-      )
-    ).child(this.composer(issue));
-    const metadata = this.metadata(issue);
-    const content3 = this.wide ? h_flex().gap(24).items_start().child(timeline).child(metadata) : v_flex().gap(20).child(metadata).child(timeline);
-    return v_flex().gap(18).child(
-      h_flex().gap(10).pb(4).items_center().flex_wrap().child(this.stateBadge(issue)).child(div2().text_size(13).font_medium().child(issue.author))
-    ).child(content3);
-  }
-  stateBadge(issue) {
-    const t = colors();
-    const open = issue.state === "open";
-    const color = open ? t.done : t.accent;
-    return div2().px(10).py(4).rounded(14).bg(`${color}26`).text_size(13).font_semibold().text_color(color).child(open ? "\u25CB Open" : "\u25CF Closed");
-  }
-  /** The description or a comment: who, what and when, its Markdown, and its reactions. */
-  card(id, issue, post, verb) {
-    const t = colors();
-    const reactions = post.reactions ?? [];
-    const heading = h_flex().px(16).py(10).gap(8).items_center().flex_wrap().bg(t.raised).border_b(1).border_color(t.border).text_size(12).child(div2().font_semibold().child(post.author)).child(div2().text_color(t.dim).child(verb)).child(div2().flex_1()).child(div2().text_color(t.dim).tooltip(post.createdAt).child(relativeTime(post.createdAt, Date.now())));
-    const text3 = TextView.markdown(id, post.markdown).selectable(true).scrollable(false).on_link_click((url, cx) => this.openLink(cx, url, issue));
-    return v_flex().id(`${id}-card`).min_w(0).w_full().overflow_hidden().rounded(8).border_1().border_color(t.border).bg(t.background).child(heading).child(
-      v_flex().min_w(0).px(16).py(16).gap(12).child(text3).when(
-        reactions.length > 0,
-        (el) => el.child(
-          h_flex().gap(6).flex_wrap().children(reactions.map((r) => chip(`${r.emoji} ${r.count}`, t.border, t.raised)))
-        )
-      )
-    );
-  }
-  /** A label or assignment change between the comments. */
-  activity(activity) {
-    const t = colors();
-    const avatar = div2().size(22).flex_none().rounded(11).bg(t.raised).text_color(t.muted).font_semibold().flex().items_center().justify_center().child(activity.actor.slice(0, 1).toUpperCase());
-    const labels = "labels" in activity ? activity.labels : null;
-    return h_flex().id(`activity-${activity.id}`).px(16).py(4).gap(8).items_center().flex_wrap().text_size(12).child(avatar).child(div2().font_semibold().child(activity.actor)).child(div2().text_color(t.dim).child(activityText(activity))).when(
-      labels,
-      (el) => el.children((labels ?? []).map((label) => this.label(label))).child(
-        div2().text_color(t.dim).child(labels?.length === 1 ? "label" : "labels")
-      )
-    ).child(div2().flex_1()).child(div2().text_color(t.dim).tooltip(activity.createdAt).child(relativeTime(activity.createdAt, Date.now())));
-  }
-  label(label) {
-    const t = colors();
-    return chip(label.name, label.color ?? t.input, label.color ? `${label.color}26` : t.raised).text_color(
-      t.foreground
-    );
-  }
-  /** A new comment, and close / reopen: GitHub's own order of the two buttons. */
-  composer(issue) {
-    const t = colors();
-    const box = this.box;
-    const open = issue.state === "open";
-    const busy = this.writing !== null;
-    const close = {
-      id: "issue-state",
-      label: open ? "Close issue" : "Reopen issue",
-      tip: open ? `Close #${issue.number}` : `Reopen #${issue.number}`,
-      enabled: !busy,
-      primary: false
-    };
-    const send = {
-      id: "issue-comment",
-      label: "Comment",
-      tip: "Comment (\u2318/Ctrl+Enter)",
-      enabled: !busy && this.draft.trim() !== "",
-      primary: true
-    };
-    return v_flex().id("issue-composer").min_w(0).w_full().gap(10).pt(4).when(
-      box,
-      (el) => el.child(
-        div2().min_w(0).rounded(8).border_1().border_color(t.border).bg(t.background).p(8).on_mouse_down("left", stop).child(Textarea.new(box).w_full().text_size(13).text_color(t.foreground))
-      )
-    ).when(
-      this.writeFailure,
-      (el) => el.child(
-        div2().text_size(12).text_color(t.blocked).child(this.writeFailure ?? "")
-      )
-    ).child(
-      h_flex().gap(8).items_center().justify_end().when(busy, (el) => el.child(spinner(14))).child(this.action(close, (cx) => this.setState(cx, open ? "closed" : "open"))).child(this.action(send, (cx) => this.comment(cx)))
-    );
-  }
-  action({ id, label, tip, enabled, primary }, act) {
-    const t = colors();
-    return h_flex().id(id).h(32).px(14).gap(6).items_center().rounded(6).border_1().text_size(13).font_medium().border_color(primary ? t.accent : t.border).bg(primary ? t.accent : t.raised).text_color(primary ? t.background : t.foreground).when(
-      enabled,
-      (el) => el.cursor_pointer().hover((s) => s.opacity(0.85)).on_click((_e, cx) => {
-        cx.stop_propagation();
-        act(cx);
-      })
-    ).when(!enabled, (el) => el.opacity(0.5)).tooltip(tip).accessibility_label(tip).on_mouse_down("left", stop).child(label);
-  }
-  /** Assignees, labels, Projects and milestone: a column beside the timeline (wide) or a row above it. */
-  metadata(issue) {
-    const t = colors();
-    const quiet = (text3) => div2().text_size(12).text_color(t.dim).child(text3);
-    const section = (title, value) => v_flex().gap(10).py(16).border_b(1).border_color(t.border).when(!this.wide, (el) => el.w(180).min_w(140).flex_1()).child(div2().text_size(13).font_semibold().child(title)).child(value);
-    const assignees = issue.assignees.length === 0 ? quiet("No assignees") : v_flex().gap(8).children(issue.assignees.map((login) => div2().text_size(13).font_medium().child(login)));
-    const labels = issue.labels.length === 0 ? quiet("None yet") : h_flex().gap(6).flex_wrap().children(issue.labels.map((label) => this.label(label)));
-    const sections = [
-      section("Assignees", assignees),
-      section("Labels", labels),
-      section("Project", this.projects(quiet)),
-      section("Milestone", issue.milestone ? div2().text_size(13).child(issue.milestone) : quiet("No milestone"))
-    ];
-    return this.wide ? v_flex().w(220).flex_none().children(sections) : h_flex().gap(20).flex_wrap().children(sections);
-  }
-  /** The issue's Projects, each opening in the browser; why there are none shows in a tooltip. */
-  projects(quiet) {
-    const t = colors();
-    const projects = this.entry?.projects;
-    if (!projects) return quiet(this.entry?.projectsLoading ? "Loading Projects\u2026" : "Projects not loaded.");
-    if (!projects.ok) return quiet("None yet").tooltip(projects.message);
-    if (projects.projects.length === 0) return quiet("None yet");
-    return v_flex().gap(8).children(
-      projects.projects.map(
-        (project) => link2(`project-${project.url}`, project.url, project.title).text_size(13).text_color(t.accent).tooltip(project.url)
-      )
-    );
-  }
-};
-
-// src/github/views/pane.ts
-import { h_flex as h_flex2 } from "gpui-base";
-import { div as div3, image, svg as svg3 } from "gpui-kit";
-import { home, panes as panes2, props as props2, run as run2 } from "herdr";
-function icon(program, color) {
-  if (!program?.icon) return null;
-  return program.tint ? svg3(program.icon).size(14).flex_none().text_color(color) : image(program.icon).w(14).h(14).flex_none();
-}
-function folder(cwd) {
-  if (!cwd) return "";
-  const h = home();
-  return cwd === h ? "~" : cwd.startsWith(`${h}/`) ? `~${cwd.slice(h.length)}` : cwd;
-}
-var Pane = class {
-  hovered = false;
-  init() {
-  }
-  button(id, picture, command, args) {
-    const t = colors();
-    return div3().id(id).p(3).rounded(4).text_color(t.dim).hover((s) => s.bg(t.hover).text_color(t.foreground)).on_click((_e, cx) => {
-      cx.stop_propagation();
-      run2(command, args);
-    }).child(svg3(`mods/pane/${picture}.svg`).size(14));
-  }
-  render(_cx) {
-    const t = colors(), p = panes2().find((p2) => p2.pane === props2()?.pane);
-    if (!p) return div3();
-    const github = p.mod === "github";
-    const name = github ? "GitHub" : (p.program?.agent || p.program?.shell) && p.program.name || p.title || p.program?.name || "shell";
-    const pic = github ? svg3("mods/github/assets/github.svg").size(14).flex_none().text_color(t.dim) : icon(p.program, t.dim);
-    const st = p.status, pane = p.pane;
-    return h_flex2().id(`pane-head-${pane}`).size_full().px(10).gap(8).items_center().bg(t.background).border_b(1).border_color(t.border).text_size(12).on_hover((hovered, cx) => {
-      this.hovered = hovered;
-      cx.notify();
-    }).on_click(() => run2("pane.focus", { pane })).when(Boolean(pic), (el) => el.child(pic ?? div3())).child(div3().flex_none().truncate().max_w(260).font_medium().text_color(t.foreground).child(name)).child(div3().flex_1().truncate().text_color(t.dim).child(folder(p.cwd))).when(
-      st === "working",
-      (el) => el.child(svg3("mods/workspace-chrome/spinner.svg").size(12).flex_none().text_color(t.working).spin(900))
-    ).when(
-      st === "blocked",
-      (el) => el.child(
-        div3().flex_none().px(6).h(18).flex().items_center().rounded(5).bg(`${t.blocked}26`).text_size(10.5).font_semibold().text_color(t.blocked).child("Needs you")
-      )
-    ).when(st === "done", (el) => el.child(div3().size(7).flex_none().rounded(4).bg(t.done))).when(
-      this.hovered,
-      (el) => el.child(this.button(`ph-r-${pane}`, "split-right", "pane.split", { direction: "right", pane })).child(this.button(`ph-d-${pane}`, "split-down", "pane.split", { direction: "down", pane })).child(this.button(`ph-z-${pane}`, p.zoomed ? "unzoom" : "zoom", "pane.zoom", { pane })).child(this.button(`ph-x-${pane}`, "close", "pane.close", { pane }))
-    );
-  }
-};
-
-// src/github/views/panel.ts
-import { h_flex as h_flex4, v_flex as v_flex3 } from "gpui-base";
-import { div as div6, svg as svg5 } from "gpui-kit";
-import { closeOverlay, props as props3 } from "herdr";
-
-// src/github/core/status.ts
-var POLL_SECONDS = 60;
-var PROBLEM = { missing: "gh is not installed", auth: "Not signed in to gh", error: "gh is not working" };
-var ago = (ms) => ms < 6e4 ? "just now" : `${Math.floor(ms / 6e4)}m ago`;
-function footerStatus(s, now) {
-  const machine = s.on ?? "this computer";
-  if (!s.account) return { tone: "pending", account: "Checking gh\u2026", machine, sync: null };
-  const { status: status2 } = s.account;
-  if (!status2.ok) return { tone: "problem", account: PROBLEM[status2.reason], machine, sync: null };
-  if (!s.polling || !s.failed) return { tone: "ok", account: status2.user, machine, sync: null };
-  const last = s.checkedAt === null ? null : ago(Math.max(0, now - s.checkedAt));
-  const sync = last ? `Check failed \xB7 last ok ${last}` : `Check failed \xB7 retrying every ${POLL_SECONDS}s`;
-  return { tone: "problem", account: status2.user, machine, sync };
-}
-
-// src/github/io/context.ts
-import { focused as focused2, panes as panes3, spaces as spaces2 } from "herdr";
-
-// src/github/core/location.ts
-function focusedFolder(herdr, previous3) {
-  const space = herdr.spaces.find((s) => s.active), f = herdr.focused, id = space?.id ?? null;
-  if (f && !f.pane && f.terminal && f.cwd) {
-    return { cwd: f.cwd, on: f.terminal.includes("/") ? f.terminal.split("/")[0] ?? null : null, space: id };
-  }
-  const pane = f?.pane ? herdr.panes.find((p) => p.pane === f.pane) : null;
-  if (pane?.terminal)
-    return { cwd: pane.cwd || f?.cwd || space?.folder || null, on: space?.machine ?? null, space: id };
-  if (previous3 && previous3.space === id) return previous3;
-  return { cwd: space?.folder || null, on: space?.machine ?? null, space: id };
-}
-
-// src/github/io/context.ts
-var previous2 = null;
-function location() {
-  previous2 = focusedFolder({ spaces: spaces2(), panes: panes3(), focused: focused2() }, previous2);
-  return previous2;
-}
-var locationKey = () => JSON.stringify(location());
 
 // src/github/core/cache.ts
 var Cache = class {
@@ -10679,10 +10287,65 @@ async function localBranches(remote2, where) {
   return { branches, head: pickRemote(origin) ?? pickRemote(other) ?? remote2 };
 }
 
+// src/github/core/pull-detail.ts
+function reviewers(pull, reviews) {
+  const byName = /* @__PURE__ */ new Map();
+  for (const review of [...reviews].sort(
+    (a, b) => (b.submitted_at ?? "").localeCompare(a.submitted_at ?? "") || b.id - a.id
+  )) {
+    if (review.state === "PENDING" || !review.submitted_at) continue;
+    const name = review.user?.login ?? "deleted user";
+    const key = name.toLowerCase();
+    if (key === pull.user?.login.toLowerCase() || byName.has(key)) continue;
+    byName.set(key, { name, state: review.state.toLowerCase(), team: false });
+  }
+  for (const user of pull.requested_reviewers)
+    byName.set(user.login.toLowerCase(), { name: user.login, state: "requested", team: false });
+  for (const team of pull.requested_teams)
+    byName.set(`team:${team.slug}`, { name: team.slug, state: "requested", team: true });
+  return [...byName.values()];
+}
+function parsePullDetail(pull, issue, comments, reviews) {
+  const p = pull;
+  const crossOwner = p.head.label.split(":")[0]?.toLowerCase() !== p.base.label.split(":")[0]?.toLowerCase();
+  const reactions = issue.reactions;
+  return {
+    number: p.number,
+    title: p.title,
+    state: p.merged ? "merged" : p.state === "closed" ? "closed" : p.draft ? "draft" : "open",
+    author: p.user?.login ?? "deleted user",
+    createdAt: p.created_at,
+    url: p.html_url,
+    head: crossOwner ? p.head.label || p.head.ref : p.head.ref,
+    base: crossOwner ? p.base.label || p.base.ref : p.base.ref,
+    labels: p.labels.map(parseLabel),
+    assignees: p.assignees.map((a) => a.login),
+    milestone: p.milestone?.title ?? null,
+    body: p.body ?? "",
+    markdown: readerMarkdown(p.body ?? "", p.html_url),
+    reactions: parseReactions(reactions),
+    reviewers: reviewers(p, reviews),
+    comments: comments.map((c) => parseComment(c, p.html_url)).sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id - b.id)
+  };
+}
+
 // src/github/io/pulls.ts
 async function pullPage(kind, remote2, login, on, after) {
   const { query, variables } = pullRequest(kind, remote2, login, after);
   return parsePullGroup(await graphql(query, variables, { on }));
+}
+async function readPull(repo, number, on) {
+  const [pull, issue, comments, reviews] = await Promise.all([
+    api(`repos/${repo}/pulls/${number}`, { on }),
+    // Description reactions live on the issue resource, not the REST pull request resource.
+    api(`repos/${repo}/issues/${number}`, { on }),
+    api(`repos/${repo}/issues/${number}/comments?per_page=100`, { on, paginate: true }),
+    api(`repos/${repo}/pulls/${number}/reviews?per_page=100`, { on, paginate: true })
+  ]);
+  return parsePullDetail(pull, issue, comments, reviews);
+}
+function readPullProjects(repo, number, on) {
+  return readProjects({ kind: "pr", repo, number }, on);
 }
 async function localPulls(remote2, where, snapshot) {
   const { branches, head } = snapshot ?? await localBranches(remote2, where);
@@ -10821,8 +10484,8 @@ function layoutShows(tree, id) {
 var sidebarVisible = () => layoutShows(layout(), "github");
 
 // src/github/views/groups.ts
-import { h_flex as h_flex3, v_flex as v_flex2 } from "gpui-base";
-import { div as div4 } from "gpui-kit";
+import { h_flex as h_flex2, v_flex } from "gpui-base";
+import { div as div3 } from "gpui-kit";
 var GroupList = class {
   groups;
   /** The row under the pointer ("<kind>#<number>"): it shows its actions. */
@@ -10934,11 +10597,11 @@ var GroupList = class {
     const g = this.groups[kind];
     const page = g.page;
     const rows = page ? this.source.rows(page) : [];
-    const heading = h_flex3().id(`${id}-group-${kind}`).h(26).px(8).gap(6).items_center().rounded(6).text_size(12).text_color(t.dim).cursor_pointer().hover((s) => s.bg(t.hover)).on_mouse_down("left", stop).on_click((_e, cx) => this.toggle(cx, kind)).accessibility_label(`${g.expanded ? "Fold" : "Unfold"} ${title}`).child(
-      div4().w(10).flex_none().child(g.expanded ? "\u25BE" : "\u25B8")
-    ).child(div4().font_medium().child(title)).child(div4().child(page ? String(page.total) : "")).when(g.expanded && g.loading, (el) => el.child(spinner()));
-    const failure = h_flex3().px(8).pl(22).py(2).gap(6).items_center().text_size(12).child(div4().flex_none().size(6).rounded(3).bg(t.blocked)).child(
-      div4().flex_1().min_w(0).text_color(t.dim).child(g.failure?.message ?? "")
+    const heading = h_flex2().id(`${id}-group-${kind}`).h(26).px(8).gap(6).items_center().rounded(6).text_size(12).text_color(t.dim).cursor_pointer().hover((s) => s.bg(t.hover)).on_mouse_down("left", stop).on_click((_e, cx) => this.toggle(cx, kind)).accessibility_label(`${g.expanded ? "Fold" : "Unfold"} ${title}`).child(
+      div3().w(10).flex_none().child(g.expanded ? "\u25BE" : "\u25B8")
+    ).child(div3().font_medium().child(title)).child(div3().child(page ? String(page.total) : "")).when(g.expanded && g.loading, (el) => el.child(spinner()));
+    const failure = h_flex2().px(8).pl(22).py(2).gap(6).items_center().text_size(12).child(div3().flex_none().size(6).rounded(3).bg(t.blocked)).child(
+      div3().flex_1().min_w(0).text_color(t.dim).child(g.failure?.message ?? "")
     ).when(
       !g.loading,
       (el) => el.child(
@@ -10948,12 +10611,12 @@ var GroupList = class {
         })
       )
     );
-    const more2 = h_flex3().id(`${id}-more-${kind}`).h(26).px(8).pl(22).gap(6).items_center().rounded(6).text_size(12).text_color(t.dim).cursor_pointer().hover((s) => s.bg(t.hover).text_color(t.foreground)).on_mouse_down("left", stop).on_click((_e, cx) => this.more(cx, kind)).child(g.loadingMore ? "Loading\u2026" : `Load more (${(page?.total ?? 0) - rows.length} left)`).when(g.loadingMore, (el) => el.child(spinner()));
-    return v_flex2().gap(1).child(heading).when(
+    const more2 = h_flex2().id(`${id}-more-${kind}`).h(26).px(8).pl(22).gap(6).items_center().rounded(6).text_size(12).text_color(t.dim).cursor_pointer().hover((s) => s.bg(t.hover).text_color(t.foreground)).on_mouse_down("left", stop).on_click((_e, cx) => this.more(cx, kind)).child(g.loadingMore ? "Loading\u2026" : `Load more (${(page?.total ?? 0) - rows.length} left)`).when(g.loadingMore, (el) => el.child(spinner()));
+    return v_flex().gap(1).child(heading).when(
       g.expanded,
       (el) => el.when(g.failure !== void 0 && !g.failure.notFound, (el2) => el2.child(failure)).when(
         page !== void 0 && rows.length === 0,
-        (el2) => el2.child(div4().px(8).pl(22).py(4).text_size(12).text_color(t.dim).child(empty))
+        (el2) => el2.child(div3().px(8).pl(22).py(4).text_size(12).text_color(t.dim).child(empty))
       ).children(rows.map((row) => this.row(kind, row))).when(page?.more, (el2) => el2.child(more2))
     );
   }
@@ -10961,7 +10624,7 @@ var GroupList = class {
   row(kind, row) {
     const t = colors();
     const key = `${kind}#${this.source.key(row)}`;
-    return h_flex3().id(`${this.source.id}-${kind}-${this.source.key(row)}`).h(28).px(8).pl(22).gap(8).items_center().rounded(6).cursor_pointer().hover((s) => s.bg(t.hover)).on_mouse_down("left", stop).on_click((_e, cx) => this.source.open(cx, row)).on_hover((h, cx) => {
+    return h_flex2().id(`${this.source.id}-${kind}-${this.source.key(row)}`).h(28).px(8).pl(22).gap(8).items_center().rounded(6).cursor_pointer().hover((s) => s.bg(t.hover)).on_mouse_down("left", stop).on_click((_e, cx) => this.source.open(cx, row)).on_hover((h, cx) => {
       if (h) this.hovered = key;
       else if (this.hovered === key) this.hovered = null;
       cx.notify();
@@ -10970,7 +10633,7 @@ var GroupList = class {
 };
 
 // src/github/views/pulls.ts
-import { div as div5, svg as svg4 } from "gpui-kit";
+import { div as div4, svg as svg3 } from "gpui-kit";
 var EMPTY = "0 pull requests in this category";
 var ICONS = {
   open: { svg: "git-pull-request", color: (t) => t.done, label: "Open" },
@@ -10981,13 +10644,13 @@ var ICONS = {
 function cells(kind, pull, hovered) {
   const t = colors();
   const icon2 = ICONS[pull.state];
-  const title = div5().flex_1().min_w(0).truncate().child(`#${pull.number} ${pull.title}`).when(pull.state === "draft", (el) => el.italic());
-  const iconEl = svg4(`mods/github/assets/${icon2.svg}.svg`).size(14).flex_none().text_color(icon2.color(t)).accessibility_label(icon2.label);
+  const title = div4().flex_1().min_w(0).truncate().child(`#${pull.number} ${pull.title}`).when(pull.state === "draft", (el) => el.italic());
+  const iconEl = svg3(`mods/github/assets/${icon2.svg}.svg`).size(14).flex_none().text_color(icon2.color(t)).accessibility_label(icon2.label);
   if (!hovered)
     return [
       iconEl,
       title,
-      div5().flex_none().max_w(110).truncate().text_size(12).text_color(t.dim).child(pull.author ? `by @${pull.author}` : "by ghost")
+      div4().flex_none().max_w(110).truncate().text_size(12).text_color(t.dim).child(pull.author ? `by @${pull.author}` : "by ghost")
     ];
   return [
     iconEl,
@@ -11110,7 +10773,7 @@ var Panel = class {
     });
   }
   isVisible() {
-    return Boolean(props3()?.overlay) || sidebarVisible();
+    return Boolean(props2()?.overlay) || sidebarVisible();
   }
   /** Only a changed list re-asks expanded groups. A shown/explicit refresh asks even on 304. */
   check(cx, refresh = false, asked = false) {
@@ -11204,9 +10867,9 @@ var Panel = class {
     if (visible && (shown || locationKey() !== this.context)) this.refresh(cx, shown);
     const t = colors();
     const where = location();
-    const overlay = props3()?.overlay;
+    const overlay = props2()?.overlay;
     const noRemote = this.remote === null && !(this.account && !this.account.status.ok);
-    return v_flex3().id("github").size_full().min_h(0).overflow_hidden().bg(t.background).text_color(t.foreground).text_size(13).when(!overlay, (el) => el.rounded(10).border_1().border_color(t.border)).child(this.header(overlay, where.cwd ?? "no folder")).when(noRemote, (el) => el.child(this.noRemote(where.cwd))).when(!noRemote, (el) => el.child(this.tabs()).child(this.tab === "issues" ? this.list() : this.pullList())).child(this.statusCard(where.on, where.cwd));
+    return v_flex2().id("github").size_full().min_h(0).overflow_hidden().bg(t.background).text_color(t.foreground).text_size(13).when(!overlay, (el) => el.rounded(10).border_1().border_color(t.border)).child(this.header(overlay, where.cwd ?? "no folder")).when(noRemote, (el) => el.child(this.noRemote(where.cwd))).when(!noRemote, (el) => el.child(this.tabs()).child(this.tab === "issues" ? this.list() : this.pullList())).child(this.statusCard(where.on, where.cwd));
   }
   /** The repository, then ↻ (Herdr's own spinner while anything loads, as its tab bar shows a working agent). */
   header(overlay, context) {
@@ -11216,7 +10879,7 @@ var Panel = class {
       this.refresh(cx, true, true);
       cx.notify();
     });
-    return h_flex4().h(42).flex_none().px(14).gap(8).items_center().border_b(1).border_color(t.border).child(div6().font_semibold().tooltip(context).child("GitHub")).child(div6().flex_1().min_w(0).truncate().text_right().text_size(12).text_color(t.dim).child(this.repo())).child(busy ? div6().size(24).flex_none().flex().items_center().justify_center().child(spinner()) : refresh).when(overlay, (el) => el.child(button("gh-close", "\xD7", "Close", () => closeOverlay(overlay))));
+    return h_flex3().h(42).flex_none().px(14).gap(8).items_center().border_b(1).border_color(t.border).child(div5().font_semibold().tooltip(context).child("GitHub")).child(div5().flex_1().min_w(0).truncate().text_right().text_size(12).text_color(t.dim).child(this.repo())).child(busy ? div5().size(24).flex_none().flex().items_center().justify_center().child(spinner()) : refresh).when(overlay, (el) => el.child(button("gh-close", "\xD7", "Close", () => closeOverlay(overlay))));
   }
   /** The gh account on the folder's machine, then how fresh the lists are. What to do about a problem is said in the list. */
   statusCard(on, cwd) {
@@ -11232,13 +10895,13 @@ var Panel = class {
       Date.now()
     );
     const tip = `${this.account ? describeAccount(this.account).text : "checking gh\u2026"} \xB7 ${cwd ?? "no folder"}`;
-    const dot = s.tone === "pending" ? spinner(10) : div6().size(8).rounded(4).bg(s.tone === "ok" ? t.done : t.blocked);
-    return v_flex3().id("gh-status").flex_none().px(14).py(8).gap(2).border_t(1).border_color(t.border).bg(t.surface).text_size(12).tooltip(tip).accessibility_label(`${s.account} on ${s.machine}${s.sync ? `. ${s.sync}` : ""}`).child(
-      h_flex4().gap(8).items_center().child(div6().w(10).flex_none().flex().items_center().justify_center().child(dot)).child(div6().flex_none().max_w(160).truncate().font_medium().child(s.account)).child(div6().flex_none().text_color(t.dim).child("\xB7")).child(div6().flex_1().min_w(0).truncate().text_color(t.dim).child(s.machine))
+    const dot = s.tone === "pending" ? spinner(10) : div5().size(8).rounded(4).bg(s.tone === "ok" ? t.done : t.blocked);
+    return v_flex2().id("gh-status").flex_none().px(14).py(8).gap(2).border_t(1).border_color(t.border).bg(t.surface).text_size(12).tooltip(tip).accessibility_label(`${s.account} on ${s.machine}${s.sync ? `. ${s.sync}` : ""}`).child(
+      h_flex3().gap(8).items_center().child(div5().w(10).flex_none().flex().items_center().justify_center().child(dot)).child(div5().flex_none().max_w(160).truncate().font_medium().child(s.account)).child(div5().flex_none().text_color(t.dim).child("\xB7")).child(div5().flex_1().min_w(0).truncate().text_color(t.dim).child(s.machine))
     ).when(
       s.sync,
       (el) => el.child(
-        div6().pl(18).truncate().text_color(s.tone === "problem" ? t.blocked : t.dim).child(s.sync ?? "")
+        div5().pl(18).truncate().text_color(s.tone === "problem" ? t.blocked : t.dim).child(s.sync ?? "")
       )
     );
   }
@@ -11249,14 +10912,14 @@ var Panel = class {
   noRemote(cwd) {
     const t = colors();
     const empty = noRepository(cwd);
-    return v_flex3().flex_1().min_h(0).px(28).gap(8).items_center().justify_center().child(svg5("mods/github/assets/github.svg").size(28).text_color(t.dim)).child(div6().pt(4).font_medium().text_color(t.muted).child(empty.title)).child(div6().text_size(12).text_center().text_color(t.dim).child(empty.detail));
+    return v_flex2().flex_1().min_h(0).px(28).gap(8).items_center().justify_center().child(svg4("mods/github/assets/github.svg").size(28).text_color(t.dim)).child(div5().pt(4).font_medium().text_color(t.muted).child(empty.title)).child(div5().text_size(12).text_center().text_color(t.dim).child(empty.detail));
   }
   /** Issues and Pull Requests; Actions and notifications join them later. */
   tabs() {
     const t = colors();
-    return h_flex4().h(34).flex_none().px(10).gap(4).items_center().border_b(1).border_color(t.border).children(
+    return h_flex3().h(34).flex_none().px(10).gap(4).items_center().border_b(1).border_color(t.border).children(
       TABS.map(
-        ({ id, label }) => div6().id(`gh-tab-${id}`).px(8).py(3).rounded(6).text_size(12).font_medium().cursor_pointer().text_color(this.tab === id ? t.foreground : t.muted).when(this.tab === id, (el) => el.bg(t.hover)).when(this.tab !== id, (el) => el.hover((s) => s.bg(t.hover))).accessibility_label(label).on_mouse_down("left", stop).on_click((_e, cx) => {
+        ({ id, label }) => div5().id(`gh-tab-${id}`).px(8).py(3).rounded(6).text_size(12).font_medium().cursor_pointer().text_color(this.tab === id ? t.foreground : t.muted).when(this.tab === id, (el) => el.bg(t.hover)).when(this.tab !== id, (el) => el.hover((s) => s.bg(t.hover))).accessibility_label(label).on_mouse_down("left", stop).on_click((_e, cx) => {
           this.tab = id;
           this.openFailure = null;
           if (id === "prs") this.pulls.load(cx);
@@ -11273,8 +10936,8 @@ var Panel = class {
       remote: this.remote,
       failure: this.failure ?? this.pulls.notFound
     });
-    const problem = (text3) => div6().p(8).text_size(12).text_color(t.blocked).child(text3);
-    return v_flex3().id("gh-pulls").flex_1().min_h(0).overflow_y_scroll().p(6).gap(4).when(this.openFailure, (el) => el.child(problem(this.openFailure ?? ""))).when(notice, (el) => el.child(problem(notice ?? ""))).when(!notice && this.ready(), (el) => el.children(this.pulls.render())).when(!notice && !this.ready() && this.loading, (el) => el.child(div6().p(8).text_color(t.dim).child("\u2026")));
+    const problem = (text3) => div5().p(8).text_size(12).text_color(t.blocked).child(text3);
+    return v_flex2().id("gh-pulls").flex_1().min_h(0).overflow_y_scroll().p(6).gap(4).when(this.openFailure, (el) => el.child(problem(this.openFailure ?? ""))).when(notice, (el) => el.child(problem(notice ?? ""))).when(!notice && this.ready(), (el) => el.children(this.pulls.render())).when(!notice && !this.ready() && this.loading, (el) => el.child(div5().p(8).text_color(t.dim).child("\u2026")));
   }
   /**
    * The groups, or what stands in their place. A missing repository (404) or Issues turned off is the same for
@@ -11288,8 +10951,8 @@ var Panel = class {
       group: this.issues.anyPage,
       failure: this.failure ?? this.issues.notFound
     });
-    const problem = (text3) => div6().p(8).text_size(12).text_color(t.blocked).child(text3);
-    return v_flex3().id("gh-list").flex_1().min_h(0).overflow_y_scroll().p(6).gap(4).when(this.openFailure, (el) => el.child(problem(this.openFailure ?? ""))).when(notice, (el) => el.child(problem(notice ?? ""))).when(!notice && this.ready(), (el) => el.children(this.issues.render())).when(!notice && !this.ready() && this.loading, (el) => el.child(div6().p(8).text_color(t.dim).child("\u2026")));
+    const problem = (text3) => div5().p(8).text_size(12).text_color(t.blocked).child(text3);
+    return v_flex2().id("gh-list").flex_1().min_h(0).overflow_y_scroll().p(6).gap(4).when(this.openFailure, (el) => el.child(problem(this.openFailure ?? ""))).when(notice, (el) => el.child(problem(notice ?? ""))).when(!notice && this.ready(), (el) => el.children(this.issues.render())).when(!notice && !this.ready() && this.loading, (el) => el.child(div5().p(8).text_color(t.dim).child("\u2026")));
   }
   /** A click on an issue row opens (or selects) its tab. */
   openIssue(cx, issue) {
@@ -11308,8 +10971,8 @@ var Panel = class {
 function issueCells(kind, issue, hovered) {
   const t = colors();
   const start = [
-    div6().flex_none().text_color(t.dim).child(`#${issue.number}`),
-    div6().flex_1().min_w(0).truncate().child(issue.title)
+    div5().flex_none().text_color(t.dim).child(`#${issue.number}`),
+    div5().flex_1().min_w(0).truncate().child(issue.title)
   ];
   if (hovered)
     return [
@@ -11324,44 +10987,724 @@ function issueCells(kind, issue, hovered) {
     ];
   return [
     ...start,
-    div6().flex_none().max_w(90).truncate().text_size(12).text_color(t.dim).child(issue.assignees.join(", ")),
-    div6().flex_none().w(28).text_right().text_size(12).text_color(t.dim).child(relativeTime(issue.updatedAt, Date.now()))
+    div5().flex_none().max_w(90).truncate().text_size(12).text_color(t.dim).child(issue.assignees.join(", ")),
+    div5().flex_none().w(28).text_right().text_size(12).text_color(t.dim).child(relativeTime(issue.updatedAt, Date.now()))
   ];
 }
 
-// src/github/views/pull.ts
-import { v_flex as v_flex4 } from "gpui-base";
-import { div as div7 } from "gpui-kit";
+// src/github/views/reader.ts
 import { nextCommand as nextCommand2, props as props4 } from "herdr";
-var Pull = class {
+
+// src/github/views/issue.ts
+import { h_flex as h_flex5, Textarea, TextareaState, v_flex as v_flex4 } from "gpui-base";
+import { div as div7, svg as svg5 } from "gpui-kit";
+import { nextCommand, props as props3 } from "herdr";
+
+// src/github/core/issue-polling.ts
+var IssuePolling = class {
+  key = null;
+  visible = false;
+  etag = null;
+  failed = false;
+  pending = null;
+  /** Returns whether the newly shown issue needs an immediate refresh. */
+  sync(key, visible) {
+    const changed = key !== this.key;
+    const refresh = visible && key !== null && (changed || !this.visible);
+    if (changed) {
+      this.etag = null;
+      this.failed = false;
+    }
+    if (changed || !visible) this.pending = null;
+    this.key = key;
+    this.visible = visible;
+    return refresh;
+  }
+  /** A local/shared write wins over an older read, and the next tick checks again without a validator. */
+  invalidate() {
+    this.pending = null;
+    this.etag = null;
+  }
+  begin(force = false) {
+    if (!this.key || !this.visible || this.pending) return null;
+    const request = { etag: this.etag, force };
+    this.pending = request;
+    return request;
+  }
+  current(request) {
+    return this.visible && this.pending === request;
+  }
+  reload(request, change) {
+    return this.current(request) && (request.force || change.changed);
+  }
+  /** Finish only after any required discussion reload succeeds; failed reloads must be retried. */
+  finish(request, change) {
+    if (!this.current(request)) return { accepted: false, notify: false };
+    const notify = !change || change.changed || request.force || this.failed;
+    this.pending = null;
+    this.failed = !change;
+    if (!change) this.etag = null;
+    else if (change.changed) this.etag = change.etag;
+    return { accepted: true, notify };
+  }
+};
+
+// src/github/views/discussion.ts
+import { h_flex as h_flex4, TextView, v_flex as v_flex3 } from "gpui-base";
+import { div as div6 } from "gpui-kit";
+function postCard(id, post, verb, onLink) {
+  const t = colors();
+  const reactions = post.reactions ?? [];
+  const heading = h_flex4().px(16).py(10).gap(8).items_center().flex_wrap().bg(t.raised).border_b(1).border_color(t.border).text_size(12).child(div6().font_semibold().child(post.author)).child(div6().text_color(t.dim).child(verb)).child(div6().flex_1()).child(div6().text_color(t.dim).tooltip(post.createdAt).child(relativeTime(post.createdAt, Date.now())));
+  const text3 = TextView.markdown(id, post.markdown).selectable(true).scrollable(false).on_link_click(onLink);
+  return v_flex3().id(`${id}-card`).min_w(0).w_full().overflow_hidden().rounded(8).border_1().border_color(t.border).bg(t.background).child(heading).child(
+    v_flex3().min_w(0).px(16).py(16).gap(12).child(text3).when(
+      reactions.length > 0,
+      (el) => el.child(
+        h_flex4().gap(6).flex_wrap().children(reactions.map((r) => chip(`${r.emoji} ${r.count}`, t.border, t.raised)))
+      )
+    )
+  );
+}
+
+// src/github/views/issue.ts
+var Issue = class {
   reader = "";
+  host = null;
   ref = null;
-  init(cx) {
-    this.reader = String(props4()?.reader ?? "");
+  /** Issues this tab showed before following links, most recent last. */
+  history = [];
+  entry = null;
+  wide = false;
+  notices = new Notices();
+  /** The new comment being written; kept when posting fails, and through refreshes. */
+  box = null;
+  draft = "";
+  /** Unsent comments of the issues Back can return to. */
+  drafts = /* @__PURE__ */ new Map();
+  writing = null;
+  writeFailure = null;
+  polling = new IssuePolling();
+  init(cx, host = null) {
+    this.host = host;
+    this.reader = typeof props3()?.reader === "string" ? props3().reader : "";
+    const box = TextareaState.new({ placeholder: "Leave a comment (Markdown)" });
+    box.set_auto_grow(3, 12);
+    box.on("change", (_e, cx2) => {
+      this.draft = box.value();
+      cx2.notify();
+    });
+    box.on("submit", (e, cx2) => {
+      if (e.secondary) this.comment(cx2);
+    });
+    this.box = box;
+    cx.timer.every(1e4, (cx2) => {
+      const shown = this.syncPolling();
+      if (!this.writing) this.load(cx2, shown);
+    });
+    if (host) return;
     cx.spawn(async (cx2) => {
       for (; ; ) {
-        const opened = detailCommand(await nextCommand2(), this.reader);
-        if (opened?.kind !== "pr") continue;
-        this.ref = opened;
+        const opened = detailCommand(await nextCommand(), this.reader);
+        if (opened?.kind !== "issue") continue;
+        const ref = { repo: opened.repo, number: opened.number };
+        if (!this.ref || issueKey(this.ref) !== issueKey(ref)) {
+          this.history = [];
+          this.ref = ref;
+          this.load(cx2);
+        }
         cx2.notify();
       }
     });
   }
-  render(_cx) {
+  /** Follow a link: Back returns to the issue shown now. */
+  follow(cx, ref) {
+    if (this.host) {
+      this.host.follow(cx, { kind: "issue", ...ref });
+      return;
+    }
+    if (this.ref) this.history.push(this.ref);
+    this.show(cx, ref);
+  }
+  goBack(cx) {
+    if (this.host) {
+      this.host.back(cx);
+      return;
+    }
+    const ref = this.history.pop();
+    if (ref) this.show(cx, ref);
+  }
+  /** The tab now shows, and is named after, that issue. */
+  show(cx, ref) {
+    if (this.ref) this.drafts.set(issueKey(this.ref), this.draft);
+    this.draft = this.drafts.get(issueKey(ref)) ?? "";
+    this.drafts.delete(issueKey(ref));
+    this.box?.set_value(this.draft);
+    this.ref = ref;
+    this.writeFailure = null;
+    if (!this.host) navigatedDetail(this.reader, { kind: "issue", ...ref });
+    this.load(cx);
+    cx.notify();
+  }
+  /** Visibility is the reader's own native tab, not keyboard focus or the sidebar's repository. */
+  syncPolling() {
+    const place = detailLocation(this.reader);
+    const key = this.ref && place ? `${place.on ?? ""}
+${place.pane}
+${issueKey(this.ref)}` : null;
+    return this.polling.sync(key, Boolean(place?.visible) && (this.host?.active("issue") ?? true));
+  }
+  /** A forced refresh reloads even on 304; normal ticks leave unchanged discussions alone. Never touches the draft. */
+  load(cx, force = true) {
+    const ref = this.ref;
+    const place = detailLocation(this.reader);
+    this.syncPolling();
+    const request = this.polling.begin(force);
+    if (!ref || !place || !request) return;
+    const key = issueKey(ref);
+    const previous3 = this.entry?.key === key ? this.entry : null;
+    let entry = !force && previous3 && previous3.on === place.on ? previous3 : {
+      key,
+      issue: previous3?.issue,
+      on: previous3?.on === place.on ? previous3.on : void 0,
+      failure: previous3?.failure,
+      projects: previous3?.projects,
+      loading: force,
+      projectsLoading: false
+    };
+    this.entry = entry;
+    cx.spawn(async (cx2) => {
+      const current = () => this.entry === entry && this.polling.current(request) && detailLocation(this.reader)?.visible && (this.host?.active("issue") ?? true);
+      let completed;
+      try {
+        let on = entry.on;
+        if (on === void 0) {
+          const account3 = await account(place.on);
+          if (!account3.status.ok) throw new Error(describeAccount(account3).text);
+          on = account3.on;
+        }
+        if (!current()) return;
+        const change = await issueChanges(ref.repo, ref.number, request.etag, on);
+        if (!current()) return;
+        if (this.polling.reload(request, change)) {
+          if (!force) {
+            entry = { ...entry, projectsLoading: false };
+            this.entry = entry;
+          }
+          const issue = await readIssue(ref.repo, ref.number, on);
+          if (!current()) return;
+          entry.issue = issue;
+          entry.on = on;
+          entry.projectsLoading = true;
+          cx2.spawn(async (cx3) => {
+            const projects = await readIssueProjects(ref.repo, ref.number, on);
+            if (this.entry !== entry) return;
+            entry.projects = projects;
+            entry.projectsLoading = false;
+            cx3.notify();
+          });
+        }
+        completed = change;
+        entry.failure = void 0;
+      } catch (e) {
+        if (!current()) return;
+        const failure = failureOf(e);
+        entry.failure = failure.notFound ? `${ref.repo} #${ref.number} isn't on GitHub, or this account can't see it.` : failure.message;
+      } finally {
+        if (!detailLocation(this.reader)?.visible) this.syncPolling();
+        const result = this.polling.finish(request, completed);
+        if (this.entry === entry) entry.loading = false;
+        if (result.accepted && result.notify) cx2.notify();
+      }
+    });
+  }
+  /** Posts the comment box's text; the box is emptied once GitHub has it. */
+  comment(cx) {
+    const body = this.draft;
+    this.write(cx, "comment", body.trim() !== "", async (repo, number, on) => {
+      const comment = await addComment(repo, number, body, on);
+      this.publish({ repo, number, comment });
+      const sentKey = issueKey({ repo, number });
+      if (this.ref && issueKey(this.ref) === sentKey && this.draft === body) {
+        this.draft = "";
+        this.box?.set_value("");
+      } else if (this.drafts.get(sentKey) === body) this.drafts.delete(sentKey);
+    });
+  }
+  setState(cx, state) {
+    this.write(cx, "state", true, async (repo, number, on) => {
+      this.publish({ repo, number, state: await setIssueState(repo, number, state, on) });
+    });
+  }
+  /** Shows this view's own write at once, then tells the other views. */
+  publish(notice) {
+    this.apply(notice);
+    announce(notice);
+  }
+  /** One write at a time, through the gh that read the issue; a failure is said with gh's words. */
+  write(cx, kind, ready, act) {
+    const ref = this.ref;
+    const entry = this.entry;
+    if (!ref || !entry?.issue || entry.on === void 0 || this.writing || !ready) return;
+    const on = entry.on;
+    this.writing = kind;
+    this.writeFailure = null;
+    cx.notify();
+    cx.spawn(async (cx2) => {
+      try {
+        await act(ref.repo, ref.number, on);
+      } catch (e) {
+        this.writeFailure = failureOf(e).message;
+        if (e instanceof GhError && transient(e.stderr) && this.entry === entry) this.load(cx2);
+      } finally {
+        this.writing = null;
+        cx2.notify();
+      }
+    });
+  }
+  /** A write to the shown issue: a new comment joins the timeline (once), a new state shows. */
+  apply(notice) {
+    const issue = this.entry?.issue;
+    if (!isIssueNotice(notice)) return;
+    const comment = notice.comment;
+    if (!issue || !this.ref || issueKey(notice) !== issueKey(this.ref)) return;
+    this.polling.invalidate();
+    if (this.entry) this.entry.loading = false;
+    if (comment && !issue.comments.some((c) => c.id === comment.id)) issue.comments = [...issue.comments, comment];
+    if (notice.state) issue.state = notice.state.state;
+  }
+  /** A link in a post: an issue of this repository opens here; any other web link, in the browser. */
+  openLink(cx, url, issue) {
+    const detail = detailLink(url, issue.url);
+    if (detail && this.host) {
+      this.host.follow(cx, detail);
+      return;
+    }
+    const linked = issueLink(url, issue.url);
+    if (!linked) {
+      const external = browserUrl(url, issue.url);
+      if (external) cx.open_url(external);
+    } else if (this.ref && issueKey(linked) !== issueKey(this.ref)) this.follow(cx, linked);
+  }
+  render(cx) {
     if (this.reader) readyDetail(this.reader);
+    for (const notice of this.notices.take()) this.apply(notice);
+    if (this.syncPolling()) this.load(cx);
     const t = colors();
-    return v_flex4().id("pull-reader").size_full().p(24).gap(8).bg(t.background).text_color(t.foreground).child(
-      div7().text_size(16).font_semibold().child(this.ref ? `#${this.ref.number} \xB7 ${this.ref.repo}` : "")
+    const root = v_flex4().id("issue-reader").size_full().min_h(0).overflow_hidden().bg(t.background).text_color(t.foreground).text_size(14).on_size_change((size, cx2) => {
+      const wide = size.width >= 820;
+      if (wide !== this.wide) {
+        this.wide = wide;
+        cx2.notify();
+      }
+    });
+    const ref = this.ref;
+    if (!ref) return root.child(this.empty());
+    return root.child(this.header(ref)).child(this.body(ref));
+  }
+  /** No issue yet: this tab was restored after a restart, or its issue hasn't arrived. */
+  empty() {
+    const t = colors();
+    const hint = "Choose an issue in the GitHub sidebar. Issue details are not restored after restarting Herdr.";
+    return v_flex4().flex_1().gap(8).items_center().justify_center().p(24).child(div7().font_semibold().child("Issue details")).child(div7().text_size(13).text_color(t.dim).text_center().child(hint));
+  }
+  /** Back, the title with its number (opens the browser) and copy, and refresh. */
+  header(ref) {
+    const t = colors();
+    const entry = this.entry;
+    const url = entry?.issue?.url ?? `https://github.com/${ref.repo}/issues/${ref.number}`;
+    const number = link("issue-browser", url, `#${ref.number}`).px(2).rounded(4).text_color(t.accent).hover((s) => s.bg(t.hover)).tooltip(`Open ${ref.repo} #${ref.number} in browser`).accessibility_label(`Open #${ref.number} in browser`);
+    const copy = button(
+      "issue-copy",
+      svg5("mods/github/assets/copy.svg").size(16),
+      "Copy issue link",
+      (_e, cx) => cx.write_to_clipboard(url)
+    );
+    const refresh = entry?.loading ? square(div7()).child(spinner(18)) : square(
+      button("issue-refresh", "\u21BB", "Refresh issue", (_e, cx) => {
+        this.load(cx);
+        cx.notify();
+      })
+    ).text_size(22);
+    return h_flex5().flex_none().px(24).pt(18).pb(12).gap(12).items_start().when(this.host ? this.host.previous() !== null : this.history.length > 0, (el) => el.child(this.back())).child(
+      h_flex5().flex_1().min_w(0).gap(8).items_center().flex_wrap().text_size(22).child(
+        div7().min_w(0).font_semibold().child(entry?.issue?.title ?? "Issue details")
+      ).child(h_flex5().gap(2).items_center().flex_none().child(number).child(copy))
+    ).child(refresh);
+  }
+  back() {
+    const previous3 = this.host?.previous() ?? this.history.at(-1);
+    return square(button("issue-back", "\u2190", `Back to #${previous3.number}`, (_e, cx) => this.goBack(cx))).text_size(22);
+  }
+  /** The scrolling part: loading and failure notes, then the issue. */
+  body(ref) {
+    const t = colors();
+    const entry = this.entry;
+    return v_flex4().id(`issue-scroll-${issueKey(ref)}`).flex_1().min_h(0).overflow_y_scroll().px(24).pb(18).gap(12).when(entry?.loading, (el) => el.child(div7().text_size(12).text_color(t.dim).child("Loading issue\u2026"))).when(
+      entry?.failure,
+      (el) => el.child(
+        div7().text_color(t.blocked).child(entry?.failure ?? "")
+      )
+    ).child(entry?.issue ? this.document(entry.issue) : div7());
+  }
+  /** State and author, then the timeline beside (wide) or below (narrow) the metadata. */
+  document(issue) {
+    const timeline = v_flex4().min_w(0).gap(20).when(this.wide, (el) => el.flex_1()).when(!this.wide, (el) => el.w_full().flex_none()).child(postCard("issue-body", issue, "opened this issue", (url, cx) => this.openLink(cx, url, issue))).children(
+      issueTimeline(issue.comments, issue.activities).map(
+        (row) => row.type === "comment" ? postCard(
+          `comment-${row.comment.id}`,
+          row.comment,
+          "commented",
+          (url, cx) => this.openLink(cx, url, issue)
+        ) : this.activity(row.activity)
+      )
+    ).child(this.composer(issue));
+    const metadata = this.metadata(issue);
+    const content3 = this.wide ? h_flex5().gap(24).items_start().child(timeline).child(metadata) : v_flex4().gap(20).child(metadata).child(timeline);
+    return v_flex4().gap(18).child(
+      h_flex5().gap(10).pb(4).items_center().flex_wrap().child(this.stateBadge(issue)).child(div7().text_size(13).font_medium().child(issue.author))
+    ).child(content3);
+  }
+  stateBadge(issue) {
+    const t = colors();
+    const open = issue.state === "open";
+    const color = open ? t.done : t.accent;
+    return div7().px(10).py(4).rounded(14).bg(`${color}26`).text_size(13).font_semibold().text_color(color).child(open ? "\u25CB Open" : "\u25CF Closed");
+  }
+  /** A label or assignment change between the comments. */
+  activity(activity) {
+    const t = colors();
+    const avatar = div7().size(22).flex_none().rounded(11).bg(t.raised).text_color(t.muted).font_semibold().flex().items_center().justify_center().child(activity.actor.slice(0, 1).toUpperCase());
+    const labels = "labels" in activity ? activity.labels : null;
+    return h_flex5().id(`activity-${activity.id}`).px(16).py(4).gap(8).items_center().flex_wrap().text_size(12).child(avatar).child(div7().font_semibold().child(activity.actor)).child(div7().text_color(t.dim).child(activityText(activity))).when(
+      labels,
+      (el) => el.children((labels ?? []).map((label) => this.label(label))).child(
+        div7().text_color(t.dim).child(labels?.length === 1 ? "label" : "labels")
+      )
+    ).child(div7().flex_1()).child(div7().text_color(t.dim).tooltip(activity.createdAt).child(relativeTime(activity.createdAt, Date.now())));
+  }
+  label(label) {
+    const t = colors();
+    return chip(label.name, label.color ?? t.input, label.color ? `${label.color}26` : t.raised).text_color(
+      t.foreground
+    );
+  }
+  /** A new comment, and close / reopen: GitHub's own order of the two buttons. */
+  composer(issue) {
+    const t = colors();
+    const box = this.box;
+    const open = issue.state === "open";
+    const busy = this.writing !== null;
+    const close = {
+      id: "issue-state",
+      label: open ? "Close issue" : "Reopen issue",
+      tip: open ? `Close #${issue.number}` : `Reopen #${issue.number}`,
+      enabled: !busy,
+      primary: false
+    };
+    const send = {
+      id: "issue-comment",
+      label: "Comment",
+      tip: "Comment (\u2318/Ctrl+Enter)",
+      enabled: !busy && this.draft.trim() !== "",
+      primary: true
+    };
+    return v_flex4().id("issue-composer").min_w(0).w_full().gap(10).pt(4).when(
+      box,
+      (el) => el.child(
+        div7().min_w(0).rounded(8).border_1().border_color(t.border).bg(t.background).p(8).on_mouse_down("left", stop).child(Textarea.new(box).w_full().text_size(13).text_color(t.foreground))
+      )
+    ).when(
+      this.writeFailure,
+      (el) => el.child(
+        div7().text_size(12).text_color(t.blocked).child(this.writeFailure ?? "")
+      )
     ).child(
-      div7().text_size(13).text_color(t.dim).child(
-        this.ref ? "Pull request descriptions are not available yet." : "Select a pull request in the sidebar."
+      h_flex5().gap(8).items_center().justify_end().when(busy, (el) => el.child(spinner(14))).child(this.action(close, (cx) => this.setState(cx, open ? "closed" : "open"))).child(this.action(send, (cx) => this.comment(cx)))
+    );
+  }
+  action({ id, label, tip, enabled, primary }, act) {
+    const t = colors();
+    return h_flex5().id(id).h(32).px(14).gap(6).items_center().rounded(6).border_1().text_size(13).font_medium().border_color(primary ? t.accent : t.border).bg(primary ? t.accent : t.raised).text_color(primary ? t.background : t.foreground).when(
+      enabled,
+      (el) => el.cursor_pointer().hover((s) => s.opacity(0.85)).on_click((_e, cx) => {
+        cx.stop_propagation();
+        act(cx);
+      })
+    ).when(!enabled, (el) => el.opacity(0.5)).tooltip(tip).accessibility_label(tip).on_mouse_down("left", stop).child(label);
+  }
+  /** Assignees, labels, Projects and milestone: a column beside the timeline (wide) or a row above it. */
+  metadata(issue) {
+    const t = colors();
+    const quiet = (text3) => div7().text_size(12).text_color(t.dim).child(text3);
+    const section = (title, value) => v_flex4().gap(10).py(16).border_b(1).border_color(t.border).when(!this.wide, (el) => el.w(180).min_w(140).flex_1()).child(div7().text_size(13).font_semibold().child(title)).child(value);
+    const assignees = issue.assignees.length === 0 ? quiet("No assignees") : v_flex4().gap(8).children(issue.assignees.map((login) => div7().text_size(13).font_medium().child(login)));
+    const labels = issue.labels.length === 0 ? quiet("None yet") : h_flex5().gap(6).flex_wrap().children(issue.labels.map((label) => this.label(label)));
+    const sections = [
+      section("Assignees", assignees),
+      section("Labels", labels),
+      section("Project", this.projects(quiet)),
+      section("Milestone", issue.milestone ? div7().text_size(13).child(issue.milestone) : quiet("No milestone"))
+    ];
+    return this.wide ? v_flex4().w(220).flex_none().children(sections) : h_flex5().gap(20).flex_wrap().children(sections);
+  }
+  /** The issue's Projects, each opening in the browser; why there are none shows in a tooltip. */
+  projects(quiet) {
+    const t = colors();
+    const projects = this.entry?.projects;
+    if (!projects) return quiet(this.entry?.projectsLoading ? "Loading Projects\u2026" : "Projects not loaded.");
+    if (!projects.ok) return quiet("None yet").tooltip(projects.message);
+    if (projects.projects.length === 0) return quiet("None yet");
+    return v_flex4().gap(8).children(
+      projects.projects.map(
+        (project) => link(`project-${project.url}`, project.url, project.title).text_size(13).text_color(t.accent).tooltip(project.url)
       )
     );
   }
 };
 
+// src/github/views/pull.ts
+import { h_flex as h_flex6, v_flex as v_flex5 } from "gpui-base";
+import { div as div8, svg as svg6 } from "gpui-kit";
+var STATES = {
+  open: { label: "Open", icon: "git-pull-request", color: "done" },
+  draft: { label: "Draft", icon: "git-pull-request-draft", color: "dim" },
+  merged: { label: "Merged", icon: "git-merge", color: "ansi5" },
+  closed: { label: "Closed", icon: "git-pull-request-closed", color: "blocked" }
+};
+var REVIEWS = {
+  requested: { label: "Awaiting requested review", icon: "\u25CB", color: "dim" },
+  approved: { label: "Approved these changes", icon: "\u2713", color: "done" },
+  changes_requested: { label: "Requested changes", icon: "\xD7", color: "blocked" },
+  commented: { label: "Left review comments", icon: "\u25C7", color: "dim" },
+  dismissed: { label: "Review dismissed", icon: "\u2212", color: "dim" }
+};
+var Pull = class {
+  reader;
+  host;
+  ref = null;
+  entry = null;
+  wide = false;
+  constructor(reader2, host) {
+    this.reader = reader2;
+    this.host = host;
+  }
+  show(cx, ref) {
+    this.ref = ref;
+    this.entry = null;
+    this.load(cx);
+  }
+  load(cx) {
+    const ref = this.ref;
+    const place = detailLocation(this.reader);
+    if (!ref || !place || !this.host.active("pr")) return;
+    const entry = { pull: this.entry?.pull, loading: true, projectsLoading: false };
+    this.entry = entry;
+    cx.spawn(async (cx2) => {
+      const current = () => this.entry === entry && this.host.active("pr");
+      try {
+        const account3 = await account(place.on);
+        if (!account3.status.ok) throw new Error(describeAccount(account3).text);
+        if (!current()) return;
+        const pull = await readPull(ref.repo, ref.number, account3.on);
+        if (!current()) return;
+        entry.pull = pull;
+        entry.projectsLoading = true;
+        cx2.spawn(async (cx3) => {
+          const projects = await readPullProjects(ref.repo, ref.number, account3.on);
+          if (!current()) return;
+          entry.projects = projects;
+          entry.projectsLoading = false;
+          cx3.notify();
+        });
+      } catch (e) {
+        if (current()) {
+          const failure = failureOf(e);
+          entry.failure = failure.notFound ? `${ref.repo} #${ref.number} isn't on GitHub, or this account can't see it.` : failure.message;
+        }
+      } finally {
+        if (current()) {
+          entry.loading = false;
+          cx2.notify();
+        }
+      }
+    });
+  }
+  openLink(cx, url, base) {
+    const ref = detailLink(url, base);
+    if (ref) this.host.follow(cx, ref);
+    else {
+      const external = browserUrl(url, base);
+      if (external) cx.open_url(external);
+    }
+  }
+  render(_cx) {
+    const t = colors();
+    const ref = this.ref;
+    const entry = this.entry;
+    const root = v_flex5().id("pull-reader").size_full().min_h(0).overflow_hidden().bg(t.background).text_color(t.foreground).text_size(14).on_size_change((size, cx) => {
+      const wide = size.width >= 820;
+      if (wide !== this.wide) {
+        this.wide = wide;
+        cx.notify();
+      }
+    });
+    if (!ref)
+      return root.child(
+        v_flex5().flex_1().gap(8).items_center().justify_center().p(24).child(div8().font_semibold().child("Pull request details")).child(
+          div8().text_size(13).text_color(t.dim).text_center().child(
+            "Choose a pull request in the GitHub sidebar. Pull request details are not restored after restarting Herdr."
+          )
+        )
+      );
+    return root.child(this.header(ref)).child(
+      v_flex5().id(`pull-scroll-${ref.repo}-${ref.number}`).flex_1().min_h(0).overflow_y_scroll().px(24).pb(18).gap(12).when(entry?.loading, (el) => el.child(div8().text_size(12).text_color(t.dim).child("Loading pull request\u2026"))).when(
+        entry?.failure,
+        (el) => el.child(
+          div8().text_color(t.blocked).child(entry?.failure ?? "")
+        )
+      ).when(entry?.pull, (el) => el.child(entry?.pull ? this.document(entry.pull) : div8()))
+    );
+  }
+  header(ref) {
+    const t = colors();
+    const url = this.entry?.pull?.url ?? `https://github.com/${ref.repo}/pull/${ref.number}`;
+    const previous3 = this.host.previous();
+    return h_flex6().flex_none().px(24).pt(18).pb(12).gap(12).items_start().when(
+      previous3,
+      (el) => el.child(
+        square(button("pull-back", "\u2190", `Back to #${previous3?.number}`, (_e, cx) => this.host.back(cx))).text_size(
+          22
+        )
+      )
+    ).child(
+      h_flex6().flex_1().min_w(0).gap(8).items_center().flex_wrap().text_size(22).child(
+        div8().min_w(0).font_semibold().child(this.entry?.pull?.title ?? "Pull request details")
+      ).child(
+        h_flex6().gap(2).items_center().flex_none().child(
+          link("pull-browser", url, `#${ref.number}`).px(2).rounded(4).text_color(t.accent).hover((s) => s.bg(t.hover)).tooltip(`Open ${ref.repo} #${ref.number} in browser`)
+        ).child(
+          button(
+            "pull-copy",
+            svg6("mods/github/assets/copy.svg").size(16),
+            "Copy pull request link",
+            (_e, cx) => cx.write_to_clipboard(url)
+          )
+        )
+      )
+    ).child(
+      this.entry?.loading ? square(div8()).child(spinner(18)) : square(
+        button("pull-refresh", "\u21BB", "Refresh pull request", (_e, cx) => {
+          this.load(cx);
+          cx.notify();
+        })
+      ).text_size(22)
+    );
+  }
+  document(pull) {
+    const t = colors();
+    const state = STATES[pull.state];
+    const timeline = v_flex5().min_w(0).gap(20).when(this.wide, (el) => el.flex_1()).when(!this.wide, (el) => el.w_full().flex_none()).child(postCard("pull-body", pull, "opened this pull request", (url, cx) => this.openLink(cx, url, pull.url))).children(
+      pull.comments.map(
+        (comment) => postCard(`pull-comment-${comment.id}`, comment, "commented", (url, cx) => this.openLink(cx, url, pull.url))
+      )
+    );
+    const metadata = this.metadata(pull);
+    return v_flex5().gap(18).child(
+      h_flex6().gap(10).pb(4).items_center().flex_wrap().child(
+        h_flex6().gap(6).items_center().px(10).py(4).rounded(14).bg(`${t[state.color]}26`).text_size(13).font_semibold().text_color(t[state.color]).child(svg6(`mods/github/assets/${state.icon}.svg`).size(14)).child(state.label)
+      ).child(
+        div8().text_size(13).child(
+          `${pull.author} ${pull.state === "merged" ? "merged changes" : "wants to merge changes"} into ${pull.base} from ${pull.head}`
+        )
+      )
+    ).child(
+      this.wide ? h_flex6().gap(24).items_start().child(timeline).child(metadata) : v_flex5().gap(20).child(metadata).child(timeline)
+    );
+  }
+  metadata(pull) {
+    const t = colors();
+    const quiet = (text3) => div8().text_size(12).text_color(t.dim).child(text3);
+    const section = (title, value) => v_flex5().gap(10).py(16).border_b(1).border_color(t.border).when(!this.wide, (el) => el.w(180).min_w(140).flex_1()).child(div8().text_size(13).font_semibold().child(title)).child(value);
+    const reviewers2 = pull.reviewers.length === 0 ? quiet("None yet") : v_flex5().gap(8).children(
+      pull.reviewers.map((r) => {
+        const state = REVIEWS[r.state];
+        return h_flex6().gap(8).items_center().tooltip(state.label).accessibility_label(`${r.name}: ${state.label}`).child(
+          div8().flex_1().min_w(0).text_size(13).child(`${r.name}${r.team ? " (team)" : ""}`)
+        ).child(div8().text_color(t[state.color]).child(state.icon));
+      })
+    );
+    const projects = this.entry?.projects;
+    const projectList = !projects ? quiet(this.entry?.projectsLoading ? "Loading Projects\u2026" : "Projects not loaded.") : !projects.ok ? quiet("None yet").tooltip(projects.message) : projects.projects.length === 0 ? quiet("None yet") : v_flex5().gap(8).children(
+      projects.projects.map(
+        (p) => link(`pull-project-${p.url}`, p.url, p.title).text_size(13).text_color(t.accent).tooltip(p.url)
+      )
+    );
+    const sections = [
+      section("Reviewers", reviewers2),
+      section(
+        "Assignees",
+        pull.assignees.length === 0 ? quiet("None yet") : v_flex5().gap(8).children(pull.assignees.map((a) => div8().text_size(13).font_medium().child(a)))
+      ),
+      section(
+        "Labels",
+        pull.labels.length === 0 ? quiet("None yet") : h_flex6().gap(6).flex_wrap().children(
+          pull.labels.map(
+            (label) => chip(label.name, label.color ?? t.border, label.color ? `${label.color}33` : t.raised)
+          )
+        )
+      ),
+      section("Project", projectList),
+      section("Milestone", pull.milestone ? div8().text_size(13).child(pull.milestone) : quiet("No milestone"))
+    ];
+    return this.wide ? v_flex5().w(220).flex_none().children(sections) : h_flex6().gap(20).flex_wrap().children(sections);
+  }
+};
+
+// src/github/views/reader.ts
+var Reader = class {
+  reader = "";
+  navigation = new DetailNavigation();
+  issue = new Issue();
+  pull = null;
+  initial = "issue";
+  init(cx) {
+    this.reader = typeof props4()?.reader === "string" ? props4().reader : "";
+    this.initial = props4()?.role === "pr" ? "pr" : "issue";
+    const host = {
+      active: (kind) => this.navigation.ref?.kind === kind,
+      previous: () => this.navigation.previous,
+      follow: (cx2, ref) => {
+        if (this.navigation.follow(ref)) this.show(cx2, ref);
+      },
+      back: (cx2) => {
+        const ref = this.navigation.back();
+        if (ref) this.show(cx2, ref);
+      }
+    };
+    this.issue.init(cx, host);
+    this.pull = new Pull(this.reader, host);
+    cx.spawn(async (cx2) => {
+      for (; ; ) {
+        const ref = detailCommand(await nextCommand2(), this.reader);
+        if (ref && this.navigation.open(ref)) this.show(cx2, ref);
+      }
+    });
+  }
+  show(cx, ref) {
+    navigatedDetail(this.reader, ref);
+    if (ref.kind === "issue") this.issue.show(cx, ref);
+    else this.pull?.show(cx, ref);
+    cx.notify();
+  }
+  render(cx) {
+    if (this.reader) readyDetail(this.reader);
+    return (this.navigation.ref?.kind ?? this.initial) === "pr" && this.pull ? this.pull.render(cx) : this.issue.render(cx);
+  }
+};
+
 // src/github/main.ts
-var ROLES = { panel: Panel, issue: Issue, pr: Pull, pane: Pane };
+var ROLES = { panel: Panel, issue: Reader, pr: Reader, pane: Pane };
 var GitHub = class extends View {
   role = null;
   init(p, cx) {

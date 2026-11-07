@@ -2,22 +2,24 @@
 // The issue and its Back history are not restored after restart. Comments, close and reopen are
 // announced to the other views (io/changes.ts); this one applies its own writes the same way.
 
-import { h_flex, Textarea, TextareaState, TextView, v_flex } from "gpui-base";
+import { h_flex, Textarea, TextareaState, v_flex } from "gpui-base";
 import { type AsyncContext, type Context, div, type Element, svg } from "gpui-kit";
 import { nextCommand, props } from "herdr";
 import { describeAccount } from "../core/account.ts";
 import { type Activity, activityText, issueTimeline } from "../core/activity.ts";
 import type { Change } from "../core/conditional.ts";
 import { transient } from "../core/gh-args.ts";
-import { type Comment, type IssueDetail, type IssueRef, issueKey, type Label } from "../core/issue-detail.ts";
+import { type IssueDetail, type IssueRef, issueKey, type Label } from "../core/issue-detail.ts";
 import { IssuePolling } from "../core/issue-polling.ts";
-import { browserUrl, issueLink } from "../core/markdown.ts";
+import { browserUrl, detailLink, issueLink } from "../core/markdown.ts";
 import type { Projects } from "../core/projects.ts";
 import { relativeTime } from "../core/time.ts";
 import { announce, type IssueNotice, isIssueNotice, type Notice, Notices } from "../io/changes.ts";
 import { detailCommand, detailLocation, navigatedDetail, readyDetail } from "../io/detail-tabs.ts";
 import * as gh from "../io/gh.ts";
 import { addComment, issueChanges, readIssue, readIssueProjects, setIssueState } from "../io/issues.ts";
+import { postCard } from "./discussion.ts";
+import type { DetailHost } from "./reader.ts";
 import { button, chip, colors, link, type Role, spinner, square, stop } from "./ui.ts";
 
 interface Loaded {
@@ -31,9 +33,6 @@ interface Loaded {
 	projectsLoading: boolean;
 }
 
-/** What a timeline card shows: the issue's description or a comment. */
-type Post = Pick<Comment, "author" | "createdAt" | "markdown"> & { reactions?: Comment["reactions"] };
-
 /** A composer button: enabled or not, and the one primary action. */
 interface Action {
 	id: string;
@@ -45,6 +44,7 @@ interface Action {
 
 export class Issue implements Role {
 	reader = "";
+	host: DetailHost | null = null;
 	ref: IssueRef | null = null;
 	/** Issues this tab showed before following links, most recent last. */
 	history: IssueRef[] = [];
@@ -60,7 +60,8 @@ export class Issue implements Role {
 	writeFailure: string | null = null;
 	polling = new IssuePolling();
 
-	init(cx: AsyncContext): void {
+	init(cx: AsyncContext, host: DetailHost | null = null): void {
+		this.host = host;
 		this.reader = typeof props()?.reader === "string" ? props().reader : "";
 		const box = TextareaState.new({ placeholder: "Leave a comment (Markdown)" });
 		box.set_auto_grow(3, 12);
@@ -77,6 +78,7 @@ export class Issue implements Role {
 			const shown = this.syncPolling();
 			if (!this.writing) this.load(cx, shown);
 		});
+		if (host) return; // The shared reader owns commands and cross-kind navigation.
 		// Waiting is a read: init neither opens tabs nor writes shared state.
 		cx.spawn(async (cx) => {
 			for (;;) {
@@ -97,17 +99,25 @@ export class Issue implements Role {
 
 	/** Follow a link: Back returns to the issue shown now. */
 	follow(cx: Context, ref: IssueRef): void {
+		if (this.host) {
+			this.host.follow(cx, { kind: "issue", ...ref });
+			return;
+		}
 		if (this.ref) this.history.push(this.ref);
 		this.show(cx, ref);
 	}
 
 	goBack(cx: Context): void {
+		if (this.host) {
+			this.host.back(cx);
+			return;
+		}
 		const ref = this.history.pop();
 		if (ref) this.show(cx, ref);
 	}
 
 	/** The tab now shows, and is named after, that issue. */
-	private show(cx: Context, ref: IssueRef): void {
+	show(cx: Context, ref: IssueRef): void {
 		// Each issue keeps its own unsent comment: Back brings it back, and it is never posted elsewhere.
 		if (this.ref) this.drafts.set(issueKey(this.ref), this.draft);
 		this.draft = this.drafts.get(issueKey(ref)) ?? "";
@@ -115,7 +125,7 @@ export class Issue implements Role {
 		this.box?.set_value(this.draft);
 		this.ref = ref;
 		this.writeFailure = null;
-		navigatedDetail(this.reader, { kind: "issue", ...ref });
+		if (!this.host) navigatedDetail(this.reader, { kind: "issue", ...ref });
 		this.load(cx);
 		cx.notify();
 	}
@@ -124,7 +134,7 @@ export class Issue implements Role {
 	private syncPolling(): boolean {
 		const place = detailLocation(this.reader);
 		const key = this.ref && place ? `${place.on ?? ""}\n${place.pane}\n${issueKey(this.ref)}` : null;
-		return this.polling.sync(key, Boolean(place?.visible));
+		return this.polling.sync(key, Boolean(place?.visible) && (this.host?.active("issue") ?? true));
 	}
 
 	/** A forced refresh reloads even on 304; normal ticks leave unchanged discussions alone. Never touches the draft. */
@@ -151,7 +161,10 @@ export class Issue implements Role {
 		this.entry = entry;
 		cx.spawn(async (cx) => {
 			const current = () =>
-				this.entry === entry && this.polling.current(request) && detailLocation(this.reader)?.visible;
+				this.entry === entry &&
+				this.polling.current(request) &&
+				detailLocation(this.reader)?.visible &&
+				(this.host?.active("issue") ?? true);
 			let completed: Change | undefined;
 			try {
 				let on = entry.on;
@@ -269,6 +282,11 @@ export class Issue implements Role {
 
 	/** A link in a post: an issue of this repository opens here; any other web link, in the browser. */
 	private openLink(cx: Context, url: string, issue: IssueDetail): void {
+		const detail = detailLink(url, issue.url);
+		if (detail && this.host) {
+			this.host.follow(cx, detail);
+			return;
+		}
 		const linked = issueLink(url, issue.url);
 		if (!linked) {
 			const external = browserUrl(url, issue.url);
@@ -347,7 +365,7 @@ export class Issue implements Role {
 			.pb(12)
 			.gap(12)
 			.items_start()
-			.when(this.history.length > 0, (el) => el.child(this.back()))
+			.when(this.host ? this.host.previous() !== null : this.history.length > 0, (el) => el.child(this.back()))
 			.child(
 				h_flex()
 					.flex_1()
@@ -368,7 +386,7 @@ export class Issue implements Role {
 	}
 
 	private back(): Element {
-		const previous = this.history.at(-1)!;
+		const previous = this.host?.previous() ?? this.history.at(-1)!;
 		return square(button("issue-back", "←", `Back to #${previous.number}`, (_e, cx) => this.goBack(cx))).text_size(22);
 	}
 
@@ -403,11 +421,13 @@ export class Issue implements Role {
 			.gap(20)
 			.when(this.wide, (el) => el.flex_1())
 			.when(!this.wide, (el) => el.w_full().flex_none())
-			.child(this.card("issue-body", issue, issue, "opened this issue"))
+			.child(postCard("issue-body", issue, "opened this issue", (url, cx) => this.openLink(cx, url, issue)))
 			.children(
 				issueTimeline(issue.comments, issue.activities).map((row) =>
 					row.type === "comment"
-						? this.card(`comment-${row.comment.id}`, issue, row.comment, "commented")
+						? postCard(`comment-${row.comment.id}`, row.comment, "commented", (url, cx) =>
+								this.openLink(cx, url, issue),
+							)
 						: this.activity(row.activity),
 				),
 			)
@@ -443,56 +463,6 @@ export class Issue implements Role {
 			.font_semibold()
 			.text_color(color)
 			.child(open ? "○ Open" : "● Closed");
-	}
-
-	/** The description or a comment: who, what and when, its Markdown, and its reactions. */
-	private card(id: string, issue: IssueDetail, post: Post, verb: string): Element {
-		const t = colors();
-		const reactions = post.reactions ?? [];
-		const heading = h_flex()
-			.px(16)
-			.py(10)
-			.gap(8)
-			.items_center()
-			.flex_wrap()
-			.bg(t.raised)
-			.border_b(1)
-			.border_color(t.border)
-			.text_size(12)
-			.child(div().font_semibold().child(post.author))
-			.child(div().text_color(t.dim).child(verb))
-			.child(div().flex_1())
-			.child(div().text_color(t.dim).tooltip(post.createdAt).child(relativeTime(post.createdAt, Date.now())));
-		const text = TextView.markdown(id, post.markdown)
-			.selectable(true)
-			.scrollable(false)
-			.on_link_click((url, cx) => this.openLink(cx, url, issue));
-		return v_flex()
-			.id(`${id}-card`)
-			.min_w(0)
-			.w_full()
-			.overflow_hidden()
-			.rounded(8)
-			.border_1()
-			.border_color(t.border)
-			.bg(t.background)
-			.child(heading)
-			.child(
-				v_flex()
-					.min_w(0)
-					.px(16)
-					.py(16)
-					.gap(12)
-					.child(text)
-					.when(reactions.length > 0, (el) =>
-						el.child(
-							h_flex()
-								.gap(6)
-								.flex_wrap()
-								.children(reactions.map((r) => chip(`${r.emoji} ${r.count}`, t.border, t.raised))),
-						),
-					),
-			);
 	}
 
 	/** A label or assignment change between the comments. */

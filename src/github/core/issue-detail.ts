@@ -75,6 +75,14 @@ const EMOJI: [string, string][] = [
 	["eyes", "👀"],
 ];
 
+/** Non-zero REST reaction counts, shared by issue and PR posts. */
+export function parseReactions(reactions: Record<string, number | string> = {}): Reaction[] {
+	return EMOJI.flatMap(([key, emoji]) => {
+		const count = reactions[key];
+		return typeof count === "number" && count > 0 ? [{ emoji, count }] : [];
+	});
+}
+
 /** A REST comment as the reader shows it (non-zero reaction counts); `issueUrl` resolves its #123 references. */
 export function parseComment(comment: unknown, issueUrl: string): Comment {
 	const c = comment as RestComment;
@@ -84,10 +92,7 @@ export function parseComment(comment: unknown, issueUrl: string): Comment {
 		createdAt: c.created_at,
 		body: c.body ?? "",
 		markdown: readerMarkdown(c.body ?? "", issueUrl),
-		reactions: EMOJI.flatMap(([key, emoji]) => {
-			const count = c.reactions[key];
-			return typeof count === "number" && count > 0 ? [{ emoji, count }] : [];
-		}),
+		reactions: parseReactions(c.reactions),
 	};
 }
 
