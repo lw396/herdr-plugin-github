@@ -9,6 +9,13 @@ The watch build copies assets at startup; restart it after an asset change.
 Import source siblings as `./x.ts`. Reference UI assets as `mods/github/assets/<file>`.
 Keep TypeScript erasable: no enums, namespaces or constructor parameter properties.
 
+## Formatting and lint
+
+Biome (`biome.json`) formats and lints TypeScript, JavaScript and JSON; `bun run lint` (part of `verify`)
+checks, and `bun run format` rewrites. Do not hand-format. Markdown, generated output (`mods/`, `types/`),
+Herdr's own files (`layouts/`, `docs/`) and the real gh replies in `test/fixtures/` are excluded:
+keep them as written.
+
 ## Dependency constraints
 
 Herdr loads plain JavaScript and resolves only `herdr`, `gpui-kit`, `gpui-base` and relative files.
