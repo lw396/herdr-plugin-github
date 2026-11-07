@@ -165,7 +165,9 @@ export class Panel implements Role {
 	 * then the shown expanded groups ask GitHub again (the change made them stale).
 	 */
 	private receive(cx: Context): void {
-		const changes = this.notices.take().flatMap((n) => (n.state ? [n.state] : []));
+		const notices = this.notices.take();
+		if (notices.some((n) => n.pull)) this.pulls.load(cx, true);
+		const changes = notices.flatMap((n) => (n.state ? [n.state] : []));
 		if (changes.length === 0) return;
 		changes.forEach(known.issueChanged);
 		this.issues.show();

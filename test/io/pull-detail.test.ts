@@ -24,6 +24,9 @@ function replies(number: number) {
 	const prefix = `pull-cli-${number}`;
 	const sha = JSON.parse(fixture(`${prefix}.json`)).head.sha;
 	return {
+		"~$ gh api repos/cli/cli": {
+			stdout: '{"allow_merge_merge":true,"allow_squash_merge":true,"allow_rebase_merge":true}',
+		},
 		[`~$ gh api repos/cli/cli/issues/${number}/timeline?per_page=100 --paginate --slurp`]: { stdout: "[[]]" },
 		[`~$ gh api repos/cli/cli/pulls/${number}/comments?per_page=100 --paginate --slurp`]: { stdout: "[[]]" },
 		[`~$ gh api repos/cli/cli/commits/${sha}/check-runs?per_page=100 --paginate --slurp`]: {

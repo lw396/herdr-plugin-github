@@ -6,6 +6,7 @@ import type { IssueChange } from "../core/issues.ts";
 
 /** One write to an issue: a new comment, or its new state. */
 export interface Notice {
+	pull?: boolean;
 	repo: string;
 	number: number;
 	comment?: Comment;

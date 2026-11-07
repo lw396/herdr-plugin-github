@@ -2,12 +2,14 @@
 import { h_flex, v_flex } from "gpui-base";
 import { type Context, div, type Element } from "gpui-kit";
 import { type DetailRef, notVisible } from "../core/detail.ts";
+import type { MergeMethod } from "../core/merge.ts";
 import type { Projects } from "../core/projects.ts";
 import type { PullDetail, ReviewState } from "../core/pull-detail.ts";
+import { announce } from "../io/changes.ts";
 import { detailLocation } from "../io/detail-tabs.ts";
 import * as gh from "../io/gh.ts";
 import { readProjects } from "../io/projects.ts";
-import { readPull } from "../io/pulls.ts";
+import { deletePullBranch, mergePull, readPull } from "../io/pulls.ts";
 import {
 	type DetailHost,
 	detailBody,
@@ -23,7 +25,7 @@ import {
 	quiet,
 	stateBadge,
 } from "./detail.ts";
-import { colors, link, PULL_STATES } from "./ui.ts";
+import { button, colors, link, PULL_STATES } from "./ui.ts";
 
 interface Loaded {
 	pull?: PullDetail;
@@ -42,6 +44,10 @@ const REVIEWS: Record<ReviewState, { label: string; icon: string; color: string 
 };
 
 export class Pull {
+	private method: MergeMethod | null = null;
+	private confirming = false;
+	private writing = false;
+	private writeFailure = "";
 	ref: DetailRef | null = null;
 	entry: Loaded | null = null;
 	private readonly host: DetailHost;
@@ -51,6 +57,9 @@ export class Pull {
 	}
 
 	show(cx: Context, ref: DetailRef): void {
+		this.method = null;
+		this.confirming = false;
+		this.writeFailure = "";
 		this.ref = ref;
 		this.entry = null;
 		this.load(cx);
@@ -118,6 +127,7 @@ export class Pull {
 			],
 			[
 				postCard("pull-body", pull, "opened this pull request", onLink),
+				this.mergeArea(pull),
 				...(pull.timeline ?? []).map((item, index) =>
 					v_flex()
 						.gap(8)
@@ -151,6 +161,79 @@ export class Pull {
 				["Milestone", milestone(pull.milestone)],
 			],
 		);
+	}
+
+	private mergeArea(pull: PullDetail): Element {
+		const info = pull.merge;
+		const area = v_flex().gap(10).child(div().font_semibold().child("Merge"));
+		if (!info) return area;
+		area.child(quiet(info.reason ?? "This branch has no conflicts with the base branch"));
+		if (this.writeFailure) area.child(quiet(this.writeFailure));
+		const act = (cx: Context, remove: boolean) => {
+			const ref = this.ref,
+				place = detailLocation(this.host.reader);
+			if (!ref || !place || this.writing) return;
+			this.writing = true;
+			cx.spawn(async (cx) => {
+				try {
+					if (remove) {
+						await deletePullBranch(info, place.on);
+						info.deletable = false;
+					} else await mergePull(ref.repo, ref.number, this.method ?? info.methods[0], info.sha, place.on);
+					announce({ repo: ref.repo, number: ref.number, pull: true });
+					if (this.ref === ref) {
+						this.confirming = false;
+						this.writeFailure = "";
+						if (!remove) this.load(cx);
+					}
+				} catch (e) {
+					if (this.ref === ref) this.writeFailure = gh.failureOf(e).message;
+				} finally {
+					this.writing = false;
+					cx.notify();
+				}
+			});
+		};
+		if (this.writing) return area.child(quiet("Updating pull request…"));
+		if (info.deletable)
+			area.child(button("delete-branch", "Delete branch", "Delete remote branch", (_e, cx) => act(cx, true)));
+		if (!info.reason) {
+			for (const method of info.methods)
+				area.child(
+					button(
+						`method-${method}`,
+						`${(this.method ?? info.methods[0]) === method ? "●" : "○"} ${method === "merge" ? "Create a merge commit" : method === "squash" ? "Squash and merge" : "Rebase and merge"}`,
+						"Merge method",
+						(_e, cx) => {
+							this.method = method;
+							this.confirming = false;
+							cx.notify();
+						},
+					),
+				);
+			area.child(
+				button(
+					"merge-confirm",
+					this.confirming ? "Confirm Merge" : "Merge Pull Request",
+					"Merge pull request",
+					(_e, cx) => {
+						if (this.confirming) act(cx, false);
+						else {
+							this.confirming = true;
+							cx.notify();
+						}
+					},
+				),
+			);
+			if (this.confirming)
+				area.child(
+					button("merge-cancel", "Cancel", "Cancel merge", (_e, cx) => {
+						this.confirming = false;
+						cx.notify();
+					}),
+				);
+		}
+		return area;
 	}
 
 	private reviewers(pull: PullDetail): Element {
