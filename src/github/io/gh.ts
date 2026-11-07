@@ -1,6 +1,7 @@
 // The only file that reaches GitHub: `gh`, on the folder's machine (`on`, see account()).
-import { exec } from "herdr";
+import { type ExecResult, exec } from "herdr";
 import type { Account, Status } from "../core/account.ts";
+import { type Change, responseHeaders } from "../core/conditional.ts";
 import {
 	type ApiOptions,
 	apiArgs,
@@ -49,11 +50,26 @@ const TRIES = 3;
  * when the connection drops (`Get "…": EOF`); a write never is: GitHub may already have done it.
  */
 export async function gh(args: string[], where: Where = {}, read = false): Promise<string> {
+	return (await execute(args, where, read)).stdout;
+}
+
+async function execute(args: string[], where: Where, read: boolean, conditional = false): Promise<ExecResult> {
 	for (let tried = 1; ; tried++) {
 		const r = await exec("gh", args, { cwd: where.cwd ?? undefined, on: where.on ?? null });
-		if (r.code === 0) return r.stdout;
+		if (r.code === 0 || (conditional && responseHeaders(r.stdout).status === 304)) return r;
 		if (!read || tried >= TRIES || !transient(r.stderr)) throw new GhError(errorMessage(r.stderr), r.code, r.stderr);
 	}
+}
+
+/** A conditional GET. gh exits 1 for 304 but keeps the status and headers in stdout. */
+export async function changes(path: string, etag: string | null, where: Where = {}): Promise<Change> {
+	const args = ["api", path, "--include"];
+	if (etag) args.push("-H", `If-None-Match: ${etag}`);
+	const result = await execute(args, where, true, true);
+	const headers = responseHeaders(result.stdout);
+	if (headers.status === 304) return { changed: false };
+	if (headers.status !== 200) throw new Error("GitHub did not return an HTTP 200 or 304 response.");
+	return { changed: true, etag: headers.etag };
 }
 
 const reads = (method: string | undefined): boolean => !method || method.toUpperCase() === "GET";

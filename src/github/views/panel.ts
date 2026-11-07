@@ -18,7 +18,9 @@ import { Notices } from "../io/changes.ts";
 import { location, locationKey } from "../io/context.ts";
 import { DetailTabs } from "../io/detail-tabs.ts";
 import * as gh from "../io/gh.ts";
+import { listChanges } from "../io/issues.ts";
 import * as known from "../io/known.ts";
+import { sidebarVisible } from "../io/visibility.ts";
 import { button, colors, type Role, spinner, stop } from "./ui.ts";
 
 /** The Issues tab's groups, in order: title, and what an empty one says. */
@@ -59,8 +61,54 @@ export class Panel implements Role {
 	openFailure: string | null = null;
 	notices = new Notices();
 
+	visible = false;
+	etag: string | null = null;
+	checking: object | null = null;
+
 	init(cx: AsyncContext): void {
-		this.refresh(cx);
+		cx.timer.every(60_000, (cx) => {
+			if (!this.isVisible()) {
+				this.visible = false;
+				return;
+			}
+			if (!this.loading) this.check(cx);
+		});
+	}
+
+	private isVisible(): boolean {
+		return Boolean(props()?.overlay) || sidebarVisible();
+	}
+
+	/** Only a changed list re-asks expanded groups. A shown/explicit refresh asks even on 304. */
+	private check(cx: Context, refresh = false): void {
+		const r = this.ready(),
+			run = this.latest;
+		if (!r || !this.isVisible() || this.checking) return;
+		const checking = {};
+		this.checking = checking;
+		cx.spawn(async (cx) => {
+			const current = () => run === this.latest && this.checking === checking && this.isVisible();
+			let changed = false;
+			try {
+				const result = await listChanges(`${r.remote.owner}/${r.remote.repo}`, this.etag, r.on);
+				if (!current()) return;
+				if (result.changed) {
+					this.etag = result.etag;
+					changed = true;
+				}
+				this.failure = undefined;
+			} catch (e) {
+				if (current()) this.failure = gh.failureOf(e);
+			} finally {
+				if (current()) {
+					if (changed || refresh) {
+						for (const { kind } of GROUPS) this.load(cx, kind, true);
+					}
+					if (changed || refresh || this.failure) cx.notify();
+				}
+				if (this.checking === checking) this.checking = null;
+			}
+		});
 	}
 
 	/** The gh account's login on the folder's machine and the remote, once both are known and usable. */
@@ -78,7 +126,11 @@ export class Panel implements Role {
 			current = () => run === this.latest,
 			context = JSON.stringify(where);
 		// Another place has other rows: the pointer is over none of them until it moves.
-		if (context !== this.context) this.hovered = null;
+		if (context !== this.context) {
+			this.hovered = null;
+			this.etag = null;
+		}
+		this.checking = null;
 		this.context = context;
 		// Never the previous place's facts: this place's known ones, or "…" until they arrive.
 		this.account = known.peekAccount(where.on);
@@ -98,7 +150,7 @@ export class Panel implements Role {
 				]);
 				if (!current()) return;
 				this.remote = remote;
-				for (const { kind } of GROUPS) if (this.groups[kind].expanded) this.load(cx, kind, force);
+				this.check(cx, true);
 			} catch (e) {
 				if (current()) this.failure = gh.failureOf(e);
 			} finally {
@@ -124,7 +176,7 @@ export class Panel implements Role {
 		const g = this.groups[kind],
 			r = this.ready(),
 			run = this.latest;
-		if (!r || !g.expanded) return;
+		if (!r || !g.expanded || !this.isVisible()) return;
 		g.loading = true;
 		g.failure = undefined;
 		cx.spawn(async (cx) => {
@@ -133,7 +185,11 @@ export class Panel implements Role {
 				// What is kept wins: a change from a reader may have replaced this answer while it was out.
 				if (run === this.latest) g.page = known.peekGroup(kind, r.remote, r.login, r.on) ?? page;
 			} catch (e) {
-				if (run === this.latest) g.failure = gh.failureOf(e);
+				if (run === this.latest) {
+					g.failure = gh.failureOf(e);
+					// Retry a failed refresh next tick even if the list itself has not changed.
+					this.etag = null;
+				}
 			} finally {
 				if (run === this.latest) {
 					g.loading = false;
@@ -197,7 +253,10 @@ export class Panel implements Role {
 		this.details.deliver();
 		this.receive(cx);
 		// Follow the focused folder: live data re-renders us, so compare here.
-		if (locationKey() !== this.context) this.refresh(cx);
+		const visible = this.isVisible();
+		const shown = visible && !this.visible;
+		this.visible = visible;
+		if (visible && (shown || locationKey() !== this.context)) this.refresh(cx, shown);
 		const t = colors();
 		const where = location();
 		const overlay: string | undefined = props()?.overlay;

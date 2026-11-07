@@ -20,6 +20,44 @@ function asked(kind: GroupKind, owner: string, name: string, after: string | nul
 	return `~$ gh api graphql ${first}-f query=${groupQuery(kind)} -f owner=${owner} -f name=${name}${next}${assignee ? ` -f assignee=${assignee}` : ""}`;
 }
 
+describe("issue list changes", () => {
+	test("a 404 is still a repository failure, not an unchanged list", async () => {
+		machine(null, {
+			"~$ gh api repos/lw396/does-not-exist-for-poll-test/issues?state=all&sort=updated&per_page=1 --include":
+				JSON.parse(fixture("issues-poll-404.json")),
+		});
+		expect(
+			await issues.listChanges("lw396/does-not-exist-for-poll-test", null, null).catch((e: unknown) => e),
+		).toMatchObject({ code: 1, notFound: true });
+	});
+
+	test("304 means unchanged even though gh exits 1; the previous ETag is sent verbatim", async () => {
+		machine("center", {
+			'~$ gh api repos/lw396/herdr-plugin-github/issues?state=all&sort=updated&per_page=1 --include -H If-None-Match: W/"d4c47c7cdfe7d905ae24de722f838dadda87cf5a7451338ef032764adfe92162"':
+				JSON.parse(fixture("issues-poll-304.json")),
+		});
+		expect(
+			await issues.listChanges(
+				"lw396/herdr-plugin-github",
+				'W/"d4c47c7cdfe7d905ae24de722f838dadda87cf5a7451338ef032764adfe92162"',
+				"center",
+			),
+		).toEqual({ changed: false });
+	});
+
+	test("a first read on the folder's machine returns the new ETag", async () => {
+		machine("center", {
+			"~$ gh api repos/lw396/herdr-plugin-github/issues?state=all&sort=updated&per_page=1 --include": JSON.parse(
+				fixture("issues-poll-200.json"),
+			),
+		});
+		expect(await issues.listChanges("lw396/herdr-plugin-github", null, "center")).toEqual({
+			changed: true,
+			etag: 'W/"d4c47c7cdfe7d905ae24de722f838dadda87cf5a7451338ef032764adfe92162"',
+		});
+	});
+});
+
 describe("issuePage", () => {
 	test("Assigned: the folder machine's gh, the repository's open issues assigned to its login", async () => {
 		machine("center", {

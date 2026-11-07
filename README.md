@@ -8,6 +8,7 @@ The mod uses GitHub CLI (`gh`) on the machine hosting the repository, so local a
 
 - **Repository detection** — identify the GitHub repository from the focused folder's git remotes.
 - **Issue sidebar** — browse issues assigned to you, all open issues, and closed issues, with pagination.
+- **Automatic list refresh** — while the GitHub sidebar is visible, check for changes every 60 seconds using ETags; refresh expanded groups only when changed. Showing it again refreshes immediately.
 - **Native issue tabs** — open different issues in separate tabs; selecting an already-open issue reuses its tab.
 - **Discussion reader** — read Markdown descriptions, comments, and reaction counts in individual cards.
 - **Issue links** — `#123` and links to the repository's issues open in the same tab, with **←** to go back; other links open in your browser.

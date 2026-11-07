@@ -59,7 +59,7 @@ function facts<T>(limit: number, fresh: number, keep: (value: T) => boolean) {
 // Not kept: a gh that isn't signed in, and a folder without a GitHub remote (yet): both are
 // what the person is about to fix, so the next look asks again.
 // A GitHub account hardly ever changes: a signed-in one is kept for an hour, even through ↻.
-// Remotes rarely change; lists do (until #16 polls for changes).
+// Remotes rarely change; visible lists also use conditional polling to detect external changes.
 const accounts = facts<Account>(16, 60 * 60_000, (a) => a.status.ok);
 const remotes = facts<RemoteRepo | null>(64, 5 * 60_000, (r) => r !== null);
 const groups = facts<IssueGroup>(64, 60_000, () => true);

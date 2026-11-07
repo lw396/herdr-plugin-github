@@ -12,7 +12,11 @@ import {
 } from "../core/issues.ts";
 import { PROJECTS_QUERY, type Project, type Projects, projectPage, projectsFailure } from "../core/projects.ts";
 import type { RemoteRepo } from "../core/remote.ts";
-import { api, graphql } from "./gh.ts";
+import { api, changes, graphql } from "./gh.ts";
+
+/** Detects repository list changes without spending a search request on unchanged groups. */
+export const listChanges = (repo: string, etag: string | null, on: string | null) =>
+	changes(`repos/${repo}/issues?state=all&sort=updated&per_page=1`, etag, { on });
 
 /**
  * One page of a group in the repository, asked with the gh on `on` (whose account is `login`,

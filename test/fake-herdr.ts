@@ -27,6 +27,7 @@ export function machine(on: string | null, replies: Machine): void {
 
 /** What Herdr shows: spaces, panes and focus, shaped like Herdr's (only the fields io/ reads need be set). */
 export interface Screen {
+	layout?: unknown;
 	spaces?: (Omit<Partial<SpaceInfo>, "tabs"> & { tabs?: Partial<TabInfo>[] })[];
 	panes?: Partial<PaneInfo>[];
 	focused?: Partial<NonNullable<ReturnType<typeof Focused>>> | null;
@@ -39,6 +40,7 @@ export function screen(s: Screen): void {
 	shown = s;
 }
 
+export const layout = (): unknown => shown.layout ?? null;
 export const spaces = () => shown.spaces ?? [];
 export const panes = (): Partial<PaneInfo>[] => shown.panes ?? [];
 export const focused = () => (shown.focused === undefined ? null : shown.focused);

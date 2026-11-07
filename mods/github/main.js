@@ -9705,6 +9705,17 @@ function issueCommand(command, id) {
 
 // src/github/io/gh.ts
 import { exec as exec2 } from "herdr";
+
+// src/github/core/conditional.ts
+function responseHeaders(stdout) {
+  const headers = stdout.split(/\r?\n\r?\n/, 1)[0] ?? "";
+  return {
+    status: Number(/^HTTP\/\S+\s+(\d+)/.exec(headers)?.[1]),
+    etag: /^etag:\s*(.+)$/im.exec(headers)?.[1]?.trim() ?? null
+  };
+}
+
+// src/github/io/gh.ts
 var GhError = class extends Error {
   code;
   stderr;
@@ -9724,11 +9735,23 @@ function failureOf(e) {
 }
 var TRIES = 3;
 async function gh(args, where = {}, read = false) {
+  return (await execute(args, where, read)).stdout;
+}
+async function execute(args, where, read, conditional = false) {
   for (let tried = 1; ; tried++) {
     const r = await exec2("gh", args, { cwd: where.cwd ?? void 0, on: where.on ?? null });
-    if (r.code === 0) return r.stdout;
+    if (r.code === 0 || conditional && responseHeaders(r.stdout).status === 304) return r;
     if (!read || tried >= TRIES || !transient(r.stderr)) throw new GhError(errorMessage(r.stderr), r.code, r.stderr);
   }
+}
+async function changes(path, etag, where = {}) {
+  const args = ["api", path, "--include"];
+  if (etag) args.push("-H", `If-None-Match: ${etag}`);
+  const result = await execute(args, where, true, true);
+  const headers = responseHeaders(result.stdout);
+  if (headers.status === 304) return { changed: false };
+  if (headers.status !== 200) throw new Error("GitHub did not return an HTTP 200 or 304 response.");
+  return { changed: true, etag: headers.etag };
 }
 var reads = (method) => !method || method.toUpperCase() === "GET";
 async function api(path, options = {}) {
@@ -9868,6 +9891,7 @@ function projectsFailure(message, on) {
 }
 
 // src/github/io/issues.ts
+var listChanges = (repo, etag, on) => changes(`repos/${repo}/issues?state=all&sort=updated&per_page=1`, etag, { on });
 async function issuePage(kind, remote2, login, on, after) {
   return parseIssueGroup(await graphql(groupQuery(kind), groupVariables(kind, remote2, login, after), { on }));
 }
@@ -10499,6 +10523,24 @@ function issueChanged(change) {
   );
 }
 
+// src/github/io/visibility.ts
+import { layout } from "herdr";
+
+// src/github/core/visibility.ts
+function layoutShows(tree, id) {
+  if (!tree || typeof tree !== "object") return false;
+  const node2 = tree;
+  if (node2.hidden) return false;
+  if (node2.id === id) return true;
+  const children = node2.children ?? [];
+  return children.some(
+    (child, index2) => (node2.type !== "stack" || (node2.active ? child.id === node2.active : index2 === 0)) && layoutShows(child, id)
+  );
+}
+
+// src/github/io/visibility.ts
+var sidebarVisible = () => layoutShows(layout(), "github");
+
 // src/github/views/panel.ts
 var GROUPS = [
   // One word like the others; the empty text says whose.
@@ -10526,8 +10568,50 @@ var Panel = class {
   details = new DetailTabs();
   openFailure = null;
   notices = new Notices();
+  visible = false;
+  etag = null;
+  checking = null;
   init(cx) {
-    this.refresh(cx);
+    cx.timer.every(6e4, (cx2) => {
+      if (!this.isVisible()) {
+        this.visible = false;
+        return;
+      }
+      if (!this.loading) this.check(cx2);
+    });
+  }
+  isVisible() {
+    return Boolean(props3()?.overlay) || sidebarVisible();
+  }
+  /** Only a changed list re-asks expanded groups. A shown/explicit refresh asks even on 304. */
+  check(cx, refresh = false) {
+    const r = this.ready(), run3 = this.latest;
+    if (!r || !this.isVisible() || this.checking) return;
+    const checking = {};
+    this.checking = checking;
+    cx.spawn(async (cx2) => {
+      const current = () => run3 === this.latest && this.checking === checking && this.isVisible();
+      let changed = false;
+      try {
+        const result = await listChanges(`${r.remote.owner}/${r.remote.repo}`, this.etag, r.on);
+        if (!current()) return;
+        if (result.changed) {
+          this.etag = result.etag;
+          changed = true;
+        }
+        this.failure = void 0;
+      } catch (e) {
+        if (current()) this.failure = failureOf(e);
+      } finally {
+        if (current()) {
+          if (changed || refresh) {
+            for (const { kind } of GROUPS) this.load(cx2, kind, true);
+          }
+          if (changed || refresh || this.failure) cx2.notify();
+        }
+        if (this.checking === checking) this.checking = null;
+      }
+    });
   }
   /** The gh account's login on the folder's machine and the remote, once both are known and usable. */
   ready() {
@@ -10537,7 +10621,11 @@ var Panel = class {
   /** Shows what is known about the focused place at once, then asks for what is stale (all of it when `force`, ↻). */
   refresh(cx, force = false) {
     const where = location(), run3 = ++this.latest, current = () => run3 === this.latest, context = JSON.stringify(where);
-    if (context !== this.context) this.hovered = null;
+    if (context !== this.context) {
+      this.hovered = null;
+      this.etag = null;
+    }
+    this.checking = null;
     this.context = context;
     this.account = peekAccount(where.on);
     this.remote = peekRemote(where);
@@ -10554,7 +10642,7 @@ var Panel = class {
         ]);
         if (!current()) return;
         this.remote = remote2;
-        for (const { kind } of GROUPS) if (this.groups[kind].expanded) this.load(cx2, kind, force);
+        this.check(cx2, true);
       } catch (e) {
         if (current()) this.failure = failureOf(e);
       } finally {
@@ -10575,7 +10663,7 @@ var Panel = class {
   /** Asks for the group's first page (an expanded group only). */
   load(cx, kind, force = false) {
     const g = this.groups[kind], r = this.ready(), run3 = this.latest;
-    if (!r || !g.expanded) return;
+    if (!r || !g.expanded || !this.isVisible()) return;
     g.loading = true;
     g.failure = void 0;
     cx.spawn(async (cx2) => {
@@ -10583,7 +10671,10 @@ var Panel = class {
         const page = await group(kind, r.remote, r.login, r.on, force);
         if (run3 === this.latest) g.page = peekGroup(kind, r.remote, r.login, r.on) ?? page;
       } catch (e) {
-        if (run3 === this.latest) g.failure = failureOf(e);
+        if (run3 === this.latest) {
+          g.failure = failureOf(e);
+          this.etag = null;
+        }
       } finally {
         if (run3 === this.latest) {
           g.loading = false;
@@ -10627,9 +10718,9 @@ var Panel = class {
    * then the shown expanded groups ask GitHub again (the change made them stale).
    */
   receive(cx) {
-    const changes = this.notices.take().flatMap((n) => n.state ? [n.state] : []);
-    if (changes.length === 0) return;
-    changes.forEach(issueChanged);
+    const changes2 = this.notices.take().flatMap((n) => n.state ? [n.state] : []);
+    if (changes2.length === 0) return;
+    changes2.forEach(issueChanged);
     for (const { kind } of GROUPS) {
       this.show(kind);
       this.load(cx, kind);
@@ -10638,7 +10729,10 @@ var Panel = class {
   render(cx) {
     this.details.deliver();
     this.receive(cx);
-    if (locationKey() !== this.context) this.refresh(cx);
+    const visible = this.isVisible();
+    const shown = visible && !this.visible;
+    this.visible = visible;
+    if (visible && (shown || locationKey() !== this.context)) this.refresh(cx, shown);
     const t = colors();
     const where = location();
     const overlay = props3()?.overlay;
