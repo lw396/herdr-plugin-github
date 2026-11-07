@@ -1,5 +1,5 @@
 // What the sidebar knows about a place, kept per what each fact depends on: the gh account per
-// machine, the GitHub remote per machine and folder, each issue group per machine,
+// machine, the GitHub remote per machine and folder, and each issue or PR group per machine,
 // host/owner/repo and login (each machine's gh may be another account). Switching back to a
 // place shows what is known at once and asks again only once it is stale (or on ↻); two looks
 // at once share one call.
@@ -7,10 +7,12 @@
 import type { Account } from "../core/account.ts";
 import { Cache } from "../core/cache.ts";
 import { appendPage, applyChange, type GroupKind, type IssueChange, type IssueGroup } from "../core/issues.ts";
+import { appendPullPage, type PullGroup, type PullGroupKind } from "../core/pulls.ts";
 import type { RemoteRepo } from "../core/remote.ts";
 import * as gh from "./gh.ts";
 import { githubRemote } from "./git.ts";
 import { issuePage } from "./issues.ts";
+import { pullPage } from "./pulls.ts";
 
 /**
  * One kind of fact: kept answers, fresh for `fresh` ms (stale ones still show while asked
@@ -63,6 +65,7 @@ function facts<T>(limit: number, fresh: number, keep: (value: T) => boolean) {
 const accounts = facts<Account>(16, 60 * 60_000, (a) => a.status.ok);
 const remotes = facts<RemoteRepo | null>(64, 5 * 60_000, (r) => r !== null);
 const groups = facts<IssueGroup>(64, 60_000, () => true);
+const pullGroups = facts<PullGroup>(64, 60_000, () => true);
 
 const machineKey = (on: string | null | undefined): string => on ?? "";
 const folderKey = (where: gh.Where): string => `${where.on ?? ""}\n${where.cwd ?? ""}`;
@@ -122,9 +125,44 @@ export function issueChanged(change: IssueChange): void {
 	);
 }
 
+// The login too: what a group shows depends on what that account can see.
+const pullKey = (kind: PullGroupKind, r: RemoteRepo, login: string, on: string | null): string =>
+	`${kind}\n${on ?? ""}\n${r.host}/${r.owner}/${r.repo}\n${login}`;
+
+/** A PR group's first page in the repository, asked with the gh on `on`. */
+export const pullGroup = (
+	kind: PullGroupKind,
+	r: RemoteRepo,
+	login: string,
+	on: string | null,
+	force = false,
+): Promise<PullGroup> => pullGroups.look(pullKey(kind, r, login, on), force, () => pullPage(kind, r, on, null));
+/** What is kept for the PR group: its first page, and any pages Load more added. */
+export const peekPullGroup = (
+	kind: PullGroupKind,
+	r: RemoteRepo,
+	login: string,
+	on: string | null,
+): PullGroup | undefined => pullGroups.peek(pullKey(kind, r, login, on));
+
+/** Load more for a PR group, kept like an issue group's. */
+export async function morePulls(
+	kind: PullGroupKind,
+	r: RemoteRepo,
+	login: string,
+	on: string | null,
+	loaded: PullGroup,
+): Promise<PullGroup> {
+	const key = pullKey(kind, r, login, on);
+	const both = appendPullPage(loaded, await pullPage(kind, r, on, loaded.cursor));
+	if (pullGroups.peek(key) === loaded) pullGroups.put(key, both);
+	return both;
+}
+
 /** Forgets everything (tests). */
 export function clear(): void {
 	accounts.clear();
 	remotes.clear();
 	groups.clear();
+	pullGroups.clear();
 }

@@ -10459,8 +10459,8 @@ var Pane = class {
 };
 
 // src/github/views/panel.ts
-import { h_flex as h_flex3, v_flex as v_flex2 } from "gpui-base";
-import { div as div4, svg as svg4 } from "gpui-kit";
+import { h_flex as h_flex4, v_flex as v_flex3 } from "gpui-base";
+import { div as div5, svg as svg5 } from "gpui-kit";
 import { closeOverlay, props as props3 } from "herdr";
 
 // src/github/core/status.ts
@@ -10538,6 +10538,44 @@ var Cache = class {
   }
 };
 
+// src/github/core/pulls.ts
+var PAGE2 = 30;
+var ALL_OPEN_QUERY = `query($owner: String!, $name: String!, $after: String) {
+  repository(owner: $owner, name: $name) {
+    pullRequests(first: ${PAGE2}, after: $after, states: OPEN, orderBy: {field: UPDATED_AT, direction: DESC}) {
+      totalCount
+      pageInfo { hasNextPage endCursor }
+      nodes { number title url updatedAt isDraft state author { login } }
+    }
+  }
+}`;
+var PULL_QUERIES = { all: ALL_OPEN_QUERY };
+function stateOf(n) {
+  if (n.state === "MERGED") return "merged";
+  if (n.state === "CLOSED") return "closed";
+  return n.isDraft ? "draft" : "open";
+}
+function parsePullGroup(data) {
+  const { pullRequests } = data.repository;
+  return {
+    total: pullRequests.totalCount,
+    more: pullRequests.pageInfo.hasNextPage,
+    cursor: pullRequests.pageInfo.endCursor,
+    pulls: pullRequests.nodes.map((n) => ({
+      number: n.number,
+      title: n.title,
+      author: n.author?.login ?? null,
+      state: stateOf(n),
+      updatedAt: n.updatedAt,
+      url: n.url
+    }))
+  };
+}
+function appendPullPage(group2, page) {
+  const shown = new Set(group2.pulls.map((p) => p.number));
+  return { ...page, pulls: [...group2.pulls, ...page.pulls.filter((p) => !shown.has(p.number))] };
+}
+
 // src/github/io/git.ts
 import { exec as exec3 } from "herdr";
 
@@ -10568,6 +10606,11 @@ async function githubRemote(where) {
   if (!where.cwd) return null;
   const r = await exec3("git", ["remote", "-v"], { cwd: where.cwd, on: where.on ?? null });
   return r.code === 0 ? pickRemote(r.stdout) : null;
+}
+
+// src/github/io/pulls.ts
+async function pullPage(kind, remote2, on, after) {
+  return parsePullGroup(await graphql(PULL_QUERIES[kind], { owner: remote2.owner, name: remote2.repo, after }, { on }));
 }
 
 // src/github/io/known.ts
@@ -10609,6 +10652,7 @@ function facts(limit, fresh, keep) {
 var accounts = facts(16, 60 * 6e4, (a) => a.status.ok);
 var remotes = facts(64, 5 * 6e4, (r) => r !== null);
 var groups = facts(64, 6e4, () => true);
+var pullGroups = facts(64, 6e4, () => true);
 var machineKey = (on) => on ?? "";
 var folderKey = (where) => `${where.on ?? ""}
 ${where.cwd ?? ""}`;
@@ -10638,6 +10682,18 @@ function issueChanged(change) {
     }
   );
 }
+var pullKey = (kind, r, login, on) => `${kind}
+${on ?? ""}
+${r.host}/${r.owner}/${r.repo}
+${login}`;
+var pullGroup = (kind, r, login, on, force = false) => pullGroups.look(pullKey(kind, r, login, on), force, () => pullPage(kind, r, on, null));
+var peekPullGroup = (kind, r, login, on) => pullGroups.peek(pullKey(kind, r, login, on));
+async function morePulls(kind, r, login, on, loaded) {
+  const key = pullKey(kind, r, login, on);
+  const both = appendPullPage(loaded, await pullPage(kind, r, on, loaded.cursor));
+  if (pullGroups.peek(key) === loaded) pullGroups.put(key, both);
+  return both;
+}
 
 // src/github/io/visibility.ts
 import { layout } from "herdr";
@@ -10657,8 +10713,171 @@ function layoutShows(tree, id) {
 // src/github/io/visibility.ts
 var sidebarVisible = () => layoutShows(layout(), "github");
 
+// src/github/views/pulls.ts
+import { h_flex as h_flex3, v_flex as v_flex2 } from "gpui-base";
+import { div as div4, svg as svg4 } from "gpui-kit";
+var GROUPS = [{ kind: "all", title: "All Open" }];
+var EMPTY = "0 pull requests in this category";
+var ICONS = {
+  open: { svg: "git-pull-request", color: (t) => t.done, label: "Open" },
+  draft: { svg: "git-pull-request-draft", color: (t) => t.dim, label: "Draft" },
+  merged: { svg: "git-merge", color: (t) => t.ansi5, label: "Merged" },
+  closed: { svg: "git-pull-request-closed", color: (t) => t.blocked, label: "Closed" }
+};
+var PullList = class {
+  groups = {
+    all: { expanded: true, page: void 0, loading: false, loadingMore: false, failure: void 0 }
+  };
+  /** The row under the pointer: it shows its actions. */
+  hovered = null;
+  host;
+  constructor(host) {
+    this.host = host;
+  }
+  get busy() {
+    return GROUPS.some(({ kind }) => this.groups[kind].loading || this.groups[kind].loadingMore);
+  }
+  /** A failure every group shares (the repository isn't there or can't be seen), said once in the list's place. */
+  get notFound() {
+    return GROUPS.map(({ kind }) => this.groups[kind].failure).find((f) => f?.notFound);
+  }
+  /** Shows what is kept for this place at once (another place: nothing yet). */
+  show() {
+    const r = this.host.ready();
+    this.hovered = null;
+    for (const { kind } of GROUPS) {
+      const g = this.groups[kind];
+      g.page = r ? peekPullGroup(kind, r.remote, r.login, r.on) : void 0;
+      g.failure = void 0;
+      g.loading = g.loadingMore = false;
+    }
+  }
+  /** Asks for every expanded group's first page (fresh kept pages are reused unless `force`). */
+  load(cx, force = false) {
+    for (const { kind } of GROUPS) this.loadGroup(cx, kind, force);
+  }
+  loadGroup(cx, kind, force) {
+    const g = this.groups[kind], r = this.host.ready(), run3 = this.host.run();
+    if (!r || !g.expanded) return;
+    g.loading = true;
+    g.failure = void 0;
+    cx.spawn(async (cx2) => {
+      try {
+        const page = await pullGroup(kind, r.remote, r.login, r.on, force);
+        if (run3 === this.host.run()) g.page = peekPullGroup(kind, r.remote, r.login, r.on) ?? page;
+      } catch (e) {
+        if (run3 === this.host.run()) g.failure = failureOf(e);
+      } finally {
+        if (run3 === this.host.run()) {
+          g.loading = false;
+          cx2.notify();
+        }
+      }
+    });
+  }
+  toggle(cx, kind) {
+    const g = this.groups[kind];
+    g.expanded = !g.expanded;
+    if (g.expanded) this.loadGroup(cx, kind, false);
+    cx.notify();
+  }
+  more(cx, kind) {
+    const g = this.groups[kind], r = this.host.ready(), run3 = this.host.run(), loaded = g.page;
+    if (!r || !loaded?.more || g.loadingMore) return;
+    g.loadingMore = true;
+    cx.notify();
+    cx.spawn(async (cx2) => {
+      try {
+        const page = await morePulls(kind, r.remote, r.login, r.on, loaded);
+        if (run3 === this.host.run()) g.page = page;
+      } catch (e) {
+        if (run3 === this.host.run()) g.failure = failureOf(e);
+      } finally {
+        if (run3 === this.host.run()) {
+          g.loadingMore = false;
+          cx2.notify();
+        }
+      }
+    });
+  }
+  /** The groups (the sidebar draws problems shared with Issues: gh, no remote, not found). */
+  render() {
+    return v_flex2().gap(4).children(GROUPS.map((g) => this.group(g)));
+  }
+  group({ kind, title }) {
+    const t = colors();
+    const g = this.groups[kind];
+    const page = g.page;
+    const heading = h_flex3().id(`pr-group-${kind}`).h(26).px(8).gap(6).items_center().rounded(6).text_size(12).text_color(t.dim).cursor_pointer().hover((s) => s.bg(t.hover)).on_mouse_down("left", stop).on_click((_e, cx) => this.toggle(cx, kind)).accessibility_label(`${g.expanded ? "Fold" : "Unfold"} ${title}`).child(
+      div4().w(10).flex_none().child(g.expanded ? "\u25BE" : "\u25B8")
+    ).child(div4().font_medium().child(title)).child(div4().child(page ? String(page.total) : "")).when(g.expanded && g.loading, (el) => el.child(spinner()));
+    const failure = h_flex3().px(8).pl(22).py(2).gap(6).items_center().text_size(12).child(div4().flex_none().size(6).rounded(3).bg(t.blocked)).child(
+      div4().flex_1().min_w(0).text_color(t.dim).child(g.failure?.message ?? "")
+    ).when(
+      !g.loading,
+      (el) => el.child(
+        button(`pr-retry-${kind}`, "Retry", `Load ${title} again`, (_e, cx) => {
+          this.loadGroup(cx, kind, true);
+          cx.notify();
+        })
+      )
+    );
+    const left = (page?.total ?? 0) - (page?.pulls.length ?? 0);
+    const more2 = h_flex3().id(`pr-more-${kind}`).h(26).px(8).pl(22).gap(6).items_center().rounded(6).text_size(12).text_color(t.dim).cursor_pointer().hover((s) => s.bg(t.hover).text_color(t.foreground)).on_mouse_down("left", stop).on_click((_e, cx) => this.more(cx, kind)).child(g.loadingMore ? "Loading\u2026" : `Load more (${left} left)`).when(g.loadingMore, (el) => el.child(spinner()));
+    return v_flex2().gap(1).child(heading).when(
+      g.expanded,
+      (el) => el.when(g.failure !== void 0 && !g.failure.notFound, (el2) => el2.child(failure)).when(
+        page?.pulls.length === 0,
+        (el2) => el2.child(div4().px(8).pl(22).py(4).text_size(12).text_color(t.dim).child(EMPTY))
+      ).children((page?.pulls ?? []).map((pull) => this.row(kind, pull))).when(page?.more, (el2) => el2.child(more2))
+    );
+  }
+  /** The extension's row: state icon, `#number title` (a draft in italics), `by @author`; hover offers Copy and Open in browser. */
+  row(kind, pull) {
+    const t = colors();
+    const key = `${kind}#${pull.number}`;
+    const hovered = this.hovered === key;
+    const icon2 = ICONS[pull.state];
+    const r = this.host.ready();
+    const repo = r ? `${r.remote.owner}/${r.remote.repo}` : "";
+    const title = div4().flex_1().min_w(0).truncate().child(`#${pull.number} ${pull.title}`).when(pull.state === "draft", (el) => el.italic());
+    return h_flex3().id(`pr-${kind}-${pull.number}`).h(28).px(8).pl(22).gap(8).items_center().rounded(6).cursor_pointer().hover((s) => s.bg(t.hover)).on_mouse_down("left", stop).on_click((_e, cx) => {
+      this.host.openFailed(null);
+      cx.spawn(async (cx2) => {
+        try {
+          await this.host.details.open({ kind: "pr", repo, number: pull.number });
+        } catch (e) {
+          this.host.openFailed(e instanceof Error ? e.message : String(e));
+        }
+        cx2.notify();
+      });
+    }).on_hover((h, cx) => {
+      if (h) this.hovered = key;
+      else if (this.hovered === key) this.hovered = null;
+      cx.notify();
+    }).child(
+      svg4(`mods/github/assets/${icon2.svg}.svg`).size(14).flex_none().text_color(icon2.color(t)).accessibility_label(icon2.label)
+    ).child(title).when(
+      !hovered,
+      (el) => el.child(
+        div4().flex_none().max_w(110).truncate().text_size(12).text_color(t.dim).child(pull.author ? `by @${pull.author}` : "by ghost")
+      )
+    ).when(
+      hovered,
+      (el) => el.child(
+        button(
+          `pr-copy-${kind}-${pull.number}`,
+          "#",
+          `Copy #${pull.number}`,
+          (_e, cx) => cx.write_to_clipboard(`#${pull.number}`)
+        )
+      ).child(button(`pr-open-${kind}-${pull.number}`, "\u2197", "Open in browser", (_e, cx) => cx.open_url(pull.url)))
+    );
+  }
+};
+
 // src/github/views/panel.ts
-var GROUPS = [
+var GROUPS2 = [
   // One word like the others; the empty text says whose.
   { kind: "assigned", title: "Assigned", empty: "No open issues assigned to you." },
   { kind: "open", title: "Open", empty: "No open issues." },
@@ -10689,6 +10908,15 @@ var Panel = class {
   hovered = null;
   details = new DetailTabs();
   openFailure = null;
+  /** The Pull Requests tab's groups; they load only while that tab is shown. */
+  pulls = new PullList({
+    ready: () => this.ready(),
+    run: () => this.latest,
+    details: this.details,
+    openFailed: (message) => {
+      this.openFailure = message;
+    }
+  });
   notices = new Notices();
   visible = false;
   etag = null;
@@ -10730,8 +10958,9 @@ var Panel = class {
       } finally {
         if (current()) {
           if (changed || refresh) {
-            for (const { kind } of GROUPS) this.load(cx2, kind, true);
+            for (const { kind } of GROUPS2) this.load(cx2, kind, true);
           }
+          if (refresh && this.tab === "prs") this.pulls.load(cx2, true);
           cx2.notify();
         }
         if (this.checking === checking) this.checking = null;
@@ -10756,7 +10985,8 @@ var Panel = class {
     this.account = peekAccount(where.on);
     this.remote = peekRemote(where);
     this.failure = void 0;
-    for (const { kind } of GROUPS) this.show(kind);
+    for (const { kind } of GROUPS2) this.show(kind);
+    this.pulls.show();
     this.loading = true;
     cx.spawn(async (cx2) => {
       try {
@@ -10847,7 +11077,7 @@ var Panel = class {
     const changes2 = this.notices.take().filter(isIssueNotice).flatMap((n) => n.state ? [n.state] : []);
     if (changes2.length === 0) return;
     changes2.forEach(issueChanged);
-    for (const { kind } of GROUPS) {
+    for (const { kind } of GROUPS2) {
       this.show(kind);
       this.load(cx, kind);
     }
@@ -10863,17 +11093,17 @@ var Panel = class {
     const where = location();
     const overlay = props3()?.overlay;
     const noRemote = this.remote === null && !(this.account && !this.account.status.ok);
-    return v_flex2().id("github").size_full().min_h(0).overflow_hidden().bg(t.background).text_color(t.foreground).text_size(13).when(!overlay, (el) => el.rounded(10).border_1().border_color(t.border)).child(this.header(overlay, where.cwd ?? "no folder")).when(noRemote, (el) => el.child(this.noRemote(where.cwd))).when(!noRemote, (el) => el.child(this.tabs()).child(this.tab === "issues" ? this.list() : this.pulls())).child(this.statusCard(where.on, where.cwd));
+    return v_flex3().id("github").size_full().min_h(0).overflow_hidden().bg(t.background).text_color(t.foreground).text_size(13).when(!overlay, (el) => el.rounded(10).border_1().border_color(t.border)).child(this.header(overlay, where.cwd ?? "no folder")).when(noRemote, (el) => el.child(this.noRemote(where.cwd))).when(!noRemote, (el) => el.child(this.tabs()).child(this.tab === "issues" ? this.list() : this.pullList())).child(this.statusCard(where.on, where.cwd));
   }
   /** The repository, then ↻ (Herdr's own spinner while anything loads, as its tab bar shows a working agent). */
   header(overlay, context) {
     const t = colors();
-    const busy = this.loading || GROUPS.some(({ kind }) => this.groups[kind].loading || this.groups[kind].loadingMore);
+    const busy = this.loading || this.pulls.busy || GROUPS2.some(({ kind }) => this.groups[kind].loading || this.groups[kind].loadingMore);
     const refresh = button("gh-refresh", "\u21BB", "Refresh", (_e, cx) => {
       this.refresh(cx, true);
       cx.notify();
     });
-    return h_flex3().h(42).flex_none().px(14).gap(8).items_center().border_b(1).border_color(t.border).child(div4().font_semibold().tooltip(context).child("GitHub")).child(div4().flex_1().min_w(0).truncate().text_right().text_size(12).text_color(t.dim).child(this.repo())).child(busy ? div4().size(24).flex_none().flex().items_center().justify_center().child(spinner()) : refresh).when(overlay, (el) => el.child(button("gh-close", "\xD7", "Close", () => closeOverlay(overlay))));
+    return h_flex4().h(42).flex_none().px(14).gap(8).items_center().border_b(1).border_color(t.border).child(div5().font_semibold().tooltip(context).child("GitHub")).child(div5().flex_1().min_w(0).truncate().text_right().text_size(12).text_color(t.dim).child(this.repo())).child(busy ? div5().size(24).flex_none().flex().items_center().justify_center().child(spinner()) : refresh).when(overlay, (el) => el.child(button("gh-close", "\xD7", "Close", () => closeOverlay(overlay))));
   }
   /** The gh account on the folder's machine, then how fresh the lists are. What to do about a problem is said in the list. */
   statusCard(on, cwd) {
@@ -10889,13 +11119,13 @@ var Panel = class {
       Date.now()
     );
     const tip = `${this.account ? describeAccount(this.account).text : "checking gh\u2026"} \xB7 ${cwd ?? "no folder"}`;
-    const dot = s.tone === "pending" ? spinner(10) : div4().size(8).rounded(4).bg(s.tone === "ok" ? t.done : t.blocked);
-    return v_flex2().id("gh-status").flex_none().px(14).py(8).gap(2).border_t(1).border_color(t.border).bg(t.surface).text_size(12).tooltip(tip).accessibility_label(`${s.account} on ${s.machine}${s.sync ? `. ${s.sync}` : ""}`).child(
-      h_flex3().gap(8).items_center().child(div4().w(10).flex_none().flex().items_center().justify_center().child(dot)).child(div4().flex_none().max_w(160).truncate().font_medium().child(s.account)).child(div4().flex_none().text_color(t.dim).child("\xB7")).child(div4().flex_1().min_w(0).truncate().text_color(t.dim).child(s.machine))
+    const dot = s.tone === "pending" ? spinner(10) : div5().size(8).rounded(4).bg(s.tone === "ok" ? t.done : t.blocked);
+    return v_flex3().id("gh-status").flex_none().px(14).py(8).gap(2).border_t(1).border_color(t.border).bg(t.surface).text_size(12).tooltip(tip).accessibility_label(`${s.account} on ${s.machine}${s.sync ? `. ${s.sync}` : ""}`).child(
+      h_flex4().gap(8).items_center().child(div5().w(10).flex_none().flex().items_center().justify_center().child(dot)).child(div5().flex_none().max_w(160).truncate().font_medium().child(s.account)).child(div5().flex_none().text_color(t.dim).child("\xB7")).child(div5().flex_1().min_w(0).truncate().text_color(t.dim).child(s.machine))
     ).when(
       s.sync,
       (el) => el.child(
-        div4().pl(18).truncate().text_color(s.tone === "problem" ? t.blocked : t.dim).child(s.sync ?? "")
+        div5().pl(18).truncate().text_color(s.tone === "problem" ? t.blocked : t.dim).child(s.sync ?? "")
       )
     );
   }
@@ -10906,24 +11136,32 @@ var Panel = class {
   noRemote(cwd) {
     const t = colors();
     const empty = noRepository(cwd);
-    return v_flex2().flex_1().min_h(0).px(28).gap(8).items_center().justify_center().child(svg4("mods/github/assets/github.svg").size(28).text_color(t.dim)).child(div4().pt(4).font_medium().text_color(t.muted).child(empty.title)).child(div4().text_size(12).text_center().text_color(t.dim).child(empty.detail));
+    return v_flex3().flex_1().min_h(0).px(28).gap(8).items_center().justify_center().child(svg5("mods/github/assets/github.svg").size(28).text_color(t.dim)).child(div5().pt(4).font_medium().text_color(t.muted).child(empty.title)).child(div5().text_size(12).text_center().text_color(t.dim).child(empty.detail));
   }
   /** Issues and Pull Requests; Actions and notifications join them later. */
   tabs() {
     const t = colors();
-    return h_flex3().h(34).flex_none().px(10).gap(4).items_center().border_b(1).border_color(t.border).children(
+    return h_flex4().h(34).flex_none().px(10).gap(4).items_center().border_b(1).border_color(t.border).children(
       TABS.map(
-        ({ id, label }) => div4().id(`gh-tab-${id}`).px(8).py(3).rounded(6).text_size(12).font_medium().cursor_pointer().text_color(this.tab === id ? t.foreground : t.muted).when(this.tab === id, (el) => el.bg(t.hover)).when(this.tab !== id, (el) => el.hover((s) => s.bg(t.hover))).accessibility_label(label).on_mouse_down("left", stop).on_click((_e, cx) => {
+        ({ id, label }) => div5().id(`gh-tab-${id}`).px(8).py(3).rounded(6).text_size(12).font_medium().cursor_pointer().text_color(this.tab === id ? t.foreground : t.muted).when(this.tab === id, (el) => el.bg(t.hover)).when(this.tab !== id, (el) => el.hover((s) => s.bg(t.hover))).accessibility_label(label).on_mouse_down("left", stop).on_click((_e, cx) => {
           this.tab = id;
+          this.openFailure = null;
+          if (id === "prs") this.pulls.load(cx);
           cx.notify();
         }).child(label)
       )
     );
   }
-  /** The Pull Requests tab: its groups arrive with the next tickets of #4. */
-  pulls() {
+  /** The Pull Requests tab: gh, a missing repository or another shared problem in the list's place, else the groups. */
+  pullList() {
     const t = colors();
-    return v_flex2().id("gh-pulls").flex_1().min_h(0).p(14).child(div4().text_size(12).text_color(t.dim).child("Pull requests are not available yet."));
+    const notice = issuesNotice({
+      account: this.account,
+      remote: this.remote,
+      failure: this.failure ?? this.pulls.notFound
+    });
+    const problem = (text3) => div5().p(8).text_size(12).text_color(t.blocked).child(text3);
+    return v_flex3().id("gh-pulls").flex_1().min_h(0).overflow_y_scroll().p(6).gap(4).when(this.openFailure, (el) => el.child(problem(this.openFailure ?? ""))).when(notice, (el) => el.child(problem(notice ?? ""))).when(!notice && this.ready(), (el) => el.child(this.pulls.render())).when(!notice && !this.ready() && this.loading, (el) => el.child(div5().p(8).text_color(t.dim).child("\u2026")));
   }
   /**
    * The groups, or what stands in their place. A missing repository (404) or Issues turned off is the same for
@@ -10931,26 +11169,26 @@ var Panel = class {
    */
   list() {
     const t = colors();
-    const loaded = GROUPS.map(({ kind }) => this.groups[kind]);
+    const loaded = GROUPS2.map(({ kind }) => this.groups[kind]);
     const notice = issuesNotice({
       account: this.account,
       remote: this.remote,
       group: loaded.find((g) => g.page)?.page,
       failure: this.failure ?? loaded.find((g) => g.failure?.notFound)?.failure
     });
-    const problem = (text3) => div4().p(8).text_size(12).text_color(t.blocked).child(text3);
-    return v_flex2().id("gh-list").flex_1().min_h(0).overflow_y_scroll().p(6).gap(4).when(this.openFailure, (el) => el.child(problem(this.openFailure ?? ""))).when(notice, (el) => el.child(problem(notice ?? ""))).when(!notice && this.ready(), (el) => el.children(GROUPS.map((g) => this.group(g)))).when(!notice && !this.ready() && this.loading, (el) => el.child(div4().p(8).text_color(t.dim).child("\u2026")));
+    const problem = (text3) => div5().p(8).text_size(12).text_color(t.blocked).child(text3);
+    return v_flex3().id("gh-list").flex_1().min_h(0).overflow_y_scroll().p(6).gap(4).when(this.openFailure, (el) => el.child(problem(this.openFailure ?? ""))).when(notice, (el) => el.child(problem(notice ?? ""))).when(!notice && this.ready(), (el) => el.children(GROUPS2.map((g) => this.group(g)))).when(!notice && !this.ready() && this.loading, (el) => el.child(div5().p(8).text_color(t.dim).child("\u2026")));
   }
   /** A foldable group: its title and count, then (unfolded) why it failed, its rows and Load more. */
   group({ kind, title, empty }) {
     const t = colors();
     const g = this.groups[kind];
     const page = g.page;
-    const heading = h_flex3().id(`group-${kind}`).h(26).px(8).gap(6).items_center().rounded(6).text_size(12).text_color(t.dim).cursor_pointer().hover((s) => s.bg(t.hover)).on_mouse_down("left", stop).on_click((_e, cx) => this.toggle(cx, kind)).accessibility_label(`${g.expanded ? "Fold" : "Unfold"} ${title}`).child(
-      div4().w(10).flex_none().child(g.expanded ? "\u25BE" : "\u25B8")
-    ).child(div4().font_medium().child(title)).child(div4().child(page ? String(page.total) : "")).when(g.expanded && g.loading, (el) => el.child(spinner()));
-    const failure = h_flex3().px(8).pl(22).py(2).gap(6).items_center().text_size(12).child(div4().flex_none().size(6).rounded(3).bg(t.blocked)).child(
-      div4().flex_1().min_w(0).text_color(t.dim).child(g.failure?.message ?? "")
+    const heading = h_flex4().id(`group-${kind}`).h(26).px(8).gap(6).items_center().rounded(6).text_size(12).text_color(t.dim).cursor_pointer().hover((s) => s.bg(t.hover)).on_mouse_down("left", stop).on_click((_e, cx) => this.toggle(cx, kind)).accessibility_label(`${g.expanded ? "Fold" : "Unfold"} ${title}`).child(
+      div5().w(10).flex_none().child(g.expanded ? "\u25BE" : "\u25B8")
+    ).child(div5().font_medium().child(title)).child(div5().child(page ? String(page.total) : "")).when(g.expanded && g.loading, (el) => el.child(spinner()));
+    const failure = h_flex4().px(8).pl(22).py(2).gap(6).items_center().text_size(12).child(div5().flex_none().size(6).rounded(3).bg(t.blocked)).child(
+      div5().flex_1().min_w(0).text_color(t.dim).child(g.failure?.message ?? "")
     ).when(
       !g.loading,
       (el) => el.child(
@@ -10961,12 +11199,12 @@ var Panel = class {
       )
     );
     const left = (page?.total ?? 0) - (page?.issues.length ?? 0);
-    const more2 = h_flex3().id(`more-${kind}`).h(26).px(8).pl(22).gap(6).items_center().rounded(6).text_size(12).text_color(t.dim).cursor_pointer().hover((s) => s.bg(t.hover).text_color(t.foreground)).on_mouse_down("left", stop).on_click((_e, cx) => this.more(cx, kind)).child(g.loadingMore ? "Loading\u2026" : `Load more (${left} left)`).when(g.loadingMore, (el) => el.child(spinner()));
-    return v_flex2().gap(1).child(heading).when(
+    const more2 = h_flex4().id(`more-${kind}`).h(26).px(8).pl(22).gap(6).items_center().rounded(6).text_size(12).text_color(t.dim).cursor_pointer().hover((s) => s.bg(t.hover).text_color(t.foreground)).on_mouse_down("left", stop).on_click((_e, cx) => this.more(cx, kind)).child(g.loadingMore ? "Loading\u2026" : `Load more (${left} left)`).when(g.loadingMore, (el) => el.child(spinner()));
+    return v_flex3().gap(1).child(heading).when(
       g.expanded,
       (el) => el.when(g.failure, (el2) => el2.child(failure)).when(
         page?.issues.length === 0,
-        (el2) => el2.child(div4().px(8).pl(22).py(4).text_size(12).text_color(t.dim).child(empty))
+        (el2) => el2.child(div5().px(8).pl(22).py(4).text_size(12).text_color(t.dim).child(empty))
       ).children((page?.issues ?? []).map((issue) => this.row(kind, issue))).when(page?.more, (el2) => el2.child(more2))
     );
   }
@@ -10976,7 +11214,7 @@ var Panel = class {
     const key = `${kind}#${issue.number}`;
     const hovered = this.hovered === key;
     const repo = this.repo();
-    return h_flex3().id(`issue-${kind}-${issue.number}`).h(28).px(8).pl(22).gap(8).items_center().rounded(6).cursor_pointer().hover((s) => s.bg(t.hover)).on_mouse_down("left", stop).on_click((_e, cx) => {
+    return h_flex4().id(`issue-${kind}-${issue.number}`).h(28).px(8).pl(22).gap(8).items_center().rounded(6).cursor_pointer().hover((s) => s.bg(t.hover)).on_mouse_down("left", stop).on_click((_e, cx) => {
       this.openFailure = null;
       cx.spawn(async (cx2) => {
         try {
@@ -10990,12 +11228,12 @@ var Panel = class {
       if (h) this.hovered = key;
       else if (this.hovered === key) this.hovered = null;
       cx.notify();
-    }).child(div4().flex_none().text_color(t.dim).child(`#${issue.number}`)).child(div4().flex_1().min_w(0).truncate().child(issue.title)).when(
+    }).child(div5().flex_none().text_color(t.dim).child(`#${issue.number}`)).child(div5().flex_1().min_w(0).truncate().child(issue.title)).when(
       !hovered,
       (el) => el.child(
-        div4().flex_none().max_w(90).truncate().text_size(12).text_color(t.dim).child(issue.assignees.join(", "))
+        div5().flex_none().max_w(90).truncate().text_size(12).text_color(t.dim).child(issue.assignees.join(", "))
       ).child(
-        div4().flex_none().w(28).text_right().text_size(12).text_color(t.dim).child(relativeTime(issue.updatedAt, Date.now()))
+        div5().flex_none().w(28).text_right().text_size(12).text_color(t.dim).child(relativeTime(issue.updatedAt, Date.now()))
       )
     ).when(
       hovered,
@@ -11012,8 +11250,8 @@ var Panel = class {
 };
 
 // src/github/views/pull.ts
-import { v_flex as v_flex3 } from "gpui-base";
-import { div as div5 } from "gpui-kit";
+import { v_flex as v_flex4 } from "gpui-base";
+import { div as div6 } from "gpui-kit";
 import { nextCommand as nextCommand2, props as props4 } from "herdr";
 var Pull = class {
   reader = "";
@@ -11032,10 +11270,10 @@ var Pull = class {
   render(_cx) {
     if (this.reader) readyDetail(this.reader);
     const t = colors();
-    return v_flex3().id("pull-reader").size_full().p(24).gap(8).bg(t.background).text_color(t.foreground).child(
-      div5().text_size(16).font_semibold().child(this.ref ? `#${this.ref.number} \xB7 ${this.ref.repo}` : "")
+    return v_flex4().id("pull-reader").size_full().p(24).gap(8).bg(t.background).text_color(t.foreground).child(
+      div6().text_size(16).font_semibold().child(this.ref ? `#${this.ref.number} \xB7 ${this.ref.repo}` : "")
     ).child(
-      div5().text_size(13).text_color(t.dim).child(
+      div6().text_size(13).text_color(t.dim).child(
         this.ref ? "Pull request descriptions are not available yet." : "Select a pull request in the sidebar."
       )
     );

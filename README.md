@@ -1,6 +1,6 @@
 # herdr-plugin-github
 
-A GitHub mod for [Herdr](https://herdr.dev) that brings repository Issues into your development workspace. Browse issues alongside your terminals and read discussions in native Herdr tabs without switching to a browser.
+A GitHub mod for [Herdr](https://herdr.dev) that brings repository Issues and Pull Requests into your development workspace. Browse them alongside your terminals and read discussions in native Herdr tabs without switching to a browser. The interface follows the VS Code GitHub Pull Requests extension.
 
 The mod uses GitHub CLI (`gh`) on the machine hosting the repository, so local and remote folders use their own GitHub accounts and credentials.
 
@@ -8,6 +8,7 @@ The mod uses GitHub CLI (`gh`) on the machine hosting the repository, so local a
 
 - **Repository detection** — identify the GitHub repository from the focused folder's git remotes.
 - **Issue sidebar** — browse issues assigned to you, all open issues, and closed issues, with pagination.
+- **Pull Requests tab** — the **All Open** group lists the repository's open pull requests with a state icon, `#number title` (drafts in italics) and `by @author`, with pagination; hover a row to copy its number or open it in your browser. More groups, the description and the diff follow.
 - **Status footer** — a fixed sidebar footer shows which gh account is used on which machine, and says when a check for list changes fails. It adds no requests; the issue list scrolls independently. The branch is left to Herdr's own display.
 - **Automatic list refresh** — while the GitHub sidebar is visible, check for changes every 60 seconds using ETags; refresh expanded groups only when changed. Showing it again refreshes immediately.
 - **Native issue tabs** — open different issues in separate tabs; selecting an already-open issue reuses its tab.
@@ -48,7 +49,7 @@ Focus a terminal in your repository, select **GitHub** in the sidebar, and click
 
 ## Current scope
 
-The mod currently provides **read-only Issue browsing**. Creating or editing issues and posting comments are not supported yet.
+Issues can be read, commented on, closed and reopened. Pull requests can be listed; their description, diff and review are in progress. Creating or editing issues and pull requests is left to the browser or to `gh`.
 
 Images are shown as browser links rather than loaded automatically. Open issue contents are session-only: after restarting Herdr or hot-reloading the mod, select an issue from the sidebar to load it again.
 

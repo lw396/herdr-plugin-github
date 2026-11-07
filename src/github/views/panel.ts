@@ -22,6 +22,7 @@ import * as gh from "../io/gh.ts";
 import { listChanges } from "../io/issues.ts";
 import * as known from "../io/known.ts";
 import { sidebarVisible } from "../io/visibility.ts";
+import { PullList } from "./pulls.ts";
 import { button, colors, type Role, spinner, stop } from "./ui.ts";
 
 /** The Issues tab's groups, in order: title, and what an empty one says. */
@@ -69,6 +70,15 @@ export class Panel implements Role {
 	hovered: string | null = null;
 	details = new DetailTabs();
 	openFailure: string | null = null;
+	/** The Pull Requests tab's groups; they load only while that tab is shown. */
+	pulls = new PullList({
+		ready: () => this.ready(),
+		run: () => this.latest,
+		details: this.details,
+		openFailed: (message) => {
+			this.openFailure = message;
+		},
+	});
 	notices = new Notices();
 
 	visible = false;
@@ -117,6 +127,8 @@ export class Panel implements Role {
 					if (changed || refresh) {
 						for (const { kind } of GROUPS) this.load(cx, kind, true);
 					}
+					// PR lists have their own change check later (#34); a refresh asks the shown tab's groups now.
+					if (refresh && this.tab === "prs") this.pulls.load(cx, true);
 					// Every finished check redraws: the footer shows a failed check and its recovery.
 					cx.notify();
 				}
@@ -152,6 +164,7 @@ export class Panel implements Role {
 		this.remote = known.peekRemote(where);
 		this.failure = undefined;
 		for (const { kind } of GROUPS) this.show(kind);
+		this.pulls.show();
 		this.loading = true;
 		cx.spawn(async (cx) => {
 			try {
@@ -293,7 +306,7 @@ export class Panel implements Role {
 				.when(!overlay, (el) => el.rounded(10).border_1().border_color(t.border))
 				.child(this.header(overlay, where.cwd ?? "no folder"))
 				.when(noRemote, (el) => el.child(this.noRemote(where.cwd)))
-				.when(!noRemote, (el) => el.child(this.tabs()).child(this.tab === "issues" ? this.list() : this.pulls()))
+				.when(!noRemote, (el) => el.child(this.tabs()).child(this.tab === "issues" ? this.list() : this.pullList()))
 				// A fixed sibling of the scrolling list: Herdr already shows the branch, so this says who gh is and how fresh.
 				.child(this.statusCard(where.on, where.cwd))
 		);
@@ -302,7 +315,10 @@ export class Panel implements Role {
 	/** The repository, then ↻ (Herdr's own spinner while anything loads, as its tab bar shows a working agent). */
 	private header(overlay: string | undefined, context: string): Element {
 		const t = colors();
-		const busy = this.loading || GROUPS.some(({ kind }) => this.groups[kind].loading || this.groups[kind].loadingMore);
+		const busy =
+			this.loading ||
+			this.pulls.busy ||
+			GROUPS.some(({ kind }) => this.groups[kind].loading || this.groups[kind].loadingMore);
 		const refresh = button("gh-refresh", "↻", "Refresh", (_e, cx) => {
 			this.refresh(cx, true);
 			cx.notify(); // a click doesn't redraw by itself: show the spinner now, not when it's done
@@ -422,6 +438,9 @@ export class Panel implements Role {
 						.on_mouse_down("left", stop)
 						.on_click((_e, cx) => {
 							this.tab = id;
+							// A tab that failed to open was asked from the other list.
+							this.openFailure = null;
+							if (id === "prs") this.pulls.load(cx);
 							cx.notify();
 						})
 						.child(label),
@@ -429,15 +448,26 @@ export class Panel implements Role {
 			);
 	}
 
-	/** The Pull Requests tab: its groups arrive with the next tickets of #4. */
-	private pulls(): Element {
+	/** The Pull Requests tab: gh, a missing repository or another shared problem in the list's place, else the groups. */
+	private pullList(): Element {
 		const t = colors();
+		const notice = issuesNotice({
+			account: this.account,
+			remote: this.remote,
+			failure: this.failure ?? this.pulls.notFound,
+		});
+		const problem = (text: string) => div().p(8).text_size(12).text_color(t.blocked).child(text);
 		return v_flex()
 			.id("gh-pulls")
 			.flex_1()
 			.min_h(0)
-			.p(14)
-			.child(div().text_size(12).text_color(t.dim).child("Pull requests are not available yet."));
+			.overflow_y_scroll()
+			.p(6)
+			.gap(4)
+			.when(this.openFailure, (el) => el.child(problem(this.openFailure ?? "")))
+			.when(notice, (el) => el.child(problem(notice ?? "")))
+			.when(!notice && this.ready(), (el) => el.child(this.pulls.render()))
+			.when(!notice && !this.ready() && this.loading, (el) => el.child(div().p(8).text_color(t.dim).child("…")));
 	}
 
 	/**

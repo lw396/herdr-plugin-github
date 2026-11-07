@@ -5,6 +5,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { groupQuery } from "../../src/github/core/issues.ts";
+import { ALL_OPEN_QUERY } from "../../src/github/core/pulls.ts";
 import * as known from "../../src/github/io/known.ts";
 import { execCalls, machine, reset } from "../fake-herdr.ts";
 
@@ -201,4 +202,35 @@ describe("issue groups", () => {
 		await loading;
 		expect(known.peekGroup("open", CLI, "lw396", null)?.issues).toHaveLength(30);
 	});
+});
+
+describe("PR groups", () => {
+	const CLI = { remote: "origin", host: "github.com", owner: "cli", repo: "cli" };
+	const ALL = `~$ gh api graphql -F after=null -f query=${ALL_OPEN_QUERY} -f owner=cli -f name=cli`;
+	const ALL_2 = `~$ gh api graphql -f query=${ALL_OPEN_QUERY} -f owner=cli -f name=cli -f after=Y3Vyc29yOnYyOpK0MjAyNi0wOS0wN1QxNToxMDo0OFrO1-HpJQ==`;
+
+	test("per kind, machine and repository, then kept; Load more joins the kept rows", async () => {
+		machine(null, {
+			[ALL]: { stdout: fixture("pulls-all-cli-1.json") },
+			[ALL_2]: { stdout: fixture("pulls-all-cli-2.json") },
+		});
+		const first = await known.pullGroup("all", CLI, "lw396", null);
+		expect(first.pulls).toHaveLength(30);
+		expect(await known.pullGroup("all", CLI, "lw396", null)).toBe(first);
+		expect(known.peekPullGroup("all", CLI, "lw396", "center")).toBeUndefined();
+		await known.morePulls("all", CLI, "lw396", null, first);
+		expect(known.peekPullGroup("all", CLI, "lw396", null)?.pulls).toHaveLength(59);
+		expect(execCalls().filter((c) => c.command === "gh")).toHaveLength(2);
+	});
+});
+
+test("a PR group kept for one account is not shown to another on the same machine", async () => {
+	const CLI = { remote: "origin", host: "github.com", owner: "cli", repo: "cli" };
+	machine(null, {
+		[`~$ gh api graphql -F after=null -f query=${ALL_OPEN_QUERY} -f owner=cli -f name=cli`]: {
+			stdout: fixture("pulls-all-cli-1.json"),
+		},
+	});
+	await known.pullGroup("all", CLI, "lw396", null);
+	expect(known.peekPullGroup("all", CLI, "someone-else", null)).toBeUndefined();
 });
