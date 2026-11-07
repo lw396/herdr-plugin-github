@@ -1,25 +1,25 @@
 {
-  // Type-check only; scripts/bundle.mjs produces the runtime ESM. Herdr's QuickJS:
-  // no DOM/Node/Bun globals. See AGENTS.md.
-  "compilerOptions": {
-    "target": "ES2022",
-    "module": "ES2022",
-    "moduleResolution": "bundler",
-    "lib": ["ES2022"],
-    "types": [],
-    "strict": true,
-    "noImplicitOverride": true,
-    // esbuild resolves these imports into the self-contained bundle.
-    "allowImportingTsExtensions": true,
-    "noEmit": true,
-    // Keep application TypeScript erasable even though esbuild bundles it.
-    "erasableSyntaxOnly": true,
-    "verbatimModuleSyntax": true,
-    "newLine": "lf",
-    "skipLibCheck": true,
-    "paths": {
-      "herdr": ["./types/herdr.d.ts"]
-    }
-  },
-  "include": ["src/github/**/*.ts", "types/gpui-kit.d.ts"]
+	// Type-check only; scripts/bundle.mjs produces the runtime ESM. Herdr's QuickJS:
+	// no DOM/Node/Bun globals. See AGENTS.md.
+	"compilerOptions": {
+		"target": "ES2022",
+		"module": "ES2022",
+		"moduleResolution": "bundler",
+		"lib": ["ES2022"],
+		"types": [],
+		"strict": true,
+		"noImplicitOverride": true,
+		// esbuild resolves these imports into the self-contained bundle.
+		"allowImportingTsExtensions": true,
+		"noEmit": true,
+		// Keep application TypeScript erasable even though esbuild bundles it.
+		"erasableSyntaxOnly": true,
+		"verbatimModuleSyntax": true,
+		"newLine": "lf",
+		"skipLibCheck": true,
+		"paths": {
+			"herdr": ["./types/herdr.d.ts"]
+		}
+	},
+	"include": ["src/github/**/*.ts", "types/gpui-kit.d.ts"]
 }

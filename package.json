@@ -11,7 +11,7 @@
 		"format": "biome check --write .",
 		"check": "s=0; for m in github tabs-github; do herdr-app check mods/$m || s=1; rm -f mods/$m/jsconfig.json mods/$m/gpui-kit.d.ts; done; exit $s",
 		"check:built": "bun run build && git diff --exit-code --stat -- mods/github",
-		"verify": "bun run build && bun run typecheck && bun test && bun run check && bun run smoke",
+		"verify": "bun run lint && bun run build && bun run typecheck && bun test && bun run check && bun run smoke",
 		"types": "sh scripts/update-types.sh",
 		"smoke": "sh scripts/smoke.sh"
 	},
