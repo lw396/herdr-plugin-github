@@ -27,8 +27,8 @@ Use neutral module conditions. A library's browser entry may require a DOM even 
 —for example, the browser-conditioned entity decoder uses `document.createElement()`.
 Check actual library calls in Herdr, not just in Bun.
 
-`core/markdown.ts` is the only core module allowed to import the approved pure parsers;
-`test/layers.test.ts` holds the allowlist. Keep other core imports inside `core/`.
+`detail/core/markdown.ts` is the only core module allowed to import the approved pure parsers;
+`test/layers.test.ts` holds the allowlist. Keep other core imports inside the `core/` folders.
 
 Keep build-only tools in dev dependencies. When changing the build or dependencies, verify both the normal
 build and watch startup, and check committed output with `bun run check:built` after committing it.

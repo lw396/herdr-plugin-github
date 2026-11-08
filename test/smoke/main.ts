@@ -1,26 +1,26 @@
 // Herdr smoke mod: runs real parser and reader paths inside Herdr's QuickJS (scripts/smoke.sh).
 import { HoverCard, h_flex, TextareaState } from "gpui-base";
 import { type AsyncContext, type Context, div, View } from "gpui-kit";
-import { Acknowledged } from "../../src/github/core/acknowledged.ts";
-import { checkSummary } from "../../src/github/core/checks.ts";
-import { parsePatch } from "../../src/github/core/diff.ts";
-import { parseComment } from "../../src/github/core/discussion.ts";
-import { parseFiles } from "../../src/github/core/files.ts";
-import { parseIssueDetail } from "../../src/github/core/issue-detail.ts";
-import { browserUrl, detailLink, readerMarkdown } from "../../src/github/core/markdown.ts";
-import { mergeInfo, selectedMergeMethod } from "../../src/github/core/merge.ts";
-import { PREVIEW_CLOSE_MS, PREVIEW_OPEN_MS, parsePreview } from "../../src/github/core/preview.ts";
-import { parsePullDetail } from "../../src/github/core/pull-detail.ts";
-import { pullTimeline } from "../../src/github/core/pull-timeline.ts";
-import { parseThreads, threadRow } from "../../src/github/core/review-threads.ts";
-import { DetailMetadata } from "../../src/github/views/detail.ts";
-import { FileDiff } from "../../src/github/views/diff.ts";
-import { ChangedFiles } from "../../src/github/views/files.ts";
-import { previewCard } from "../../src/github/views/preview.ts";
-import { timelineItem } from "../../src/github/views/pull-timeline.ts";
-import { Reader } from "../../src/github/views/reader.ts";
-import { commentEditor, ReviewThreads } from "../../src/github/views/review-threads.ts";
-import { actionButton } from "../../src/github/views/ui.ts";
+import { parseComment } from "../../src/github/detail/core/discussion.ts";
+import { browserUrl, detailLink, readerMarkdown } from "../../src/github/detail/core/markdown.ts";
+import { DetailMetadata } from "../../src/github/detail/views/detail.ts";
+import { parseIssueDetail } from "../../src/github/issues/core/issue-detail.ts";
+import { Acknowledged } from "../../src/github/pulls/core/acknowledged.ts";
+import { checkSummary } from "../../src/github/pulls/core/checks.ts";
+import { parsePatch } from "../../src/github/pulls/core/diff.ts";
+import { parseFiles } from "../../src/github/pulls/core/files.ts";
+import { mergeInfo, selectedMergeMethod } from "../../src/github/pulls/core/merge.ts";
+import { parsePullDetail } from "../../src/github/pulls/core/pull-detail.ts";
+import { pullTimeline } from "../../src/github/pulls/core/pull-timeline.ts";
+import { parseThreads, threadRow } from "../../src/github/pulls/core/review-threads.ts";
+import { FileDiff } from "../../src/github/pulls/views/diff.ts";
+import { ChangedFiles } from "../../src/github/pulls/views/files.ts";
+import { timelineItem } from "../../src/github/pulls/views/pull-timeline.ts";
+import { commentEditor, ReviewThreads } from "../../src/github/pulls/views/review-threads.ts";
+import { Reader } from "../../src/github/roles/reader.ts";
+import { actionButton } from "../../src/github/shared/views/ui.ts";
+import { PREVIEW_CLOSE_MS, PREVIEW_OPEN_MS, parsePreview } from "../../src/github/sidebar/core/preview.ts";
+import { previewCard } from "../../src/github/sidebar/views/preview.ts";
 import issue from "../fixtures/issue-plugin-13.json";
 import pull from "../fixtures/pull-cli-14974.json";
 import pullComments from "../fixtures/pull-cli-14974-comments.json";
@@ -76,7 +76,7 @@ export default class Smoke extends View {
 		this.discussions.init(); // Re-initializing must retain the same editor and its draft.
 		this.discussions.threads = parseThreads(
 			threadPages.data.repository.pullRequest.reviewThreads
-				.nodes as import("../../src/github/core/review-threads.ts").ThreadNode[],
+				.nodes as import("../../src/github/pulls/core/review-threads.ts").ThreadNode[],
 			inlinePages.flat(),
 			"https://github.com/lw396/herdr-plugin-github/pull/35",
 		);

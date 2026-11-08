@@ -1,10 +1,10 @@
 // GitHub for Herdr: one mod, a role per props().role (see ROLES). Default: panel.
 import { type AsyncContext, type Context, type Element, View } from "gpui-kit";
 import { props } from "herdr";
-import { Pane } from "./views/pane.ts";
-import { Panel } from "./views/panel.ts";
-import { Reader } from "./views/reader.ts";
-import type { Role } from "./views/ui.ts";
+import { Pane } from "./roles/pane.ts";
+import { Panel } from "./roles/panel.ts";
+import { Reader } from "./roles/reader.ts";
+import type { Role } from "./shared/views/ui.ts";
 
 const ROLES: Record<string, new () => Role> = { panel: Panel, issue: Reader, pr: Reader, pane: Pane };
 

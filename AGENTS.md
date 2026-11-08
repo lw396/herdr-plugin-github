@@ -6,13 +6,14 @@ and its sub-issues define the plan and order; use the tracker guide below before
 ## Change rules
 
 - Edit `src/github/`; `mods/github/` is generated, installable output. Rebuild and commit it with code changes.
-- Keep pure logic in `core/`, external operations in `io/`, and UI in `views/`; `main.ts` selects the role.
-  `test/layers.test.ts` defines permitted imports, including the Markdown module's pure-parser exceptions.
-- Route all GitHub access through `io/gh.ts`. Run git with `{ cwd, on }` from `io/context.ts`, and gh
+- Folders go feature first, then layer (ADR 0008): each feature folder keeps pure logic in `core/`, external
+  operations in `io/`, and UI in `views/`; `roles/` assembles them and `main.ts` selects the role.
+  `test/layers.test.ts` defines permitted imports: the layers, the feature order, and their exceptions.
+- Route all GitHub access through `shared/io/gh.ts`. Run git with `{ cwd, on }` from `shared/io/context.ts`, and gh
   with `on` from `gh.account()`. Remote folders use the remote machine's tools and credentials; never fall back locally.
   Pass gh explicit `owner/repo` from `githubRemote()`, not a cwd or `{owner}/{repo}` placeholders.
 - Use the context each callback receives; do not retain `cx`. Schedule work with `cx.timer` and `cx.spawn`, not `setTimeout`.
-- Use theme colors through `views/ui.ts`. Stop mouse-down propagation on controls inside window overlays.
+- Use theme colors through `shared/views/ui.ts`. Stop mouse-down propagation on controls inside window overlays.
 - Keep `init()` read-only: `herdr-app check` executes it.
 - Never open a Herdr window with a changed `HOME` or `HERDR_APP_HOME`: it can overwrite real machines' spaces.
   With a temporary app home, use subcommands only.

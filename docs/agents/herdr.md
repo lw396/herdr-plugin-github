@@ -26,7 +26,7 @@ Treat them as read-only references, not type-checked project code. If absent, ob
 ## GitHub CLI output
 
 `gh api --jq` prints plain text, including unquoted strings: use `apiText()`, not `api()`.
-JSON pagination uses `--slurp`; `io/gh.ts` flattens REST array pages once and retains object pages.
+JSON pagination uses `--slurp`; `shared/io/gh.ts` flattens REST array pages once and retains object pages.
 The target machine needs gh with this flag. Preserve its error rather than falling back to another machine.
 
 ## Layout and upgrades
@@ -34,7 +34,7 @@ The target machine needs gh with this flag. Preserve its error rather than falli
 `mods/tabs-github/` and `layouts/github.json` adapt Herdr 0.1.13's shipped `tabs` and `main` layout.
 Keep changes small and mark tab-mod changes `herdr-plugin-github`. The layout renames the tab bar,
 adds GitHub to `panel-body`, and selects the GitHub pane-header role.
-`src/github/views/pane.ts` only adds GitHub branding; preserve terminal headers and controls.
+`src/github/roles/pane.ts` only adds GitHub branding; preserve terminal headers and controls.
 
 On upgrade, refresh types, recopy the shipped tab mod/layout, compare the new pane header,
 and reapply these adaptations. Theme picks and panel sizes are per-layout; `github` does not inherit `main`'s.

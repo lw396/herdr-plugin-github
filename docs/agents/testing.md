@@ -6,10 +6,12 @@ Reproduce app bugs as failing core/IO tests before fixing them.
 
 ## Seams
 
-- `test/core/`: command arguments, parsing and transformations into what the UI shows. Put pure logic here first.
-- `test/io/`: external operations through a fake Herdr runtime. Under Bun, `test/preload.ts` substitutes
+Tests mirror the source: `test/<feature>/core/` and `test/<feature>/io/` for `src/github/<feature>/…`.
+
+- `core/` tests: command arguments, parsing and transformations into what the UI shows. Put pure logic here first.
+- `io/` tests: external operations through a fake Herdr runtime. Under Bun, `test/preload.ts` substitutes
   `test/fake-herdr.ts` for `herdr`.
-- Keep `views/` and `main.ts` thin; validate them with Herdr loading checks and actual app interaction.
+- Keep `views/`, `roles/` and `main.ts` thin; validate them with Herdr loading checks and actual app interaction.
 - `test/smoke/main.ts` (`bun run smoke`, part of `verify`): bundled like the mod and loaded by `herdr-app check`,
   so parser and reader code runs in Herdr's QuickJS on real fixtures. Assertions throw from `init()`.
   Add a case here when a library or code path must work in QuickJS, not only in Bun. It does not replace the Mac check.

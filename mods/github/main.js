@@ -8,12 +8,12 @@ var __export = (target, all2) => {
 import { View } from "gpui-kit";
 import { props as props4 } from "herdr";
 
-// src/github/views/pane.ts
+// src/github/roles/pane.ts
 import { h_flex } from "gpui-base";
 import { div as div2, image, svg as svg2 } from "gpui-kit";
 import { home, panes, props, run } from "herdr";
 
-// src/github/views/ui.ts
+// src/github/shared/views/ui.ts
 import { Button } from "gpui-base";
 import { div, svg } from "gpui-kit";
 import { theme } from "herdr";
@@ -29,12 +29,6 @@ function link(id, url, label) {
 function chip(label, border, background) {
   return div().px(8).py(3).rounded(12).border_1().border_color(border).bg(background).text_size(12).child(label);
 }
-var PULL_STATES = {
-  open: { icon: "mods/github/assets/git-pull-request.svg", color: (t) => t.done, label: "Open" },
-  draft: { icon: "mods/github/assets/git-pull-request-draft.svg", color: (t) => t.dim, label: "Draft" },
-  merged: { icon: "mods/github/assets/git-merge.svg", color: (t) => t.ansi5, label: "Merged" },
-  closed: { icon: "mods/github/assets/git-pull-request-closed.svg", color: (t) => t.blocked, label: "Closed" }
-};
 var square = (el) => el.size(36).flex_none().flex().items_center().justify_center();
 function actionButton(id, label, act, primary = false, disabled = false) {
   const t = colors();
@@ -51,7 +45,7 @@ function button(id, label, tip, act) {
   }).child(label);
 }
 
-// src/github/views/pane.ts
+// src/github/roles/pane.ts
 function icon(program, color) {
   if (!program?.icon) return null;
   return program.tint ? svg2(program.icon).size(14).flex_none().text_color(color) : image(program.icon).w(14).h(14).flex_none();
@@ -97,12 +91,18 @@ var Pane = class {
   }
 };
 
-// src/github/views/panel.ts
+// src/github/roles/panel.ts
 import { h_flex as h_flex6, v_flex as v_flex5 } from "gpui-base";
 import { div as div9, svg as svg6 } from "gpui-kit";
 import { closeOverlay, props as props2 } from "herdr";
 
-// src/github/core/gh.ts
+// src/github/detail/io/changes.ts
+import { setShared, shared } from "herdr";
+
+// src/github/shared/io/gh.ts
+import { exec } from "herdr";
+
+// src/github/shared/core/gh.ts
 function apiArgs(path, options = {}) {
   const args = ["api", path];
   if (options.method && options.method.toUpperCase() !== "GET") args.push("-X", options.method.toUpperCase());
@@ -152,7 +152,7 @@ function explain(stderr) {
   return errorMessage(stderr);
 }
 
-// src/github/core/account.ts
+// src/github/shared/core/account.ts
 var ACCOUNT_PROBLEM = {
   missing: "gh is not installed",
   auth: "Not signed in to gh",
@@ -172,99 +172,7 @@ function describeAccount(account3) {
   return { ok: false, text: `gh on ${machine}: ${explain(status2.message)}` };
 }
 
-// src/github/core/polling.ts
-var ConditionalPoll = class {
-  key = null;
-  visible = false;
-  etag = null;
-  failed = false;
-  pending = null;
-  get shown() {
-    return this.visible;
-  }
-  /** What is polled (null: nothing) and whether it is shown; returns whether it needs a refresh now. */
-  sync(key, visible) {
-    const changed = key !== this.key;
-    const refresh = visible && key !== null && (changed || !this.visible);
-    if (changed) {
-      this.etag = null;
-      this.failed = false;
-    }
-    if (changed || !visible) this.pending = null;
-    this.key = key;
-    this.visible = visible;
-    return refresh;
-  }
-  /** A local write or failed reload wins over an older read, and the next check asks without a validator. */
-  invalidate() {
-    this.pending = null;
-    this.etag = null;
-  }
-  /** A check to make, or null while hidden or another is out; a forced one replaces the one out. */
-  begin(force = false) {
-    if (!this.key || !this.visible || this.pending && !force) return null;
-    const request = { etag: this.etag, force };
-    this.pending = request;
-    return request;
-  }
-  current(request) {
-    return this.visible && this.pending === request;
-  }
-  /** Whether the check's answer calls for reading the contents again. */
-  reload(request, change) {
-    return this.current(request) && (request.force || change.changed);
-  }
-  /**
-   * Finish only after any required reload succeeds (no `change`: it failed, so the next check asks
-   * again without a validator). `notify`: what is shown changed or recovered.
-   */
-  finish(request, change) {
-    if (!this.current(request)) return { accepted: false, notify: false };
-    const notify = !change || change.changed || request.force || this.failed;
-    this.pending = null;
-    this.failed = !change;
-    if (!change) this.etag = null;
-    else if (change.changed) this.etag = change.etag;
-    return { accepted: true, notify };
-  }
-};
-
-// src/github/core/sidebar.ts
-var POLL_SECONDS = 60;
-function noRepository(cwd) {
-  const hint = "Focus a terminal in a repository cloned from GitHub.";
-  const name = cwd ? cwd.replace(/\/+$/, "").split("/").pop() || "/" : null;
-  return { title: "No GitHub repository", detail: name ? `${name} has no GitHub remote. ${hint}` : hint };
-}
-function listNotice(s) {
-  if (s.account && !s.account.status.ok) return describeAccount(s.account).text;
-  if (s.remote === null) return null;
-  const repo = s.remote ? `${s.remote.owner}/${s.remote.repo}` : "the repository";
-  if (s.failure?.notFound && s.remote) {
-    const user = s.account?.status.ok ? s.account.status.user : "this account";
-    return `${repo} (remote "${s.remote.remote}") isn't on GitHub, or ${user} can't see it. Check git remote -v.`;
-  }
-  if (s.failure) return s.failure.message;
-  if (s.issuesEnabled === false) return `Issues are turned off for ${repo}.`;
-  return null;
-}
-var ago = (ms) => ms < 6e4 ? "just now" : `${Math.floor(ms / 6e4)}m ago`;
-function footerStatus(s, now) {
-  const machine = s.on ?? "this computer";
-  if (!s.account) return { tone: "pending", account: "Checking gh\u2026", machine, sync: null };
-  const { status: status2 } = s.account;
-  if (!status2.ok) return { tone: "problem", account: ACCOUNT_PROBLEM[status2.reason], machine, sync: null };
-  if (!s.polling || !s.failed) return { tone: "ok", account: status2.user, machine, sync: null };
-  const last = s.checkedAt === null ? null : ago(Math.max(0, now - s.checkedAt));
-  const sync = last ? `Check failed \xB7 last ok ${last}` : `Check failed \xB7 retrying every ${POLL_SECONDS}s`;
-  return { tone: "problem", account: status2.user, machine, sync };
-}
-
-// src/github/io/changes.ts
-import { setShared, shared } from "herdr";
-
-// src/github/io/gh.ts
-import { exec } from "herdr";
+// src/github/shared/io/gh.ts
 var GhError = class extends Error {
   code;
   stderr;
@@ -348,7 +256,7 @@ async function signedIn(on) {
   if (!a.status.ok) throw new Error(describeAccount(a).text);
 }
 
-// src/github/io/changes.ts
+// src/github/detail/io/changes.ts
 var CHANGES = "github.changes";
 var KEPT = 20;
 var log = () => shared(CHANGES)?.notices ?? [];
@@ -376,47 +284,10 @@ var Notices = class {
   }
 };
 
-// src/github/io/context.ts
-import { focused, layout, panes as panes2, spaces } from "herdr";
+// src/github/detail/io/detail-tabs.ts
+import { exec as exec2, focused, panes as panes2, run as run3, setShared as setShared2, shared as shared2, spaces } from "herdr";
 
-// src/github/core/location.ts
-function focusedFolder(herdr, previous3) {
-  const space = herdr.spaces.find((s) => s.active), f = herdr.focused, id = space?.id ?? null;
-  if (f && !f.pane && f.terminal && f.cwd) {
-    return { cwd: f.cwd, on: f.terminal.includes("/") ? f.terminal.split("/")[0] ?? null : null, space: id };
-  }
-  const pane = f?.pane ? herdr.panes.find((p) => p.pane === f.pane) : null;
-  if (pane?.terminal)
-    return { cwd: pane.cwd || f?.cwd || space?.folder || null, on: space?.machine ?? null, space: id };
-  if (previous3 && previous3.space === id) return previous3;
-  return { cwd: space?.folder || null, on: space?.machine ?? null, space: id };
-}
-
-// src/github/core/visibility.ts
-function layoutShows(tree, id) {
-  if (!tree || typeof tree !== "object") return false;
-  const node2 = tree;
-  if (node2.hidden) return false;
-  if (node2.id === id) return true;
-  const children = node2.children ?? [];
-  return children.some(
-    (child, index2) => (node2.type !== "stack" || (node2.active ? child.id === node2.active : index2 === 0)) && layoutShows(child, id)
-  );
-}
-
-// src/github/io/context.ts
-var previous = null;
-function location() {
-  previous = focusedFolder({ spaces: spaces(), panes: panes2(), focused: focused() }, previous);
-  return previous;
-}
-var SIDEBAR_SLOT = "github";
-var sidebarVisible = () => layoutShows(layout(), SIDEBAR_SLOT);
-
-// src/github/io/detail-tabs.ts
-import { exec as exec2, focused as focused2, panes as panes3, run as run3, setShared as setShared2, shared as shared2, spaces as spaces2 } from "herdr";
-
-// src/github/core/detail.ts
+// src/github/detail/core/detail.ts
 var detailKey = (ref) => `${ref.repo.toLowerCase()}${ref.kind === "pr" ? "/pull/" : "#"}${ref.number}`;
 var DetailNavigation = class {
   ref = null;
@@ -451,13 +322,13 @@ var detailTabName = (ref) => `#${ref.number} \xB7 ${ref.repo.split("/").at(-1)}`
 var detailUrl = (ref) => `https://github.com/${ref.repo}/${ref.kind === "pr" ? "pull" : "issues"}/${ref.number}`;
 var notVisible = (ref) => `${ref.repo} #${ref.number} isn't on GitHub, or this account can't see it.`;
 
-// src/github/io/detail-tabs.ts
+// src/github/detail/io/detail-tabs.ts
 var READERS = "github.readers";
 var COMMAND = "detail:";
 var readers = () => shared2(READERS) ?? {};
 var reader = (id) => readers()[id];
 function remember(id, value) {
-  const live = new Set(spaces2().flatMap((s) => s.tabs.map((t) => t.id)));
+  const live = new Set(spaces().flatMap((s) => s.tabs.map((t) => t.id)));
   const kept = Object.fromEntries(Object.entries(readers()).filter(([key, r]) => key === id || live.has(r.tab)));
   setShared2(READERS, { ...kept, [id]: value });
 }
@@ -470,7 +341,7 @@ var DetailTabs = class {
   pending = /* @__PURE__ */ new Map();
   creating = /* @__PURE__ */ new Map();
   async open(ref, file) {
-    const space = focused2()?.space, owner = spaces2().find((s) => s.id === space);
+    const space = focused()?.space, owner = spaces().find((s) => s.id === space);
     if (!space || !owner)
       throw new Error(`Select a Herdr space before opening ${ref.kind === "pr" ? "a pull request" : "an issue"}.`);
     const identity = `${space}:${detailKey(ref)}`;
@@ -481,7 +352,7 @@ var DetailTabs = class {
     )?.[0];
     const existing = existingId ? reader(existingId) : void 0;
     let target;
-    if (existingId && existing && panes3().some((p) => p.tab === existing.tab && p.mod === "github")) {
+    if (existingId && existing && panes2().some((p) => p.tab === existing.tab && p.mod === "github")) {
       target = { id: existingId, reader: existing };
     } else {
       if (existingId) this.pending.delete(existingId);
@@ -503,7 +374,7 @@ var DetailTabs = class {
     if (oldName && tabName?.toLowerCase() === oldName && tabName !== detailTabName(ref)) {
       run3("tab.rename", { id: target.reader.tab, name: detailTabName(ref) });
     }
-    if (focused2()?.space === space) run3("tab.select", { id: target.reader.tab });
+    if (focused()?.space === space) run3("tab.select", { id: target.reader.tab });
   }
   async create(space, ref) {
     const id = `detail-${Date.now()}-${Math.random().toString(36).slice(2)}`;
@@ -521,7 +392,7 @@ var DetailTabs = class {
   }
   /** Live shared metadata re-renders the sidebar: no polling and no persisted mailbox. */
   deliver() {
-    const tab = focused2()?.tab;
+    const tab = focused()?.tab;
     if (!tab) return;
     for (const [id, ref] of this.pending) {
       const r = reader(id);
@@ -536,7 +407,7 @@ var DetailTabs = class {
   }
 };
 function navigatedDetail(id, ref) {
-  const r = reader(id), space = spaces2().find((s) => s.tabs.some((t) => t.id === r?.tab));
+  const r = reader(id), space = spaces().find((s) => s.tabs.some((t) => t.id === r?.tab));
   if (!r || !space) return;
   remember(id, { ...r, identity: `${space.id}:${detailKey(ref)}` });
   const name = detailTabName(ref);
@@ -545,9 +416,9 @@ function navigatedDetail(id, ref) {
 function detailLocation(id) {
   const r = reader(id);
   if (!r) return null;
-  const space = spaces2().find((s) => s.tabs.some((t) => t.id === r.tab));
+  const space = spaces().find((s) => s.tabs.some((t) => t.id === r.tab));
   const tab = space?.tabs.find((t) => t.id === r.tab);
-  const all2 = panes3().filter((p) => p.tab === r.tab);
+  const all2 = panes2().filter((p) => p.tab === r.tab);
   const pane = all2.find((p) => p.mod === "github" && (!r.pane || p.pane === r.pane));
   if (!space || !tab || !pane) return null;
   return {
@@ -573,6 +444,180 @@ function detailCommand(command, id) {
   } catch {
     return null;
   }
+}
+
+// src/github/shared/core/cache.ts
+var Cache = class {
+  limit;
+  entries = /* @__PURE__ */ new Map();
+  constructor(limit) {
+    this.limit = limit;
+  }
+  keys() {
+    return [...this.entries.keys()];
+  }
+  get(key) {
+    const entry = this.entries.get(key);
+    if (!entry) return void 0;
+    this.entries.delete(key);
+    this.entries.set(key, entry);
+    return entry.value;
+  }
+  fresh(key, maxAge, now) {
+    const entry = this.entries.get(key);
+    return entry !== void 0 && now - entry.at < maxAge;
+  }
+  delete(key) {
+    this.entries.delete(key);
+  }
+  clear() {
+    this.entries.clear();
+  }
+  set(key, value, now) {
+    this.entries.delete(key);
+    this.entries.set(key, { value, at: now });
+    while (this.entries.size > this.limit) this.entries.delete(this.entries.keys().next().value);
+  }
+};
+
+// src/github/shared/io/facts.ts
+var Facts = class {
+  cache;
+  asking = /* @__PURE__ */ new Map();
+  fresh;
+  /** Only answers `keep` accepts are kept. */
+  keep;
+  constructor(limit, fresh, keep = () => true) {
+    this.cache = new Cache(limit);
+    this.fresh = fresh;
+    this.keep = keep;
+  }
+  peek(key) {
+    return this.cache.get(key);
+  }
+  /** The kept answer when fresh (unless forced), else the ask already out (unless forced), else a new ask. */
+  look(key, force, ask) {
+    const kept = this.cache.get(key);
+    if (!force && kept !== void 0 && this.cache.fresh(key, this.fresh, Date.now())) return Promise.resolve(kept);
+    const pending = this.asking.get(key);
+    if (pending && !force) return pending;
+    const p = ask().then((value) => {
+      if (this.asking.get(key) === p && this.keep(value)) this.cache.set(key, value, Date.now());
+      return value;
+    }).finally(() => {
+      if (this.asking.get(key) === p) this.asking.delete(key);
+    });
+    this.asking.set(key, p);
+    return p;
+  }
+  /** Keeps `value` as the answer now (a page loaded by other means: Load more). */
+  put(key, value) {
+    this.cache.set(key, value, Date.now());
+  }
+  /** Shows what `change` returns for a kept key until asked again (undefined: untouched); an answer still out is dropped. */
+  patch(change) {
+    for (const key of this.cache.keys()) {
+      const value = this.cache.get(key);
+      const changed = value === void 0 ? void 0 : change(key, value);
+      if (changed === void 0) continue;
+      this.cache.set(key, changed, -Infinity);
+      this.asking.delete(key);
+    }
+  }
+  clear() {
+    this.cache.clear();
+    this.asking.clear();
+  }
+};
+
+// src/github/sidebar/core/page.ts
+var PAGE = 30;
+function appendPage(group, page) {
+  const shown = new Set(group.rows.map((r) => r.number));
+  return { ...page, rows: [...group.rows, ...page.rows.filter((r) => !shown.has(r.number))] };
+}
+
+// src/github/sidebar/io/groups.ts
+var where = (kind, r, cwd = null) => ({
+  kind,
+  on: r.on,
+  repo: `${r.remote.owner}/${r.remote.repo}`.toLowerCase(),
+  login: r.login,
+  cwd
+});
+var groupKey = (w) => JSON.stringify([w.kind, w.on, w.repo, w.login, w.cwd]);
+function groupOf(key) {
+  const [kind, on, repo, login2, cwd] = JSON.parse(key);
+  return { kind, on, repo, login: login2, cwd };
+}
+function pagedGroups(ask) {
+  const kept = new Facts(64, 6e4);
+  return {
+    kept,
+    look: (kind, r, force = false) => kept.look(groupKey(where(kind, r)), force, () => ask(kind, r, null)),
+    peek: (kind, r) => kept.peek(groupKey(where(kind, r))),
+    async more(kind, r, loaded) {
+      const key = groupKey(where(kind, r));
+      const both = appendPage(loaded, await ask(kind, r, loaded.cursor));
+      if (kept.peek(key) === loaded) kept.put(key, both);
+      return both;
+    }
+  };
+}
+
+// src/github/issues/core/issues.ts
+function parseIssueChange(data, repo) {
+  const i = data;
+  return {
+    repo,
+    state: i.state,
+    issue: {
+      number: i.number,
+      title: i.title,
+      assignees: i.assignees.map((a) => a.login),
+      updatedAt: i.updated_at,
+      url: i.html_url
+    }
+  };
+}
+function issueGroupQuery(kind, remote2, login2, after) {
+  const assigned = kind === "assigned";
+  return {
+    query: `query($owner: String!, $name: String!, $after: String${assigned ? ", $assignee: String!" : ""}) {
+  repository(owner: $owner, name: $name) {
+    hasIssuesEnabled
+    issues(first: ${PAGE}, after: $after, states: ${kind === "closed" ? "CLOSED" : "OPEN"}${assigned ? ", filterBy: {assignee: $assignee}" : ""}, orderBy: {field: UPDATED_AT, direction: DESC}) {
+      totalCount
+      pageInfo { hasNextPage endCursor }
+      nodes { number title updatedAt url assignees(first: 10) { nodes { login } } }
+    }
+  }
+}`,
+    variables: { owner: remote2.owner, name: remote2.repo, after, ...assigned ? { assignee: login2 } : {} }
+  };
+}
+function parseIssueGroup(data) {
+  const { hasIssuesEnabled, issues } = data.repository;
+  return {
+    issuesEnabled: hasIssuesEnabled,
+    total: issues.totalCount,
+    more: issues.pageInfo.hasNextPage,
+    cursor: issues.pageInfo.endCursor,
+    rows: issues.nodes.map((n) => ({
+      number: n.number,
+      title: n.title,
+      assignees: n.assignees.nodes.map((a) => a.login),
+      updatedAt: n.updatedAt,
+      url: n.url
+    }))
+  };
+}
+function applyChange(kind, group, change, login2) {
+  const belongs = change.state === "closed" ? kind === "closed" : kind === "open" || kind === "assigned" && change.issue.assignees.some((a) => a.toLowerCase() === login2.toLowerCase());
+  const others = group.rows.filter((i) => i.number !== change.issue.number);
+  const shown = others.length < group.rows.length;
+  if (belongs) return { ...group, total: group.total + (shown ? 0 : 1), rows: [change.issue, ...others] };
+  return shown ? { ...group, total: group.total - 1, rows: others } : group;
 }
 
 // node_modules/entities/dist/decode-codepoint.js
@@ -6102,7 +6147,7 @@ function tokenizeFurtherStart(effects, ok, nok) {
 // node_modules/micromark-core-commonmark/lib/code-text.js
 var codeText = {
   name: "codeText",
-  previous: previous2,
+  previous,
   resolve: resolveCodeText,
   tokenize: tokenizeCodeText
 };
@@ -6143,7 +6188,7 @@ function resolveCodeText(events) {
   }
   return events;
 }
-function previous2(code) {
+function previous(code) {
   return code !== 96 || this.events[this.events.length - 1][1].type === "characterEscape";
 }
 function tokenizeCodeText(effects, ok, nok) {
@@ -9870,7 +9915,7 @@ function defaultOnError(left, right) {
   }) + ") is still open");
 }
 
-// src/github/core/markdown.ts
+// src/github/detail/core/markdown.ts
 function browserUrl(href, base) {
   if (!href.trim()) return null;
   let resolved;
@@ -9985,7 +10030,7 @@ function links(markdown, url) {
   return result + markdown.slice(copied);
 }
 
-// src/github/core/discussion.ts
+// src/github/detail/core/discussion.ts
 var EMOJI = [
   ["+1", "\u{1F44D}"],
   ["-1", "\u{1F44E}"],
@@ -10018,7 +10063,7 @@ function parseComments(comments, url) {
   return comments.map((c) => parseComment(c, url)).sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id - b.id);
 }
 
-// src/github/core/labels.ts
+// src/github/detail/core/labels.ts
 function parseLabel(label) {
   return typeof label === "string" ? { name: label, color: null } : {
     name: label.name,
@@ -10026,7 +10071,7 @@ function parseLabel(label) {
   };
 }
 
-// src/github/core/activity.ts
+// src/github/detail/core/activity.ts
 function issueTimeline(comments, activities) {
   const items = [
     ...comments.map((comment) => ({ type: "comment", comment })),
@@ -10065,7 +10110,7 @@ function parseActivity(data) {
   });
 }
 
-// src/github/core/item.ts
+// src/github/detail/core/item.ts
 function parseItem(item, reactions = item.reactions) {
   return {
     title: item.title,
@@ -10080,7 +10125,7 @@ function parseItem(item, reactions = item.reactions) {
   };
 }
 
-// src/github/core/issue-detail.ts
+// src/github/issues/core/issue-detail.ts
 function parseIssueDetail(issue, timeline) {
   const i = issue, events = timeline;
   return {
@@ -10094,69 +10139,7 @@ function parseIssueDetail(issue, timeline) {
   };
 }
 
-// src/github/core/page.ts
-var PAGE = 30;
-function appendPage(group, page) {
-  const shown = new Set(group.rows.map((r) => r.number));
-  return { ...page, rows: [...group.rows, ...page.rows.filter((r) => !shown.has(r.number))] };
-}
-
-// src/github/core/issues.ts
-function parseIssueChange(data, repo) {
-  const i = data;
-  return {
-    repo,
-    state: i.state,
-    issue: {
-      number: i.number,
-      title: i.title,
-      assignees: i.assignees.map((a) => a.login),
-      updatedAt: i.updated_at,
-      url: i.html_url
-    }
-  };
-}
-function issueGroupQuery(kind, remote2, login2, after) {
-  const assigned = kind === "assigned";
-  return {
-    query: `query($owner: String!, $name: String!, $after: String${assigned ? ", $assignee: String!" : ""}) {
-  repository(owner: $owner, name: $name) {
-    hasIssuesEnabled
-    issues(first: ${PAGE}, after: $after, states: ${kind === "closed" ? "CLOSED" : "OPEN"}${assigned ? ", filterBy: {assignee: $assignee}" : ""}, orderBy: {field: UPDATED_AT, direction: DESC}) {
-      totalCount
-      pageInfo { hasNextPage endCursor }
-      nodes { number title updatedAt url assignees(first: 10) { nodes { login } } }
-    }
-  }
-}`,
-    variables: { owner: remote2.owner, name: remote2.repo, after, ...assigned ? { assignee: login2 } : {} }
-  };
-}
-function parseIssueGroup(data) {
-  const { hasIssuesEnabled, issues } = data.repository;
-  return {
-    issuesEnabled: hasIssuesEnabled,
-    total: issues.totalCount,
-    more: issues.pageInfo.hasNextPage,
-    cursor: issues.pageInfo.endCursor,
-    rows: issues.nodes.map((n) => ({
-      number: n.number,
-      title: n.title,
-      assignees: n.assignees.nodes.map((a) => a.login),
-      updatedAt: n.updatedAt,
-      url: n.url
-    }))
-  };
-}
-function applyChange(kind, group, change, login2) {
-  const belongs = change.state === "closed" ? kind === "closed" : kind === "open" || kind === "assigned" && change.issue.assignees.some((a) => a.toLowerCase() === login2.toLowerCase());
-  const others = group.rows.filter((i) => i.number !== change.issue.number);
-  const shown = others.length < group.rows.length;
-  if (belongs) return { ...group, total: group.total + (shown ? 0 : 1), rows: [change.issue, ...others] };
-  return shown ? { ...group, total: group.total - 1, rows: others } : group;
-}
-
-// src/github/io/issues.ts
+// src/github/issues/io/issues.ts
 var listChanges = (repo, etag, on) => changes(`repos/${repo}/issues?state=all&sort=updated&per_page=1`, etag, on);
 var issueChanges = (repo, number, etag, on) => changes(`repos/${repo}/issues/${number}`, etag, on);
 async function issuePage(kind, remote2, login2, on, after) {
@@ -10181,10 +10164,571 @@ async function setIssueState(repo, number, state, on) {
   );
 }
 
-// src/github/core/pulls.ts
+// src/github/issues/io/groups.ts
+var issueGroups = pagedGroups(
+  (kind, r, after) => issuePage(kind, r.remote, r.login, r.on, after)
+);
+var issueGroup = issueGroups.look;
+var peekIssueGroup = issueGroups.peek;
+var moreIssues = issueGroups.more;
+function issueChanged(change) {
+  const repo = change.repo.toLowerCase();
+  issueGroups.kept.patch((key, group) => {
+    const g = groupOf(key);
+    return g.repo === repo ? applyChange(g.kind, group, change, g.login) : void 0;
+  });
+}
+
+// src/github/issues/views/issues.ts
+import { div as div6 } from "gpui-kit";
+
+// src/github/shared/core/time.ts
+var MINUTE = 6e4;
+var HOUR = 60 * MINUTE;
+var DAY = 24 * HOUR;
+function relativeTime(iso, now) {
+  const ago2 = now - Date.parse(iso);
+  if (ago2 < MINUTE) return "now";
+  if (ago2 < HOUR) return `${Math.floor(ago2 / MINUTE)}m`;
+  if (ago2 < DAY) return `${Math.floor(ago2 / HOUR)}h`;
+  if (ago2 < 30 * DAY) return `${Math.floor(ago2 / DAY)}d`;
+  if (ago2 < 365 * DAY) return `${Math.floor(ago2 / (30 * DAY))}mo`;
+  return `${Math.floor(ago2 / (365 * DAY))}y`;
+}
+
+// src/github/sidebar/views/groups.ts
+import { h_flex as h_flex4, v_flex as v_flex3 } from "gpui-base";
+import { div as div5 } from "gpui-kit";
+
+// src/github/detail/core/state.ts
 function pullState(state, draft2) {
   return state === "open" && draft2 ? "draft" : state;
 }
+
+// src/github/sidebar/core/preview.ts
+var PREVIEW_DWELL_MS = 200;
+var PREVIEW_OPEN_MS = 500;
+var PREVIEW_CLOSE_MS = 200;
+function previewKey(ref, on, login2) {
+  return JSON.stringify([on, login2, detailKey(ref)]);
+}
+var PreviewIntent = class {
+  active = null;
+  enter(row) {
+    this.active = { row };
+    return this.active;
+  }
+  leave(row) {
+    if (this.active?.row !== row) return false;
+    this.active = null;
+    return true;
+  }
+  current(ticket) {
+    return this.active === ticket;
+  }
+};
+function parsePreview(data, kind) {
+  const item = data;
+  const state = kind === "pr" ? pullState(item.merged_at ? "merged" : item.state, item.draft ?? false) : item.state;
+  return {
+    title: item.title,
+    author: item.user?.login ?? null,
+    createdAt: item.created_at,
+    state,
+    summary: markdownSummary(item.body ?? ""),
+    labels: item.labels.map(parseLabel)
+  };
+}
+
+// src/github/sidebar/views/preview.ts
+import { HoverCard, h_flex as h_flex3, v_flex as v_flex2 } from "gpui-base";
+import { div as div4, svg as svg4 } from "gpui-kit";
+
+// src/github/detail/views/detail.ts
+import { h_flex as h_flex2, TextView, v_flex } from "gpui-base";
+import { div as div3, svg as svg3 } from "gpui-kit";
+var NOUN = { issue: "issue", pr: "pull request" };
+var Noun = (kind) => NOUN[kind].charAt(0).toUpperCase() + NOUN[kind].slice(1);
+function openLink(cx, host, url, page) {
+  const ref = detailLink(url, page);
+  if (ref) host.follow(cx, ref);
+  else {
+    const external = browserUrl(url, page);
+    if (external) cx.open_url(external);
+  }
+}
+var detailEmpty = () => div3().flex_1();
+function detailHeader(host, ref, shown, refresh) {
+  const t = colors();
+  const url = shown.url ?? detailUrl(ref);
+  const previous3 = host.previous();
+  const number = link(`${ref.kind}-browser`, url, `#${ref.number}`).px(2).rounded(4).text_color(t.accent).hover((s) => s.bg(t.hover)).tooltip(`Open ${ref.repo} #${ref.number} in browser`).accessibility_label(`Open #${ref.number} in browser`);
+  const copy = button(
+    `${ref.kind}-copy`,
+    svg3("mods/github/assets/copy.svg").size(16),
+    `Copy ${NOUN[ref.kind]} link`,
+    (_e, cx) => cx.write_to_clipboard(url)
+  );
+  return h_flex2().flex_none().px(24).pt(18).pb(12).gap(12).items_start().when(
+    previous3 !== null,
+    (el) => el.child(
+      square(button(`${ref.kind}-back`, "\u2190", `Back to #${previous3?.number}`, (_e, cx) => host.back(cx))).text_size(
+        22
+      )
+    )
+  ).child(
+    h_flex2().flex_1().min_w(0).gap(8).items_center().flex_wrap().text_size(22).child(
+      div3().min_w(0).font_semibold().child(shown.title ?? `${Noun(ref.kind)} details`)
+    ).child(h_flex2().gap(2).items_center().flex_none().child(number).child(copy))
+  ).child(
+    shown.loading ? square(div3()).child(spinner(18)) : square(
+      button(`${ref.kind}-refresh`, "\u21BB", `Refresh ${NOUN[ref.kind]}`, (_e, cx) => {
+        refresh(cx);
+        cx.notify();
+      })
+    ).text_size(22)
+  );
+}
+function detailBody(ref, loading, failure, document3) {
+  const t = colors();
+  return v_flex().id(`${ref.kind}-scroll-${detailKey(ref)}`).flex_1().min_h(0).overflow_y_scroll().px(24).pb(18).gap(12).when(loading, (el) => el.child(div3().text_size(12).text_color(t.dim).child(`Loading ${NOUN[ref.kind]}\u2026`))).when(
+    failure !== void 0,
+    (el) => el.child(
+      div3().text_color(t.blocked).child(failure ?? "")
+    )
+  ).when(document3 !== null, (el) => el.child(document3 ?? div3()));
+}
+var DetailMetadata = class {
+  expanded = false;
+  render(layout2, metadata) {
+    const t = colors();
+    const wide = layout2 === "wide";
+    const { item } = metadata;
+    const sections = [
+      ...metadata.before ?? [],
+      ["Assignees", people(item.assignees)],
+      ["Labels", labels(item.labels)],
+      ["Project", projects(metadata.projects, metadata.projectsLoading)],
+      ["Milestone", milestone(item.milestone)]
+    ];
+    const fields = () => sections.map(
+      ([title, value]) => v_flex().min_w(0).gap(10).py(16).border_b(1).border_color(t.border).when(layout2 === "narrow", (el) => el.w(180).min_w(140).flex_grow(1)).when(layout2 === "compact", (el) => el.w_full().flex_none()).child(div3().text_size(13).font_semibold().child(title)).child(value)
+    );
+    if (wide) return v_flex().w(220).flex_none().children(fields());
+    const summary = () => h_flex2().min_w(0).gap(10).py(16).items_center().flex_wrap().child(div3().text_size(13).font_semibold().child("Labels")).child(layout2 === "compact" ? quiet(String(item.labels.length)) : labels(item.labels));
+    let content3;
+    if (!this.expanded) content3 = summary();
+    else if (layout2 === "compact") content3 = v_flex().children(fields());
+    else content3 = h_flex2().gap(20).items_start().flex_wrap().children(fields());
+    const label = this.expanded ? "See less" : "See more";
+    return v_flex().min_w(0).gap(12).pb(16).border_b(1).border_color(t.border).child(content3).child(
+      h_flex2().child(
+        button("detail-metadata-toggle", label, label, (_e, cx) => {
+          this.expanded = !this.expanded;
+          cx.notify();
+        }).text_color(t.accent)
+      )
+    );
+  }
+};
+function detailDocument(layout2, heading, timeline, sections, metadata) {
+  const wide = layout2 === "wide";
+  const posts = v_flex().min_w(0).gap(20).when(wide, (el) => el.flex_1()).when(!wide, (el) => el.w_full().flex_none()).children(timeline);
+  const side = metadata.render(layout2, sections);
+  return v_flex().gap(18).child(h_flex2().gap(10).pb(4).items_center().flex_wrap().children(heading)).child(wide ? h_flex2().gap(24).items_start().child(posts).child(side) : v_flex().gap(20).child(side).child(posts));
+}
+function stateBadge(label, color, icon2) {
+  return h_flex2().gap(6).items_center().px(10).py(4).rounded(14).bg(`${color}26`).text_size(13).font_semibold().text_color(color).when(icon2 !== void 0, (el) => el.child(svg3(icon2 ?? "").size(14))).child(label);
+}
+function postCard(id, post, verb, onLink, options = {}) {
+  const t = colors();
+  const reactions = post.reactions ?? [];
+  const heading = h_flex2().px(16).pt(10).pb(options.embedded ? 4 : 10).gap(8).items_center().flex_wrap().when(!options.embedded, (el) => el.bg(t.raised).border_b(1).border_color(t.border)).text_size(12).child(div3().font_semibold().child(post.author)).child(div3().text_color(t.dim).child(verb)).child(div3().flex_1()).child(div3().text_color(t.dim).tooltip(post.createdAt).child(relativeTime(post.createdAt, Date.now())));
+  const text3 = TextView.markdown(id, post.markdown).selectable(true).scrollable(false).on_link_click(onLink);
+  return v_flex().id(`${id}-card`).min_w(0).w_full().overflow_hidden().when(!options.embedded, (el) => el.rounded(8).border_1().border_color(t.border).bg(t.background)).child(heading).when(
+    !options.headingOnly,
+    (el) => el.child(
+      v_flex().min_w(0).px(16).pt(options.embedded ? 4 : 16).pb(options.embedded ? 12 : 16).gap(12).child(text3).when(
+        reactions.length > 0,
+        (el2) => el2.child(
+          h_flex2().gap(6).flex_wrap().children(reactions.map((r) => chip(`${r.emoji} ${r.count}`, t.border, t.raised)))
+        )
+      )
+    )
+  );
+}
+var quiet = (text3) => div3().text_size(12).text_color(colors().dim).child(text3);
+function people(logins) {
+  if (logins.length === 0) return quiet("None yet");
+  return v_flex().gap(8).children(logins.map((login2) => div3().text_size(13).font_medium().child(login2)));
+}
+function labelChip(label) {
+  const t = colors();
+  return chip(label.name, label.color ?? t.input, label.color ? `${label.color}26` : t.raised).text_color(t.foreground);
+}
+function labels(list2) {
+  if (list2.length === 0) return quiet("None yet");
+  return h_flex2().gap(6).flex_wrap().children(list2.map(labelChip));
+}
+var milestone = (title) => title ? div3().text_size(13).child(title) : quiet("No milestone");
+function projects(list2, loading) {
+  const t = colors();
+  if (!list2) return quiet(loading ? "Loading Projects\u2026" : "Projects not loaded.");
+  if (!list2.ok) return quiet("None yet").tooltip(list2.message);
+  if (list2.projects.length === 0) return quiet("None yet");
+  return v_flex().gap(8).children(
+    list2.projects.map(
+      (project) => link(`project-${project.url}`, project.url, project.title).text_size(13).text_color(t.accent).tooltip(project.url)
+    )
+  );
+}
+
+// src/github/detail/views/state.ts
+var PULL_STATES = {
+  open: { icon: "mods/github/assets/git-pull-request.svg", color: (t) => t.done, label: "Open" },
+  draft: { icon: "mods/github/assets/git-pull-request-draft.svg", color: (t) => t.dim, label: "Draft" },
+  merged: { icon: "mods/github/assets/git-merge.svg", color: (t) => t.ansi5, label: "Merged" },
+  closed: { icon: "mods/github/assets/git-pull-request-closed.svg", color: (t) => t.blocked, label: "Closed" }
+};
+
+// src/github/sidebar/io/preview.ts
+var Previews = class {
+  kept = new Facts(100, 6e4);
+  peek(ref, on, login2) {
+    return this.kept.peek(previewKey(ref, on, login2));
+  }
+  load(ref, on, login2) {
+    const path = `repos/${ref.repo}/${ref.kind === "pr" ? "pulls" : "issues"}/${ref.number}`;
+    return this.kept.look(
+      previewKey(ref, on, login2),
+      false,
+      async () => parsePreview(await api(path, { on }), ref.kind)
+    );
+  }
+};
+
+// src/github/sidebar/views/preview.ts
+function previewCard(ref, preview, failure) {
+  const t = colors();
+  const state = preview ? PULL_STATES[preview.state] : null;
+  const icon2 = state && (ref.kind === "pr" ? svg4(state.icon).size(14).text_color(state.color(t)) : div4().text_color(state.color(t)).child(preview?.state === "closed" ? "\u2299" : "\u25CB"));
+  return v_flex2().w(480).p(14).gap(10).rounded(8).border_1().border_color(t.border).bg(t.surface).text_color(t.foreground).text_size(13).on_mouse_down("left", stop).child(
+    h_flex3().gap(8).items_center().child(div4().min_w(0).flex_1().truncate().text_color(t.accent).child(ref.repo)).when(
+      Boolean(preview),
+      (el) => el.child(
+        div4().flex_none().text_color(t.dim).child(preview?.createdAt.slice(0, 10) ?? "")
+      )
+    )
+  ).when(
+    Boolean(preview),
+    (el) => el.child(
+      h_flex3().gap(8).items_start().child(
+        div4().flex_none().accessibility_label(state?.label ?? "").children(icon2 ? [icon2] : [])
+      ).child(
+        div4().flex_1().min_w(0).max_h(64).overflow_hidden().font_semibold().child(`${preview?.title} #${ref.number}`)
+      )
+    ).child(
+      div4().text_size(12).text_color(t.dim).child(`${state?.label} \xB7 ${preview?.author ? `@${preview.author}` : "ghost"}`)
+    ).child(
+      div4().max_h(120).overflow_hidden().child(preview?.summary || "No description provided.")
+    ).when(
+      Boolean(preview?.labels.length),
+      (el2) => el2.child(div4().max_h(64).overflow_hidden().child(labels(preview.labels)))
+    )
+  ).when(
+    !preview,
+    (el) => el.child(
+      failure ? div4().text_color(t.blocked).child(`Preview unavailable: ${failure}`) : h_flex3().gap(8).items_center().child(spinner()).child("Loading preview\u2026")
+    )
+  );
+}
+var RowPreviews = class {
+  previews = new Previews();
+  timer = null;
+  failures = new Cache(100);
+  intent = new PreviewIntent();
+  hover(cx, row, ref, r, current) {
+    if (!ref && !this.intent.leave(row)) return;
+    this.timer?.cancel();
+    this.timer = null;
+    if (!ref || !r) return;
+    const ticket = this.intent.enter(row);
+    const key = previewKey(ref, r.on, r.login);
+    this.failures.delete(key);
+    this.timer = cx.timer.after(PREVIEW_DWELL_MS, (cx2) => {
+      if (!this.intent.current(ticket) || !current()) return;
+      cx2.spawn(async (cx3) => {
+        try {
+          await this.previews.load(ref, r.on, r.login);
+        } catch (e) {
+          this.failures.set(key, failureOf(e).message, Date.now());
+        }
+        cx3.notify();
+      });
+    });
+  }
+  wrap(id, trigger, ref, r) {
+    const preview = this.previews.peek(ref, r.on, r.login);
+    const key = previewKey(ref, r.on, r.login);
+    const failure = this.failures.get(key);
+    return HoverCard.new(`preview-${id}-${key}`).w_full().open_delay(PREVIEW_OPEN_MS).close_delay(PREVIEW_CLOSE_MS).trigger(trigger).content(previewCard(ref, preview, failure));
+  }
+};
+
+// src/github/sidebar/views/groups.ts
+var GroupList = class {
+  /** The row under the pointer ("<kind>#<number>"): it shows its actions. */
+  hovered = null;
+  groups;
+  host;
+  source;
+  previews = new RowPreviews();
+  constructor(host, source) {
+    this.host = host;
+    this.source = source;
+    this.groups = Object.fromEntries(
+      source.groups.map(({ kind }) => [
+        kind,
+        {
+          expanded: source.expanded.includes(kind),
+          page: void 0,
+          loading: false,
+          loadingMore: false,
+          failure: void 0
+        }
+      ])
+    );
+  }
+  all() {
+    return this.source.groups.map(({ kind }) => this.groups[kind]);
+  }
+  get busy() {
+    return this.all().some((g) => g.loading || g.loadingMore);
+  }
+  /** A failure every group shares (the repository isn't there or can't be seen): the tab says it once. */
+  get notFound() {
+    return this.all().map((g) => g.failure).find((f) => f?.notFound);
+  }
+  /** A loaded page of any group (what the tab's notice may depend on). */
+  get anyPage() {
+    return this.all().map((g) => g.page).find((p) => p !== void 0);
+  }
+  /** Shows what is kept for this place at once (another place: nothing yet). */
+  show() {
+    for (const { kind } of this.source.groups) this.reset(kind);
+  }
+  reset(kind) {
+    const g = this.groups[kind], r = this.host.ready();
+    g.page = r ? this.source.peek(kind, r) : void 0;
+    g.failure = void 0;
+    g.loading = g.loadingMore = false;
+  }
+  /** Asks for every expanded group's first page (fresh kept pages are reused unless `force`). */
+  load(cx, force = false, kinds) {
+    for (const { kind } of this.source.groups) {
+      if (!kinds || kinds.includes(kind)) this.loadGroup(cx, kind, force);
+    }
+  }
+  loadGroup(cx, kind, force) {
+    const g = this.groups[kind], r = this.host.ready(), run4 = this.host.run();
+    if (!r || !g.expanded || !this.host.asking()) return;
+    g.loading = true;
+    g.failure = void 0;
+    cx.spawn(async (cx2) => {
+      try {
+        const page = await this.source.ask(kind, r, force);
+        if (run4 === this.host.run()) g.page = this.source.peek(kind, r) ?? page;
+      } catch (e) {
+        if (run4 === this.host.run()) {
+          g.failure = failureOf(e);
+          this.source.failed?.();
+        }
+      } finally {
+        if (run4 === this.host.run()) {
+          g.loading = false;
+          cx2.notify();
+        }
+      }
+    });
+  }
+  /** Unfolding shows what is kept and asks for what is stale. */
+  toggle(cx, kind) {
+    const g = this.groups[kind];
+    g.expanded = !g.expanded;
+    if (g.expanded) {
+      this.reset(kind);
+      this.loadGroup(cx, kind, false);
+    }
+    cx.notify();
+  }
+  more(cx, kind) {
+    const g = this.groups[kind], r = this.host.ready(), run4 = this.host.run(), loaded = g.page;
+    if (!r || !loaded?.more || g.loadingMore) return;
+    g.loadingMore = true;
+    cx.notify();
+    cx.spawn(async (cx2) => {
+      try {
+        const page = await this.source.more(kind, r, loaded);
+        if (run4 === this.host.run()) g.page = page;
+      } catch (e) {
+        if (run4 === this.host.run()) g.failure = failureOf(e);
+      } finally {
+        if (run4 === this.host.run()) {
+          g.loadingMore = false;
+          cx2.notify();
+        }
+      }
+    });
+  }
+  render(cx) {
+    return this.source.groups.map((spec) => this.group(spec, cx));
+  }
+  /** A foldable group: its title and count, then (unfolded) why it failed, its rows and Load more. */
+  group({ kind, title, empty }, cx) {
+    const t = colors();
+    const id = this.source.kind;
+    const g = this.groups[kind];
+    const page = g.page;
+    const rows = page?.rows ?? [];
+    const heading = h_flex4().id(`${id}-group-${kind}`).h(26).px(8).gap(6).items_center().rounded(6).text_size(12).text_color(t.dim).cursor_pointer().hover((s) => s.bg(t.hover)).on_mouse_down("left", stop).on_click((_e, cx2) => this.toggle(cx2, kind)).accessibility_label(`${g.expanded ? "Fold" : "Unfold"} ${title}`).child(
+      div5().w(10).flex_none().child(g.expanded ? "\u25BE" : "\u25B8")
+    ).child(div5().font_medium().child(title)).child(div5().child(page ? String(page.total) : "")).when(g.expanded && g.loading, (el) => el.child(spinner()));
+    const failure = h_flex4().px(8).pl(22).py(2).gap(6).items_center().text_size(12).child(div5().flex_none().size(6).rounded(3).bg(t.blocked)).child(
+      div5().flex_1().min_w(0).text_color(t.dim).child(g.failure?.message ?? "")
+    ).when(
+      !g.loading,
+      (el) => el.child(
+        button(`${id}-retry-${kind}`, "Retry", `Load ${title} again`, (_e, cx2) => {
+          this.loadGroup(cx2, kind, true);
+          cx2.notify();
+        })
+      )
+    );
+    const more = h_flex4().id(`${id}-more-${kind}`).h(26).px(8).pl(22).gap(6).items_center().rounded(6).text_size(12).text_color(t.dim).cursor_pointer().hover((s) => s.bg(t.hover).text_color(t.foreground)).on_mouse_down("left", stop).on_click((_e, cx2) => this.more(cx2, kind)).child(g.loadingMore ? "Loading\u2026" : `Load more (${(page?.total ?? 0) - rows.length} left)`).when(g.loadingMore, (el) => el.child(spinner()));
+    return v_flex3().gap(1).child(heading).when(
+      g.expanded,
+      (el) => el.when(g.failure !== void 0 && !g.failure.notFound, (el2) => el2.child(failure)).when(
+        page !== void 0 && rows.length === 0,
+        (el2) => el2.child(div5().px(8).pl(22).py(4).text_size(12).text_color(t.dim).child(empty))
+      ).children(rows.map((row) => this.row(kind, row, cx))).when(Boolean(page?.more), (el2) => el2.child(more))
+    );
+  }
+  /** A row's frame: click opens it; the pointer over it swaps its end for Copy and Open in browser. */
+  row(kind, row, cx) {
+    const t = colors();
+    const id = this.source.kind;
+    const key = `${kind}#${row.number}`;
+    const ready = this.host.ready();
+    const ref = ready ? { kind: id, repo: `${ready.remote.owner}/${ready.remote.repo}`, number: row.number } : null;
+    const contextKey = ready && ref ? previewKey(ref, ready.on, ready.login) : null;
+    const actions = [
+      button(
+        `${id}-copy-${kind}-${row.number}`,
+        "#",
+        `Copy #${row.number}`,
+        (_e, cx2) => cx2.write_to_clipboard(`#${row.number}`)
+      ),
+      button(`${id}-open-${kind}-${row.number}`, "\u2197", "Open in browser", (_e, cx2) => cx2.open_url(row.url))
+    ];
+    const disclosure = this.source.disclosure?.(row, key);
+    const frame = h_flex4().id(`${id}-${kind}-${row.number}`).h(28).px(8).pl(disclosure ? 14 : 22).gap(disclosure ? 6 : 8).items_center().rounded(6).cursor_pointer().hover((s) => s.bg(t.hover)).on_mouse_down("left", stop).on_click((_e, cx2) => {
+      const r = this.host.ready();
+      if (r) this.host.open(cx2, { kind: id, repo: `${r.remote.owner}/${r.remote.repo}`, number: row.number });
+    }).on_hover((h, cx2) => {
+      if (h) this.hovered = key;
+      else if (this.hovered === key) this.hovered = null;
+      this.previews.hover(cx2, `${key}-${contextKey}`, h ? ref : null, ready, () => {
+        const live = this.host.ready();
+        if (!live || !ref || this.hovered !== key || !this.host.asking()) return false;
+        const target = { ...ref, repo: `${live.remote.owner}/${live.remote.repo}` };
+        return previewKey(target, live.on, live.login) === contextKey;
+      });
+      cx2.notify();
+    }).children(disclosure ? [disclosure] : []).children([...this.source.cells(row), ...this.hovered === key ? actions : this.source.idle(row)]);
+    const card = ready && ref ? this.previews.wrap(`${id}-${key}`, frame, ref, ready) : frame;
+    const expanded = this.source.expandedRow?.(row, key, cx);
+    return expanded ? v_flex3().child(card).child(expanded) : card;
+  }
+};
+
+// src/github/issues/views/issues.ts
+function issueList(host, failed) {
+  return new GroupList(host, {
+    kind: "issue",
+    groups: [
+      // One word like the others; the empty text says whose.
+      { kind: "assigned", title: "Assigned", empty: "No open issues assigned to you." },
+      { kind: "open", title: "Open", empty: "No open issues." },
+      { kind: "closed", title: "Closed", empty: "No closed issues." }
+    ],
+    expanded: ["assigned"],
+    peek: peekIssueGroup,
+    ask: issueGroup,
+    more: moreIssues,
+    failed,
+    cells: (issue) => [
+      div6().flex_none().text_color(colors().dim).child(`#${issue.number}`),
+      div6().flex_1().min_w(0).truncate().child(issue.title)
+    ],
+    idle: (issue) => {
+      const t = colors();
+      return [
+        div6().flex_none().max_w(90).truncate().text_size(12).text_color(t.dim).child(issue.assignees.join(", ")),
+        div6().flex_none().w(28).text_right().text_size(12).text_color(t.dim).child(relativeTime(issue.updatedAt, Date.now()))
+      ];
+    }
+  });
+}
+
+// src/github/shared/io/git.ts
+import { exec as exec3 } from "herdr";
+
+// src/github/shared/core/remote.ts
+function parseRemoteUrl(url) {
+  const m = /^(?:[a-z+]+:\/\/)?(?:[^@/]+@)?([^/:]+)(?::\d+)?[/:]([^/]+)\/([^/]+?)(?:\.git)?\/?$/i.exec(url.trim());
+  if (!m) return null;
+  const [, host, owner, repo] = m;
+  return host && owner && repo ? { host: host.toLowerCase(), owner, repo } : null;
+}
+function pickRemote(remoteV, hosts = ["github.com"]) {
+  const found = [];
+  for (const line of remoteV.split("\n")) {
+    const [remote2, url, kind] = line.trim().split(/\s+/);
+    if (!remote2 || !url || kind !== "(fetch)") continue;
+    const parsed = parseRemoteUrl(url);
+    if (parsed && hosts.includes(parsed.host)) found.push({ remote: remote2, ...parsed });
+  }
+  for (const name of ["upstream", "github", "origin"]) {
+    const hit = found.find((r) => r.remote === name);
+    if (hit) return hit;
+  }
+  return found[0] ?? null;
+}
+
+// src/github/shared/io/git.ts
+async function githubRemote({ cwd, on }) {
+  if (!cwd) return null;
+  const r = await exec3("git", ["remote", "-v"], { cwd, on });
+  return r.code === 0 ? pickRemote(r.stdout) : null;
+}
+async function localBranches(remote2, { cwd, on }) {
+  if (!cwd) throw new Error("No focused folder for local pull request branches.");
+  const result = await exec3("git", ["for-each-ref", "--format=%(refname:short)", "refs/heads"], { cwd, on });
+  if (result.code !== 0) throw new Error(result.stderr.trim() || "Could not read local branches.");
+  const branches = result.stdout.split("\n").map((b) => b.trim()).filter(Boolean);
+  if (branches.length === 0) return { branches, head: remote2 };
+  const remotes2 = await exec3("git", ["remote", "-v"], { cwd, on });
+  if (remotes2.code !== 0) throw new Error(remotes2.stderr.trim() || "Could not read git remotes.");
+  const origin = remotes2.stdout.split("\n").filter((line) => /^origin\s/.test(line)).join("\n");
+  const other = remotes2.stdout.split("\n").filter((line) => {
+    const url = line.trim().split(/\s+/)[1];
+    const repo = url ? parseRemoteUrl(url) : null;
+    return repo && `${repo.owner}/${repo.repo}`.toLowerCase() !== `${remote2.owner}/${remote2.repo}`.toLowerCase();
+  }).join("\n");
+  return { branches, head: pickRemote(origin) ?? pickRemote(other) ?? remote2 };
+}
+
+// src/github/pulls/core/pulls.ts
 var ROW = "number title url updatedAt isDraft state author { login }";
 var ALL_OPEN_QUERY = `query($owner: String!, $name: String!, $after: String) {
   repository(owner: $owner, name: $name) {
@@ -10268,139 +10812,7 @@ function localPage(all2, count) {
   return { total: all2.length, more, cursor: more ? String(count) : null, rows: all2.slice(0, count) };
 }
 
-// src/github/core/cache.ts
-var Cache = class {
-  limit;
-  entries = /* @__PURE__ */ new Map();
-  constructor(limit) {
-    this.limit = limit;
-  }
-  keys() {
-    return [...this.entries.keys()];
-  }
-  get(key) {
-    const entry = this.entries.get(key);
-    if (!entry) return void 0;
-    this.entries.delete(key);
-    this.entries.set(key, entry);
-    return entry.value;
-  }
-  fresh(key, maxAge, now) {
-    const entry = this.entries.get(key);
-    return entry !== void 0 && now - entry.at < maxAge;
-  }
-  delete(key) {
-    this.entries.delete(key);
-  }
-  clear() {
-    this.entries.clear();
-  }
-  set(key, value, now) {
-    this.entries.delete(key);
-    this.entries.set(key, { value, at: now });
-    while (this.entries.size > this.limit) this.entries.delete(this.entries.keys().next().value);
-  }
-};
-
-// src/github/io/facts.ts
-var Facts = class {
-  cache;
-  asking = /* @__PURE__ */ new Map();
-  fresh;
-  /** Only answers `keep` accepts are kept. */
-  keep;
-  constructor(limit, fresh, keep = () => true) {
-    this.cache = new Cache(limit);
-    this.fresh = fresh;
-    this.keep = keep;
-  }
-  peek(key) {
-    return this.cache.get(key);
-  }
-  /** The kept answer when fresh (unless forced), else the ask already out (unless forced), else a new ask. */
-  look(key, force, ask) {
-    const kept = this.cache.get(key);
-    if (!force && kept !== void 0 && this.cache.fresh(key, this.fresh, Date.now())) return Promise.resolve(kept);
-    const pending = this.asking.get(key);
-    if (pending && !force) return pending;
-    const p = ask().then((value) => {
-      if (this.asking.get(key) === p && this.keep(value)) this.cache.set(key, value, Date.now());
-      return value;
-    }).finally(() => {
-      if (this.asking.get(key) === p) this.asking.delete(key);
-    });
-    this.asking.set(key, p);
-    return p;
-  }
-  /** Keeps `value` as the answer now (a page loaded by other means: Load more). */
-  put(key, value) {
-    this.cache.set(key, value, Date.now());
-  }
-  /** Shows what `change` returns for a kept key until asked again (undefined: untouched); an answer still out is dropped. */
-  patch(change) {
-    for (const key of this.cache.keys()) {
-      const value = this.cache.get(key);
-      const changed = value === void 0 ? void 0 : change(key, value);
-      if (changed === void 0) continue;
-      this.cache.set(key, changed, -Infinity);
-      this.asking.delete(key);
-    }
-  }
-  clear() {
-    this.cache.clear();
-    this.asking.clear();
-  }
-};
-
-// src/github/io/git.ts
-import { exec as exec3 } from "herdr";
-
-// src/github/core/remote.ts
-function parseRemoteUrl(url) {
-  const m = /^(?:[a-z+]+:\/\/)?(?:[^@/]+@)?([^/:]+)(?::\d+)?[/:]([^/]+)\/([^/]+?)(?:\.git)?\/?$/i.exec(url.trim());
-  if (!m) return null;
-  const [, host, owner, repo] = m;
-  return host && owner && repo ? { host: host.toLowerCase(), owner, repo } : null;
-}
-function pickRemote(remoteV, hosts = ["github.com"]) {
-  const found = [];
-  for (const line of remoteV.split("\n")) {
-    const [remote2, url, kind] = line.trim().split(/\s+/);
-    if (!remote2 || !url || kind !== "(fetch)") continue;
-    const parsed = parseRemoteUrl(url);
-    if (parsed && hosts.includes(parsed.host)) found.push({ remote: remote2, ...parsed });
-  }
-  for (const name of ["upstream", "github", "origin"]) {
-    const hit = found.find((r) => r.remote === name);
-    if (hit) return hit;
-  }
-  return found[0] ?? null;
-}
-
-// src/github/io/git.ts
-async function githubRemote({ cwd, on }) {
-  if (!cwd) return null;
-  const r = await exec3("git", ["remote", "-v"], { cwd, on });
-  return r.code === 0 ? pickRemote(r.stdout) : null;
-}
-async function localBranches(remote2, { cwd, on }) {
-  if (!cwd) throw new Error("No focused folder for local pull request branches.");
-  const result = await exec3("git", ["for-each-ref", "--format=%(refname:short)", "refs/heads"], { cwd, on });
-  if (result.code !== 0) throw new Error(result.stderr.trim() || "Could not read local branches.");
-  const branches = result.stdout.split("\n").map((b) => b.trim()).filter(Boolean);
-  if (branches.length === 0) return { branches, head: remote2 };
-  const remotes2 = await exec3("git", ["remote", "-v"], { cwd, on });
-  if (remotes2.code !== 0) throw new Error(remotes2.stderr.trim() || "Could not read git remotes.");
-  const origin = remotes2.stdout.split("\n").filter((line) => /^origin\s/.test(line)).join("\n");
-  const other = remotes2.stdout.split("\n").filter((line) => {
-    const url = line.trim().split(/\s+/)[1];
-    const repo = url ? parseRemoteUrl(url) : null;
-    return repo && `${repo.owner}/${repo.repo}`.toLowerCase() !== `${remote2.owner}/${remote2.repo}`.toLowerCase();
-  }).join("\n");
-  return { branches, head: pickRemote(origin) ?? pickRemote(other) ?? remote2 };
-}
-
-// src/github/core/files.ts
+// src/github/pulls/core/files.ts
 var byPath = (a, b) => a.path < b.path ? -1 : a.path > b.path ? 1 : 0;
 function flatFiles(files, hideViewed = false) {
   return files.filter((f) => !hideViewed || !f.viewed).map((file) => ({ kind: "file", name: file.path, path: file.path, file })).sort(byPath);
@@ -10451,7 +10863,7 @@ function parseFiles(data) {
   }));
 }
 
-// src/github/core/checks.ts
+// src/github/pulls/core/checks.ts
 function parseChecks(pages, statuses) {
   const checks = (Array.isArray(pages) ? pages : [pages]).flatMap((p) => p.check_runs).map((c) => {
     const seconds = c.started_at && c.completed_at ? Math.max(0, Math.floor((Date.parse(c.completed_at) - Date.parse(c.started_at)) / 1e3)) : null;
@@ -10489,7 +10901,7 @@ function checkSummary(checks) {
 }
 var checkHolds = (check) => /fail|pending|queued|progress|error/i.test(check.status);
 
-// src/github/core/merge.ts
+// src/github/pulls/core/merge.ts
 function selectedMergeMethod(methods, selected) {
   if (selected && methods.includes(selected)) return selected;
   return methods[0] ?? null;
@@ -10537,7 +10949,7 @@ function mergeInfo(p, repository, reviewers = [], checks = []) {
   };
 }
 
-// src/github/core/reviewers.ts
+// src/github/pulls/core/reviewers.ts
 var submitted = (review) => review.state !== "PENDING" && Boolean(review.submitted_at);
 function parseReviewers(pull, reviews) {
   const byName = /* @__PURE__ */ new Map();
@@ -10554,7 +10966,7 @@ function parseReviewers(pull, reviews) {
   return [...byName.values()];
 }
 
-// src/github/core/pull-timeline.ts
+// src/github/pulls/core/pull-timeline.ts
 var replyOnlyReview = (commented, body, roots, replies) => commented && !body?.trim() && roots === 0 && replies > 0;
 function pullTimeline(comments, events, reviews, inline, url) {
   const result = comments.map((c) => ({
@@ -10629,7 +11041,7 @@ function pullTimeline(comments, events, reviews, inline, url) {
   return result.sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id - b.id);
 }
 
-// src/github/core/pull-detail.ts
+// src/github/pulls/core/pull-detail.ts
 function parsePullDetail(r) {
   const p = r.pull;
   const crossOwner = p.head.label.split(":")[0]?.toLowerCase() !== p.base.label.split(":")[0]?.toLowerCase();
@@ -10650,7 +11062,7 @@ function parsePullDetail(r) {
 }
 var pullHead = (pull) => pull.head.sha;
 
-// src/github/core/review-threads.ts
+// src/github/pulls/core/review-threads.ts
 function parseThreads(nodes, comments, url, drafts = []) {
   const pending = drafts;
   const draftIds = new Set(pending.map((c) => c.id));
@@ -10684,7 +11096,7 @@ function threadRow(rows, thread) {
   return index2 < 0 ? null : index2;
 }
 
-// src/github/io/pulls.ts
+// src/github/pulls/io/pulls.ts
 var pullListChanges = (repo, etag, on) => changes(`repos/${repo}/pulls?state=all&sort=updated&per_page=1`, etag, on);
 var pullChanges = (repo, number, etag, on) => changes(`repos/${repo}/pulls/${number}`, etag, on);
 async function pullPage(kind, remote2, login2, on, after) {
@@ -10869,56 +11281,10 @@ async function localPulls(remote2, { branches, head }, on) {
   return parseLocalPulls(await graphql(localPullsQuery(remote2, branches), on), head);
 }
 
-// src/github/io/known.ts
-var accounts = new Facts(16, 60 * 6e4, (a) => a.status.ok);
-var remotes = new Facts(64, 5 * 6e4, (r) => r !== null);
-var folderKey = ({ on, cwd }) => JSON.stringify([on, cwd]);
-var account2 = (on, force = false) => accounts.look(JSON.stringify(on), force && !accounts.peek(JSON.stringify(on)), () => account(on));
-var peekAccount = (on) => accounts.peek(JSON.stringify(on));
-var remote = (folder2, force = false) => remotes.look(folderKey(folder2), force, () => githubRemote(folder2));
-var peekRemote = (folder2) => remotes.peek(folderKey(folder2));
-var where = (kind, r, cwd = null) => ({
-  kind,
-  on: r.on,
-  repo: `${r.remote.owner}/${r.remote.repo}`.toLowerCase(),
-  login: r.login,
-  cwd
-});
-var groupKey = (w) => JSON.stringify([w.kind, w.on, w.repo, w.login, w.cwd]);
-function groupOf(key) {
-  const [kind, on, repo, login2, cwd] = JSON.parse(key);
-  return { kind, on, repo, login: login2, cwd };
-}
-function pagedGroups(ask) {
-  const kept = new Facts(64, 6e4);
-  return {
-    kept,
-    look: (kind, r, force = false) => kept.look(groupKey(where(kind, r)), force, () => ask(kind, r, null)),
-    peek: (kind, r) => kept.peek(groupKey(where(kind, r))),
-    async more(kind, r, loaded) {
-      const key = groupKey(where(kind, r));
-      const both = appendPage(loaded, await ask(kind, r, loaded.cursor));
-      if (kept.peek(key) === loaded) kept.put(key, both);
-      return both;
-    }
-  };
-}
-var issueGroups = pagedGroups(
-  (kind, r, after) => issuePage(kind, r.remote, r.login, r.on, after)
-);
+// src/github/pulls/io/groups.ts
 var pullGroups = pagedGroups(
   (kind, r, after) => pullPage(kind, r.remote, r.login, r.on, after)
 );
-var issueGroup = issueGroups.look;
-var peekIssueGroup = issueGroups.peek;
-var moreIssues = issueGroups.more;
-function issueChanged(change) {
-  const repo = change.repo.toLowerCase();
-  issueGroups.kept.patch((key, group) => {
-    const g = groupOf(key);
-    return g.repo === repo ? applyChange(g.kind, group, change, g.login) : void 0;
-  });
-}
 var localMatches = new Facts(64, 0);
 var localShown = /* @__PURE__ */ new WeakMap();
 var localKey = (r) => groupKey(where("local", r, r.cwd));
@@ -10958,498 +11324,10 @@ async function morePulls(kind, r, loaded) {
   return rows && localShown.get(rows) === loaded ? showLocal(rows, loaded.rows.length + PAGE) : loaded;
 }
 
-// src/github/views/issues.ts
-import { div as div6 } from "gpui-kit";
-
-// src/github/core/time.ts
-var MINUTE = 6e4;
-var HOUR = 60 * MINUTE;
-var DAY = 24 * HOUR;
-function relativeTime(iso, now) {
-  const ago2 = now - Date.parse(iso);
-  if (ago2 < MINUTE) return "now";
-  if (ago2 < HOUR) return `${Math.floor(ago2 / MINUTE)}m`;
-  if (ago2 < DAY) return `${Math.floor(ago2 / HOUR)}h`;
-  if (ago2 < 30 * DAY) return `${Math.floor(ago2 / DAY)}d`;
-  if (ago2 < 365 * DAY) return `${Math.floor(ago2 / (30 * DAY))}mo`;
-  return `${Math.floor(ago2 / (365 * DAY))}y`;
-}
-
-// src/github/views/groups.ts
-import { h_flex as h_flex4, v_flex as v_flex3 } from "gpui-base";
-import { div as div5 } from "gpui-kit";
-
-// src/github/core/preview.ts
-var PREVIEW_DWELL_MS = 200;
-var PREVIEW_OPEN_MS = 500;
-var PREVIEW_CLOSE_MS = 200;
-function previewKey(ref, on, login2) {
-  return JSON.stringify([on, login2, detailKey(ref)]);
-}
-var PreviewIntent = class {
-  active = null;
-  enter(row) {
-    this.active = { row };
-    return this.active;
-  }
-  leave(row) {
-    if (this.active?.row !== row) return false;
-    this.active = null;
-    return true;
-  }
-  current(ticket) {
-    return this.active === ticket;
-  }
-};
-function parsePreview(data, kind) {
-  const item = data;
-  const state = kind === "pr" ? pullState(item.merged_at ? "merged" : item.state, item.draft ?? false) : item.state;
-  return {
-    title: item.title,
-    author: item.user?.login ?? null,
-    createdAt: item.created_at,
-    state,
-    summary: markdownSummary(item.body ?? ""),
-    labels: item.labels.map(parseLabel)
-  };
-}
-
-// src/github/views/preview.ts
-import { HoverCard, h_flex as h_flex3, v_flex as v_flex2 } from "gpui-base";
-import { div as div4, svg as svg4 } from "gpui-kit";
-
-// src/github/io/preview.ts
-var Previews = class {
-  kept = new Facts(100, 6e4);
-  peek(ref, on, login2) {
-    return this.kept.peek(previewKey(ref, on, login2));
-  }
-  load(ref, on, login2) {
-    const path = `repos/${ref.repo}/${ref.kind === "pr" ? "pulls" : "issues"}/${ref.number}`;
-    return this.kept.look(
-      previewKey(ref, on, login2),
-      false,
-      async () => parsePreview(await api(path, { on }), ref.kind)
-    );
-  }
-};
-
-// src/github/views/detail.ts
-import { h_flex as h_flex2, TextView, v_flex } from "gpui-base";
-import { div as div3, svg as svg3 } from "gpui-kit";
-var NOUN = { issue: "issue", pr: "pull request" };
-var Noun = (kind) => NOUN[kind].charAt(0).toUpperCase() + NOUN[kind].slice(1);
-function openLink(cx, host, url, page) {
-  const ref = detailLink(url, page);
-  if (ref) host.follow(cx, ref);
-  else {
-    const external = browserUrl(url, page);
-    if (external) cx.open_url(external);
-  }
-}
-var detailEmpty = () => div3().flex_1();
-function detailHeader(host, ref, shown, refresh) {
-  const t = colors();
-  const url = shown.url ?? detailUrl(ref);
-  const previous3 = host.previous();
-  const number = link(`${ref.kind}-browser`, url, `#${ref.number}`).px(2).rounded(4).text_color(t.accent).hover((s) => s.bg(t.hover)).tooltip(`Open ${ref.repo} #${ref.number} in browser`).accessibility_label(`Open #${ref.number} in browser`);
-  const copy = button(
-    `${ref.kind}-copy`,
-    svg3("mods/github/assets/copy.svg").size(16),
-    `Copy ${NOUN[ref.kind]} link`,
-    (_e, cx) => cx.write_to_clipboard(url)
-  );
-  return h_flex2().flex_none().px(24).pt(18).pb(12).gap(12).items_start().when(
-    previous3 !== null,
-    (el) => el.child(
-      square(button(`${ref.kind}-back`, "\u2190", `Back to #${previous3?.number}`, (_e, cx) => host.back(cx))).text_size(
-        22
-      )
-    )
-  ).child(
-    h_flex2().flex_1().min_w(0).gap(8).items_center().flex_wrap().text_size(22).child(
-      div3().min_w(0).font_semibold().child(shown.title ?? `${Noun(ref.kind)} details`)
-    ).child(h_flex2().gap(2).items_center().flex_none().child(number).child(copy))
-  ).child(
-    shown.loading ? square(div3()).child(spinner(18)) : square(
-      button(`${ref.kind}-refresh`, "\u21BB", `Refresh ${NOUN[ref.kind]}`, (_e, cx) => {
-        refresh(cx);
-        cx.notify();
-      })
-    ).text_size(22)
-  );
-}
-function detailBody(ref, loading, failure, document3) {
-  const t = colors();
-  return v_flex().id(`${ref.kind}-scroll-${detailKey(ref)}`).flex_1().min_h(0).overflow_y_scroll().px(24).pb(18).gap(12).when(loading, (el) => el.child(div3().text_size(12).text_color(t.dim).child(`Loading ${NOUN[ref.kind]}\u2026`))).when(
-    failure !== void 0,
-    (el) => el.child(
-      div3().text_color(t.blocked).child(failure ?? "")
-    )
-  ).when(document3 !== null, (el) => el.child(document3 ?? div3()));
-}
-var DetailMetadata = class {
-  expanded = false;
-  render(layout2, metadata) {
-    const t = colors();
-    const wide = layout2 === "wide";
-    const { item } = metadata;
-    const sections = [
-      ...metadata.before ?? [],
-      ["Assignees", people(item.assignees)],
-      ["Labels", labels(item.labels)],
-      ["Project", projects(metadata.projects, metadata.projectsLoading)],
-      ["Milestone", milestone(item.milestone)]
-    ];
-    const fields = () => sections.map(
-      ([title, value]) => v_flex().min_w(0).gap(10).py(16).border_b(1).border_color(t.border).when(layout2 === "narrow", (el) => el.w(180).min_w(140).flex_grow(1)).when(layout2 === "compact", (el) => el.w_full().flex_none()).child(div3().text_size(13).font_semibold().child(title)).child(value)
-    );
-    if (wide) return v_flex().w(220).flex_none().children(fields());
-    const summary = () => h_flex2().min_w(0).gap(10).py(16).items_center().flex_wrap().child(div3().text_size(13).font_semibold().child("Labels")).child(layout2 === "compact" ? quiet(String(item.labels.length)) : labels(item.labels));
-    let content3;
-    if (!this.expanded) content3 = summary();
-    else if (layout2 === "compact") content3 = v_flex().children(fields());
-    else content3 = h_flex2().gap(20).items_start().flex_wrap().children(fields());
-    const label = this.expanded ? "See less" : "See more";
-    return v_flex().min_w(0).gap(12).pb(16).border_b(1).border_color(t.border).child(content3).child(
-      h_flex2().child(
-        button("detail-metadata-toggle", label, label, (_e, cx) => {
-          this.expanded = !this.expanded;
-          cx.notify();
-        }).text_color(t.accent)
-      )
-    );
-  }
-};
-function detailDocument(layout2, heading, timeline, sections, metadata) {
-  const wide = layout2 === "wide";
-  const posts = v_flex().min_w(0).gap(20).when(wide, (el) => el.flex_1()).when(!wide, (el) => el.w_full().flex_none()).children(timeline);
-  const side = metadata.render(layout2, sections);
-  return v_flex().gap(18).child(h_flex2().gap(10).pb(4).items_center().flex_wrap().children(heading)).child(wide ? h_flex2().gap(24).items_start().child(posts).child(side) : v_flex().gap(20).child(side).child(posts));
-}
-function stateBadge(label, color, icon2) {
-  return h_flex2().gap(6).items_center().px(10).py(4).rounded(14).bg(`${color}26`).text_size(13).font_semibold().text_color(color).when(icon2 !== void 0, (el) => el.child(svg3(icon2 ?? "").size(14))).child(label);
-}
-function postCard(id, post, verb, onLink, options = {}) {
-  const t = colors();
-  const reactions = post.reactions ?? [];
-  const heading = h_flex2().px(16).pt(10).pb(options.embedded ? 4 : 10).gap(8).items_center().flex_wrap().when(!options.embedded, (el) => el.bg(t.raised).border_b(1).border_color(t.border)).text_size(12).child(div3().font_semibold().child(post.author)).child(div3().text_color(t.dim).child(verb)).child(div3().flex_1()).child(div3().text_color(t.dim).tooltip(post.createdAt).child(relativeTime(post.createdAt, Date.now())));
-  const text3 = TextView.markdown(id, post.markdown).selectable(true).scrollable(false).on_link_click(onLink);
-  return v_flex().id(`${id}-card`).min_w(0).w_full().overflow_hidden().when(!options.embedded, (el) => el.rounded(8).border_1().border_color(t.border).bg(t.background)).child(heading).when(
-    !options.headingOnly,
-    (el) => el.child(
-      v_flex().min_w(0).px(16).pt(options.embedded ? 4 : 16).pb(options.embedded ? 12 : 16).gap(12).child(text3).when(
-        reactions.length > 0,
-        (el2) => el2.child(
-          h_flex2().gap(6).flex_wrap().children(reactions.map((r) => chip(`${r.emoji} ${r.count}`, t.border, t.raised)))
-        )
-      )
-    )
-  );
-}
-var quiet = (text3) => div3().text_size(12).text_color(colors().dim).child(text3);
-function people(logins) {
-  if (logins.length === 0) return quiet("None yet");
-  return v_flex().gap(8).children(logins.map((login2) => div3().text_size(13).font_medium().child(login2)));
-}
-function labelChip(label) {
-  const t = colors();
-  return chip(label.name, label.color ?? t.input, label.color ? `${label.color}26` : t.raised).text_color(t.foreground);
-}
-function labels(list2) {
-  if (list2.length === 0) return quiet("None yet");
-  return h_flex2().gap(6).flex_wrap().children(list2.map(labelChip));
-}
-var milestone = (title) => title ? div3().text_size(13).child(title) : quiet("No milestone");
-function projects(list2, loading) {
-  const t = colors();
-  if (!list2) return quiet(loading ? "Loading Projects\u2026" : "Projects not loaded.");
-  if (!list2.ok) return quiet("None yet").tooltip(list2.message);
-  if (list2.projects.length === 0) return quiet("None yet");
-  return v_flex().gap(8).children(
-    list2.projects.map(
-      (project) => link(`project-${project.url}`, project.url, project.title).text_size(13).text_color(t.accent).tooltip(project.url)
-    )
-  );
-}
-
-// src/github/views/preview.ts
-function previewCard(ref, preview, failure) {
-  const t = colors();
-  const state = preview ? PULL_STATES[preview.state] : null;
-  const icon2 = state && (ref.kind === "pr" ? svg4(state.icon).size(14).text_color(state.color(t)) : div4().text_color(state.color(t)).child(preview?.state === "closed" ? "\u2299" : "\u25CB"));
-  return v_flex2().w(480).p(14).gap(10).rounded(8).border_1().border_color(t.border).bg(t.surface).text_color(t.foreground).text_size(13).on_mouse_down("left", stop).child(
-    h_flex3().gap(8).items_center().child(div4().min_w(0).flex_1().truncate().text_color(t.accent).child(ref.repo)).when(
-      Boolean(preview),
-      (el) => el.child(
-        div4().flex_none().text_color(t.dim).child(preview?.createdAt.slice(0, 10) ?? "")
-      )
-    )
-  ).when(
-    Boolean(preview),
-    (el) => el.child(
-      h_flex3().gap(8).items_start().child(
-        div4().flex_none().accessibility_label(state?.label ?? "").children(icon2 ? [icon2] : [])
-      ).child(
-        div4().flex_1().min_w(0).max_h(64).overflow_hidden().font_semibold().child(`${preview?.title} #${ref.number}`)
-      )
-    ).child(
-      div4().text_size(12).text_color(t.dim).child(`${state?.label} \xB7 ${preview?.author ? `@${preview.author}` : "ghost"}`)
-    ).child(
-      div4().max_h(120).overflow_hidden().child(preview?.summary || "No description provided.")
-    ).when(
-      Boolean(preview?.labels.length),
-      (el2) => el2.child(div4().max_h(64).overflow_hidden().child(labels(preview.labels)))
-    )
-  ).when(
-    !preview,
-    (el) => el.child(
-      failure ? div4().text_color(t.blocked).child(`Preview unavailable: ${failure}`) : h_flex3().gap(8).items_center().child(spinner()).child("Loading preview\u2026")
-    )
-  );
-}
-var RowPreviews = class {
-  previews = new Previews();
-  timer = null;
-  failures = new Cache(100);
-  intent = new PreviewIntent();
-  hover(cx, row, ref, r, current) {
-    if (!ref && !this.intent.leave(row)) return;
-    this.timer?.cancel();
-    this.timer = null;
-    if (!ref || !r) return;
-    const ticket = this.intent.enter(row);
-    const key = previewKey(ref, r.on, r.login);
-    this.failures.delete(key);
-    this.timer = cx.timer.after(PREVIEW_DWELL_MS, (cx2) => {
-      if (!this.intent.current(ticket) || !current()) return;
-      cx2.spawn(async (cx3) => {
-        try {
-          await this.previews.load(ref, r.on, r.login);
-        } catch (e) {
-          this.failures.set(key, failureOf(e).message, Date.now());
-        }
-        cx3.notify();
-      });
-    });
-  }
-  wrap(id, trigger, ref, r) {
-    const preview = this.previews.peek(ref, r.on, r.login);
-    const key = previewKey(ref, r.on, r.login);
-    const failure = this.failures.get(key);
-    return HoverCard.new(`preview-${id}-${key}`).w_full().open_delay(PREVIEW_OPEN_MS).close_delay(PREVIEW_CLOSE_MS).trigger(trigger).content(previewCard(ref, preview, failure));
-  }
-};
-
-// src/github/views/groups.ts
-var GroupList = class {
-  /** The row under the pointer ("<kind>#<number>"): it shows its actions. */
-  hovered = null;
-  groups;
-  host;
-  source;
-  previews = new RowPreviews();
-  constructor(host, source) {
-    this.host = host;
-    this.source = source;
-    this.groups = Object.fromEntries(
-      source.groups.map(({ kind }) => [
-        kind,
-        {
-          expanded: source.expanded.includes(kind),
-          page: void 0,
-          loading: false,
-          loadingMore: false,
-          failure: void 0
-        }
-      ])
-    );
-  }
-  all() {
-    return this.source.groups.map(({ kind }) => this.groups[kind]);
-  }
-  get busy() {
-    return this.all().some((g) => g.loading || g.loadingMore);
-  }
-  /** A failure every group shares (the repository isn't there or can't be seen): the tab says it once. */
-  get notFound() {
-    return this.all().map((g) => g.failure).find((f) => f?.notFound);
-  }
-  /** A loaded page of any group (what the tab's notice may depend on). */
-  get anyPage() {
-    return this.all().map((g) => g.page).find((p) => p !== void 0);
-  }
-  /** Shows what is kept for this place at once (another place: nothing yet). */
-  show() {
-    for (const { kind } of this.source.groups) this.reset(kind);
-  }
-  reset(kind) {
-    const g = this.groups[kind], r = this.host.ready();
-    g.page = r ? this.source.peek(kind, r) : void 0;
-    g.failure = void 0;
-    g.loading = g.loadingMore = false;
-  }
-  /** Asks for every expanded group's first page (fresh kept pages are reused unless `force`). */
-  load(cx, force = false, kinds) {
-    for (const { kind } of this.source.groups) {
-      if (!kinds || kinds.includes(kind)) this.loadGroup(cx, kind, force);
-    }
-  }
-  loadGroup(cx, kind, force) {
-    const g = this.groups[kind], r = this.host.ready(), run4 = this.host.run();
-    if (!r || !g.expanded || !this.host.asking()) return;
-    g.loading = true;
-    g.failure = void 0;
-    cx.spawn(async (cx2) => {
-      try {
-        const page = await this.source.ask(kind, r, force);
-        if (run4 === this.host.run()) g.page = this.source.peek(kind, r) ?? page;
-      } catch (e) {
-        if (run4 === this.host.run()) {
-          g.failure = failureOf(e);
-          this.source.failed?.();
-        }
-      } finally {
-        if (run4 === this.host.run()) {
-          g.loading = false;
-          cx2.notify();
-        }
-      }
-    });
-  }
-  /** Unfolding shows what is kept and asks for what is stale. */
-  toggle(cx, kind) {
-    const g = this.groups[kind];
-    g.expanded = !g.expanded;
-    if (g.expanded) {
-      this.reset(kind);
-      this.loadGroup(cx, kind, false);
-    }
-    cx.notify();
-  }
-  more(cx, kind) {
-    const g = this.groups[kind], r = this.host.ready(), run4 = this.host.run(), loaded = g.page;
-    if (!r || !loaded?.more || g.loadingMore) return;
-    g.loadingMore = true;
-    cx.notify();
-    cx.spawn(async (cx2) => {
-      try {
-        const page = await this.source.more(kind, r, loaded);
-        if (run4 === this.host.run()) g.page = page;
-      } catch (e) {
-        if (run4 === this.host.run()) g.failure = failureOf(e);
-      } finally {
-        if (run4 === this.host.run()) {
-          g.loadingMore = false;
-          cx2.notify();
-        }
-      }
-    });
-  }
-  render(cx) {
-    return this.source.groups.map((spec) => this.group(spec, cx));
-  }
-  /** A foldable group: its title and count, then (unfolded) why it failed, its rows and Load more. */
-  group({ kind, title, empty }, cx) {
-    const t = colors();
-    const id = this.source.kind;
-    const g = this.groups[kind];
-    const page = g.page;
-    const rows = page?.rows ?? [];
-    const heading = h_flex4().id(`${id}-group-${kind}`).h(26).px(8).gap(6).items_center().rounded(6).text_size(12).text_color(t.dim).cursor_pointer().hover((s) => s.bg(t.hover)).on_mouse_down("left", stop).on_click((_e, cx2) => this.toggle(cx2, kind)).accessibility_label(`${g.expanded ? "Fold" : "Unfold"} ${title}`).child(
-      div5().w(10).flex_none().child(g.expanded ? "\u25BE" : "\u25B8")
-    ).child(div5().font_medium().child(title)).child(div5().child(page ? String(page.total) : "")).when(g.expanded && g.loading, (el) => el.child(spinner()));
-    const failure = h_flex4().px(8).pl(22).py(2).gap(6).items_center().text_size(12).child(div5().flex_none().size(6).rounded(3).bg(t.blocked)).child(
-      div5().flex_1().min_w(0).text_color(t.dim).child(g.failure?.message ?? "")
-    ).when(
-      !g.loading,
-      (el) => el.child(
-        button(`${id}-retry-${kind}`, "Retry", `Load ${title} again`, (_e, cx2) => {
-          this.loadGroup(cx2, kind, true);
-          cx2.notify();
-        })
-      )
-    );
-    const more = h_flex4().id(`${id}-more-${kind}`).h(26).px(8).pl(22).gap(6).items_center().rounded(6).text_size(12).text_color(t.dim).cursor_pointer().hover((s) => s.bg(t.hover).text_color(t.foreground)).on_mouse_down("left", stop).on_click((_e, cx2) => this.more(cx2, kind)).child(g.loadingMore ? "Loading\u2026" : `Load more (${(page?.total ?? 0) - rows.length} left)`).when(g.loadingMore, (el) => el.child(spinner()));
-    return v_flex3().gap(1).child(heading).when(
-      g.expanded,
-      (el) => el.when(g.failure !== void 0 && !g.failure.notFound, (el2) => el2.child(failure)).when(
-        page !== void 0 && rows.length === 0,
-        (el2) => el2.child(div5().px(8).pl(22).py(4).text_size(12).text_color(t.dim).child(empty))
-      ).children(rows.map((row) => this.row(kind, row, cx))).when(Boolean(page?.more), (el2) => el2.child(more))
-    );
-  }
-  /** A row's frame: click opens it; the pointer over it swaps its end for Copy and Open in browser. */
-  row(kind, row, cx) {
-    const t = colors();
-    const id = this.source.kind;
-    const key = `${kind}#${row.number}`;
-    const ready = this.host.ready();
-    const ref = ready ? { kind: id, repo: `${ready.remote.owner}/${ready.remote.repo}`, number: row.number } : null;
-    const contextKey = ready && ref ? previewKey(ref, ready.on, ready.login) : null;
-    const actions = [
-      button(
-        `${id}-copy-${kind}-${row.number}`,
-        "#",
-        `Copy #${row.number}`,
-        (_e, cx2) => cx2.write_to_clipboard(`#${row.number}`)
-      ),
-      button(`${id}-open-${kind}-${row.number}`, "\u2197", "Open in browser", (_e, cx2) => cx2.open_url(row.url))
-    ];
-    const disclosure = this.source.disclosure?.(row, key);
-    const frame = h_flex4().id(`${id}-${kind}-${row.number}`).h(28).px(8).pl(disclosure ? 14 : 22).gap(disclosure ? 6 : 8).items_center().rounded(6).cursor_pointer().hover((s) => s.bg(t.hover)).on_mouse_down("left", stop).on_click((_e, cx2) => {
-      const r = this.host.ready();
-      if (r) this.host.open(cx2, { kind: id, repo: `${r.remote.owner}/${r.remote.repo}`, number: row.number });
-    }).on_hover((h, cx2) => {
-      if (h) this.hovered = key;
-      else if (this.hovered === key) this.hovered = null;
-      this.previews.hover(cx2, `${key}-${contextKey}`, h ? ref : null, ready, () => {
-        const live = this.host.ready();
-        if (!live || !ref || this.hovered !== key || !this.host.asking()) return false;
-        const target = { ...ref, repo: `${live.remote.owner}/${live.remote.repo}` };
-        return previewKey(target, live.on, live.login) === contextKey;
-      });
-      cx2.notify();
-    }).children(disclosure ? [disclosure] : []).children([...this.source.cells(row), ...this.hovered === key ? actions : this.source.idle(row)]);
-    const card = ready && ref ? this.previews.wrap(`${id}-${key}`, frame, ref, ready) : frame;
-    const expanded = this.source.expandedRow?.(row, key, cx);
-    return expanded ? v_flex3().child(card).child(expanded) : card;
-  }
-};
-
-// src/github/views/issues.ts
-function issueList(host, failed) {
-  return new GroupList(host, {
-    kind: "issue",
-    groups: [
-      // One word like the others; the empty text says whose.
-      { kind: "assigned", title: "Assigned", empty: "No open issues assigned to you." },
-      { kind: "open", title: "Open", empty: "No open issues." },
-      { kind: "closed", title: "Closed", empty: "No closed issues." }
-    ],
-    expanded: ["assigned"],
-    peek: peekIssueGroup,
-    ask: issueGroup,
-    more: moreIssues,
-    failed,
-    cells: (issue) => [
-      div6().flex_none().text_color(colors().dim).child(`#${issue.number}`),
-      div6().flex_1().min_w(0).truncate().child(issue.title)
-    ],
-    idle: (issue) => {
-      const t = colors();
-      return [
-        div6().flex_none().max_w(90).truncate().text_size(12).text_color(t.dim).child(issue.assignees.join(", ")),
-        div6().flex_none().w(28).text_right().text_size(12).text_color(t.dim).child(relativeTime(issue.updatedAt, Date.now()))
-      ];
-    }
-  });
-}
-
-// src/github/views/pulls.ts
+// src/github/pulls/views/pulls.ts
 import { div as div8, svg as svg5 } from "gpui-kit";
 
-// src/github/views/files.ts
+// src/github/pulls/views/files.ts
 import { h_flex as h_flex5, v_flex as v_flex4 } from "gpui-base";
 import { div as div7 } from "gpui-kit";
 var STATUS = {
@@ -11614,7 +11492,7 @@ var ChangedFiles = class {
   }
 };
 
-// src/github/views/pulls.ts
+// src/github/pulls/views/pulls.ts
 var EMPTY = "0 pull requests in this category";
 function pullList(host) {
   const disclosures = /* @__PURE__ */ new Map();
@@ -11678,7 +11556,146 @@ function pullList(host) {
   });
 }
 
-// src/github/views/panel.ts
+// src/github/shared/core/polling.ts
+var ConditionalPoll = class {
+  key = null;
+  visible = false;
+  etag = null;
+  failed = false;
+  pending = null;
+  get shown() {
+    return this.visible;
+  }
+  /** What is polled (null: nothing) and whether it is shown; returns whether it needs a refresh now. */
+  sync(key, visible) {
+    const changed = key !== this.key;
+    const refresh = visible && key !== null && (changed || !this.visible);
+    if (changed) {
+      this.etag = null;
+      this.failed = false;
+    }
+    if (changed || !visible) this.pending = null;
+    this.key = key;
+    this.visible = visible;
+    return refresh;
+  }
+  /** A local write or failed reload wins over an older read, and the next check asks without a validator. */
+  invalidate() {
+    this.pending = null;
+    this.etag = null;
+  }
+  /** A check to make, or null while hidden or another is out; a forced one replaces the one out. */
+  begin(force = false) {
+    if (!this.key || !this.visible || this.pending && !force) return null;
+    const request = { etag: this.etag, force };
+    this.pending = request;
+    return request;
+  }
+  current(request) {
+    return this.visible && this.pending === request;
+  }
+  /** Whether the check's answer calls for reading the contents again. */
+  reload(request, change) {
+    return this.current(request) && (request.force || change.changed);
+  }
+  /**
+   * Finish only after any required reload succeeds (no `change`: it failed, so the next check asks
+   * again without a validator). `notify`: what is shown changed or recovered.
+   */
+  finish(request, change) {
+    if (!this.current(request)) return { accepted: false, notify: false };
+    const notify = !change || change.changed || request.force || this.failed;
+    this.pending = null;
+    this.failed = !change;
+    if (!change) this.etag = null;
+    else if (change.changed) this.etag = change.etag;
+    return { accepted: true, notify };
+  }
+};
+
+// src/github/shared/io/context.ts
+import { focused as focused2, panes as panes3, spaces as spaces2 } from "herdr";
+
+// src/github/shared/core/location.ts
+function focusedFolder(herdr, previous3) {
+  const space = herdr.spaces.find((s) => s.active), f = herdr.focused, id = space?.id ?? null;
+  if (f && !f.pane && f.terminal && f.cwd) {
+    return { cwd: f.cwd, on: f.terminal.includes("/") ? f.terminal.split("/")[0] ?? null : null, space: id };
+  }
+  const pane = f?.pane ? herdr.panes.find((p) => p.pane === f.pane) : null;
+  if (pane?.terminal)
+    return { cwd: pane.cwd || f?.cwd || space?.folder || null, on: space?.machine ?? null, space: id };
+  if (previous3 && previous3.space === id) return previous3;
+  return { cwd: space?.folder || null, on: space?.machine ?? null, space: id };
+}
+
+// src/github/shared/io/context.ts
+var previous2 = null;
+function location() {
+  previous2 = focusedFolder({ spaces: spaces2(), panes: panes3(), focused: focused2() }, previous2);
+  return previous2;
+}
+
+// src/github/shared/io/place.ts
+var accounts = new Facts(16, 60 * 6e4, (a) => a.status.ok);
+var remotes = new Facts(64, 5 * 6e4, (r) => r !== null);
+var folderKey = ({ on, cwd }) => JSON.stringify([on, cwd]);
+var account2 = (on, force = false) => accounts.look(JSON.stringify(on), force && !accounts.peek(JSON.stringify(on)), () => account(on));
+var peekAccount = (on) => accounts.peek(JSON.stringify(on));
+var remote = (folder2, force = false) => remotes.look(folderKey(folder2), force, () => githubRemote(folder2));
+var peekRemote = (folder2) => remotes.peek(folderKey(folder2));
+
+// src/github/sidebar/core/sidebar.ts
+var POLL_SECONDS = 60;
+function noRepository(cwd) {
+  const hint = "Focus a terminal in a repository cloned from GitHub.";
+  const name = cwd ? cwd.replace(/\/+$/, "").split("/").pop() || "/" : null;
+  return { title: "No GitHub repository", detail: name ? `${name} has no GitHub remote. ${hint}` : hint };
+}
+function listNotice(s) {
+  if (s.account && !s.account.status.ok) return describeAccount(s.account).text;
+  if (s.remote === null) return null;
+  const repo = s.remote ? `${s.remote.owner}/${s.remote.repo}` : "the repository";
+  if (s.failure?.notFound && s.remote) {
+    const user = s.account?.status.ok ? s.account.status.user : "this account";
+    return `${repo} (remote "${s.remote.remote}") isn't on GitHub, or ${user} can't see it. Check git remote -v.`;
+  }
+  if (s.failure) return s.failure.message;
+  if (s.issuesEnabled === false) return `Issues are turned off for ${repo}.`;
+  return null;
+}
+var ago = (ms) => ms < 6e4 ? "just now" : `${Math.floor(ms / 6e4)}m ago`;
+function footerStatus(s, now) {
+  const machine = s.on ?? "this computer";
+  if (!s.account) return { tone: "pending", account: "Checking gh\u2026", machine, sync: null };
+  const { status: status2 } = s.account;
+  if (!status2.ok) return { tone: "problem", account: ACCOUNT_PROBLEM[status2.reason], machine, sync: null };
+  if (!s.polling || !s.failed) return { tone: "ok", account: status2.user, machine, sync: null };
+  const last = s.checkedAt === null ? null : ago(Math.max(0, now - s.checkedAt));
+  const sync = last ? `Check failed \xB7 last ok ${last}` : `Check failed \xB7 retrying every ${POLL_SECONDS}s`;
+  return { tone: "problem", account: status2.user, machine, sync };
+}
+
+// src/github/sidebar/io/visible.ts
+import { layout } from "herdr";
+
+// src/github/sidebar/core/visibility.ts
+function layoutShows(tree, id) {
+  if (!tree || typeof tree !== "object") return false;
+  const node2 = tree;
+  if (node2.hidden) return false;
+  if (node2.id === id) return true;
+  const children = node2.children ?? [];
+  return children.some(
+    (child, index2) => (node2.type !== "stack" || (node2.active ? child.id === node2.active : index2 === 0)) && layoutShows(child, id)
+  );
+}
+
+// src/github/sidebar/io/visible.ts
+var SIDEBAR_SLOT = "github";
+var sidebarVisible = () => layoutShows(layout(), SIDEBAR_SLOT);
+
+// src/github/roles/panel.ts
 var TABS = [
   { id: "issues", label: "Issues" },
   { id: "prs", label: "Pull Requests" }
@@ -11920,15 +11937,15 @@ var Panel = class {
   }
 };
 
-// src/github/views/reader.ts
+// src/github/roles/reader.ts
 import { v_flex as v_flex12 } from "gpui-base";
 import { nextCommand, props as props3 } from "herdr";
 
-// src/github/views/issue.ts
+// src/github/issues/views/issue.ts
 import { h_flex as h_flex7, Textarea, TextareaState, v_flex as v_flex6 } from "gpui-base";
 import { div as div10 } from "gpui-kit";
 
-// src/github/core/projects.ts
+// src/github/detail/core/projects.ts
 var FIELD = { issue: "issue", pr: "pullRequest" };
 function projectsQuery(ref, after) {
   const { owner, name } = ownerName(ref.repo);
@@ -11958,7 +11975,7 @@ function projectsFailure(message, on) {
   };
 }
 
-// src/github/io/projects.ts
+// src/github/detail/io/projects.ts
 async function readProjects(ref, on) {
   const projects2 = [];
   try {
@@ -11978,7 +11995,7 @@ async function readProjects(ref, on) {
   }
 }
 
-// src/github/views/item-load.ts
+// src/github/detail/views/item-load.ts
 function readFailure(ref, e) {
   const failure = failureOf(e);
   return failure.notFound ? notVisible(ref) : failure.message;
@@ -11994,7 +12011,7 @@ function loadProjects(cx, ref, on, entry, current) {
   });
 }
 
-// src/github/views/issue.ts
+// src/github/issues/views/issue.ts
 var POLL_MS = 1e4;
 var Issue = class {
   ref = null;
@@ -12251,15 +12268,15 @@ ${detailKey(this.ref)}` : null;
   }
 };
 
-// src/github/views/pull.ts
+// src/github/pulls/views/pull.ts
 import { h_flex as h_flex12, v_flex as v_flex11 } from "gpui-base";
 import { div as div15 } from "gpui-kit";
 
-// src/github/views/diff.ts
+// src/github/pulls/views/diff.ts
 import { h_flex as h_flex9, v_flex as v_flex8 } from "gpui-base";
 import { div as div12 } from "gpui-kit";
 
-// src/github/core/diff.ts
+// src/github/pulls/core/diff.ts
 function commentTarget(row, side) {
   if (!row.comment) return null;
   const line = side === "LEFT" ? row.oldLine : row.newLine;
@@ -12315,7 +12332,7 @@ function parsePatch(patch) {
   return rows;
 }
 
-// src/github/core/viewport.ts
+// src/github/pulls/core/viewport.ts
 var clampOffset = (offset, total, height) => Math.max(0, Math.min(offset, Math.max(0, total - height)));
 function itemWindow(sizes, requested, height) {
   const total = sizes.reduce((sum, size) => sum + size, 0);
@@ -12341,7 +12358,7 @@ function scrollbar(offset, total, height) {
   };
 }
 
-// src/github/views/diff-lines.ts
+// src/github/pulls/views/diff-lines.ts
 import { h_flex as h_flex8, v_flex as v_flex7 } from "gpui-base";
 import { div as div11 } from "gpui-kit";
 var ROW_HEIGHT = 22;
@@ -12360,7 +12377,7 @@ function diffRow(row, gutters) {
   ).child(div11().flex_none().whitespace_nowrap().child(row.text));
 }
 
-// src/github/views/diff.ts
+// src/github/pulls/views/diff.ts
 var CARD_ESTIMATE = 160;
 var FileDiff = class {
   file = null;
@@ -12513,7 +12530,7 @@ var FileDiff = class {
   }
 };
 
-// src/github/views/pull-timeline.ts
+// src/github/pulls/views/pull-timeline.ts
 import { h_flex as h_flex10, TextView as TextView2, v_flex as v_flex9 } from "gpui-base";
 import { div as div13 } from "gpui-kit";
 function timelineItem(item, discussions, onLink, open, activity) {
@@ -12585,11 +12602,11 @@ function timelineItem(item, discussions, onLink, open, activity) {
   );
 }
 
-// src/github/views/review-threads.ts
+// src/github/pulls/views/review-threads.ts
 import { h_flex as h_flex11, Textarea as Textarea2, TextareaState as TextareaState2, v_flex as v_flex10 } from "gpui-base";
 import { div as div14 } from "gpui-kit";
 
-// src/github/core/acknowledged.ts
+// src/github/pulls/core/acknowledged.ts
 var observed = (c) => `${c.id}:${c.draft ? "draft" : "published"}`;
 var Acknowledged = class {
   /** Thread shells holding acknowledged comments, keyed by the first such comment's id. */
@@ -12699,7 +12716,7 @@ var Acknowledged = class {
   }
 };
 
-// src/github/io/pull-reviews.ts
+// src/github/pulls/io/pull-reviews.ts
 var draft = (c, url) => ({
   ...parseComment({ id: c.databaseId, body: c.body, created_at: c.createdAt, user: c.author }, url),
   draft: true
@@ -12836,7 +12853,7 @@ async function startPullReview(repo, number, commit, on) {
   });
 }
 
-// src/github/views/review-threads.ts
+// src/github/pulls/views/review-threads.ts
 var COMPOSER_HEIGHT = 220;
 var draftKey = (path, side, line) => JSON.stringify([path, side, line]);
 function commentEditor(state, height) {
@@ -13217,7 +13234,7 @@ var ReviewThreads = class {
   }
 };
 
-// src/github/views/pull.ts
+// src/github/pulls/views/pull.ts
 var REVIEWS = {
   requested: { label: "Awaiting requested review", icon: "\u25CB", color: "dim" },
   approved: { label: "Approved these changes", icon: "\u2713", color: "done" },
@@ -13641,7 +13658,7 @@ ${detailKey(this.ref)}` : null,
   }
 };
 
-// src/github/views/reader.ts
+// src/github/roles/reader.ts
 var WIDE = 820;
 var COMPACT = 480;
 var Reader = class {
