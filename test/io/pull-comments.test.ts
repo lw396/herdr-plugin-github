@@ -23,7 +23,9 @@ for (const failure of [
 		await expect(
 			addPullComment(repo, 35, { commit, path: "docs/pr-fixture.md", side: "RIGHT", line: 999999 }, "hello", "center"),
 		).rejects.toThrow(failure.stderr);
-		expect(notices.take()).toEqual([]);
+		expect(notices.take()).toEqual(
+			failure.stderr.endsWith("EOF") ? [{ repo, number: 35, threads: { on: "center" } }] : [],
+		);
 		expect(execCalls()).toHaveLength(1);
 		expect(execCalls()[0]?.on).toBe("center");
 	});

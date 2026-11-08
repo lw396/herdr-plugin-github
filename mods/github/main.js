@@ -10606,12 +10606,18 @@ async function setPullFileViewed(repo, number, path, viewed, on) {
   announce({ repo, number, files: { on } });
 }
 async function addPullComment(repo, number, target, body, on) {
-  const raw = await api(`repos/${repo}/pulls/${number}/comments`, {
-    on,
-    method: "POST",
-    fields: { line: target.line },
-    rawFields: { body, commit_id: target.commit, path: target.path, side: target.side }
-  });
+  let raw;
+  try {
+    raw = await api(`repos/${repo}/pulls/${number}/comments`, {
+      on,
+      method: "POST",
+      fields: { line: target.line },
+      rawFields: { body, commit_id: target.commit, path: target.path, side: target.side }
+    });
+  } catch (e) {
+    if (e instanceof GhError && e.transient) announce({ repo, number, threads: { on } });
+    throw e;
+  }
   const comment = parseComment(raw, `https://github.com/${repo}/pull/${number}`);
   announce({ repo, number, threads: { on } });
   return comment;
@@ -12139,9 +12145,60 @@ function diffRow(row, gutters) {
 // src/github/views/review-threads.ts
 import { h_flex as h_flex9, Textarea as Textarea2, TextareaState as TextareaState2, v_flex as v_flex8 } from "gpui-base";
 import { div as div12 } from "gpui-kit";
+
+// src/github/core/published-comments.ts
+var PublishedComments = class {
+  pendingThreads = /* @__PURE__ */ new Map();
+  pendingTimeline = /* @__PURE__ */ new Map();
+  add(comment, target) {
+    const thread = {
+      ...target,
+      id: `comment-${comment.id}`,
+      root: comment.id,
+      resolved: false,
+      canResolve: false,
+      canUnresolve: false,
+      comments: [comment]
+    };
+    this.pendingThreads.set(comment.id, thread);
+    this.pendingTimeline.set(comment.id, {
+      ...comment,
+      // Negative IDs keep local review placeholders distinct from GitHub's positive review IDs.
+      id: -comment.id,
+      body: "",
+      markdown: "",
+      kind: "review",
+      verb: "reviewed",
+      discussion: [{ root: comment.id, comment, path: target.path, snippet: "" }]
+    });
+    return thread;
+  }
+  /** Each endpoint releases only the writes it has actually observed. */
+  timeline(remote2) {
+    for (const item of remote2) for (const d of item.discussion) this.pendingTimeline.delete(d.comment.id);
+    return [...remote2, ...this.pendingTimeline.values()].sort(
+      (a, b) => a.createdAt.localeCompare(b.createdAt) || a.id - b.id
+    );
+  }
+  threads(remote2) {
+    const seen = new Set(remote2.flatMap((t) => t.comments.map((c) => c.id)));
+    for (const id of seen) this.pendingThreads.delete(id);
+    const result = remote2.map((thread) => {
+      const local = this.pendingThreads.get(thread.root);
+      return local ? { ...thread, comments: [...local.comments, ...thread.comments] } : thread;
+    });
+    for (const local of this.pendingThreads.values())
+      if (!remote2.some((t) => t.root === local.root)) result.push(local);
+    return result;
+  }
+};
+
+// src/github/views/review-threads.ts
 var THREAD_HEIGHT = 340;
+var COMPOSER_HEIGHT = 220;
 var ReviewThreads = class {
   threads = [];
+  published = new PublishedComments();
   loading = false;
   failure = null;
   latest = 0;
@@ -12171,7 +12228,7 @@ var ReviewThreads = class {
     cx.spawn(async (cx2) => {
       try {
         const threads = await readPullThreads(this.ref.repo, this.ref.number, this.on);
-        if (request === this.latest) this.threads = threads;
+        if (request === this.latest) this.threads = this.published.threads(threads);
       } catch (e) {
         if (request === this.latest) this.failure = failureOf(e).message;
       } finally {
@@ -12194,7 +12251,7 @@ var ReviewThreads = class {
     return div12().text_size(12).text_color(this.failure ? colors().blocked : colors().dim).child(this.failure ?? (this.loading ? "Loading discussions\u2026" : ""));
   }
   /** Register gutter handlers and editors before native deferred row rendering. */
-  newComment(path, commit, row, width) {
+  inlineComposer(path, commit, row, width) {
     const gutters = {};
     const editors = [];
     for (const side of ["LEFT", "RIGHT"]) {
@@ -12219,46 +12276,29 @@ var ReviewThreads = class {
       if (!draft) continue;
       const t = colors();
       editors.push(
-        v_flex8().w(width).h(220).p(12).gap(8).bg(t.surface).border_1().border_color(t.border).child(div12().text_size(12).text_color(t.dim).child(`${side} ${anchor.line}`)).child(div12().h(90).on_mouse_down("left", stop).child(Textarea2.new(draft.box).w_full())).child(
+        v_flex8().w(width).h(COMPOSER_HEIGHT).p(12).gap(8).bg(t.surface).border_1().border_color(t.border).child(div12().text_size(12).text_color(t.dim).child(`${side} ${anchor.line}`)).child(div12().h(90).on_mouse_down("left", stop).child(Textarea2.new(draft.box).w_full())).child(
           div12().text_size(12).text_color(t.blocked).child(this.failures.get(key) ?? "")
         ).child(
           h_flex9().gap(8).child(
             button(`post-inline-${key}`, busy ? "Saving\u2026" : "Add Comment", "Add Comment", (_e, cx) => {
-              if (busy || !draft.box.value().trim()) return;
+              if (this.drafts.get(key) !== draft || !draft.box.value().trim()) return;
               const body = draft.box.value();
-              this.latest++;
-              this.loading = false;
-              this.writing.add(key);
-              this.failures.delete(key);
-              cx.notify();
-              cx.spawn(async (cx2) => {
-                try {
-                  const comment = await addPullComment(this.ref.repo, this.ref.number, draft.target, body, this.on);
-                  this.threads.push({
-                    id: `comment-${comment.id}`,
-                    root: comment.id,
+              this.write(cx, key, async () => {
+                const comment = await addPullComment(this.ref.repo, this.ref.number, draft.target, body, this.on);
+                this.threads.push(
+                  this.published.add(comment, {
                     path,
                     side,
                     line: anchor.line,
-                    outdated: draft.target.commit !== commit,
-                    resolved: false,
-                    canResolve: false,
-                    canUnresolve: false,
-                    comments: [comment]
-                  });
-                  if (draft.box.value() === body) this.drafts.delete(key);
-                } catch (e) {
-                  this.failures.set(key, failureOf(e).message);
-                } finally {
-                  this.writing.delete(key);
-                  this.dirty = true;
-                  cx2.notify();
-                }
+                    outdated: draft.target.commit !== commit
+                  })
+                );
+                if (draft.box.value() === body) this.drafts.delete(key);
               });
             })
           ).child(
             button(`cancel-inline-${key}`, "Cancel", "Cancel", (_e, cx) => {
-              if (busy) return;
+              if (this.writing.has(key)) return;
               this.drafts.delete(key);
               this.failures.delete(key);
               cx.notify();
@@ -12358,7 +12398,7 @@ var ReviewThreads = class {
             }
             const body = box.value();
             if (!body.trim()) return;
-            this.write(cx, thread, async () => {
+            this.write(cx, thread.id, async () => {
               const comment = await replyPullThread(this.ref.repo, this.ref.number, thread.root, body, this.on);
               if (!thread.comments.some((c) => c.id === comment.id)) thread.comments.push(comment);
               if (box.value() === body) box.set_value("");
@@ -12375,7 +12415,7 @@ var ReviewThreads = class {
             (_e, cx) => {
               this.write(
                 cx,
-                thread,
+                thread.id,
                 async () => Object.assign(
                   thread,
                   await resolvePullThread(this.ref.repo, this.ref.number, thread.id, !thread.resolved, this.on)
@@ -12387,20 +12427,20 @@ var ReviewThreads = class {
       )
     );
   }
-  write(cx, thread, act) {
-    if (this.writing.has(thread.id)) return;
+  write(cx, key, act) {
+    if (this.writing.has(key)) return;
     this.latest++;
     this.loading = false;
-    this.writing.add(thread.id);
-    this.failures.delete(thread.id);
+    this.writing.add(key);
+    this.failures.delete(key);
     cx.notify();
     cx.spawn(async (cx2) => {
       try {
         await act();
       } catch (e) {
-        this.failures.set(thread.id, failureOf(e).message);
+        this.failures.set(key, failureOf(e).message);
       } finally {
-        this.writing.delete(thread.id);
+        this.writing.delete(key);
         this.dirty = true;
         cx2.notify();
       }
@@ -12451,10 +12491,10 @@ var FileDiff = class {
       }
     };
     rows.forEach((row, index2) => {
-      const comment = commit ? discussions?.newComment(file.path, commit, row, this.viewportWidth) : void 0;
+      const comment = commit ? discussions?.inlineComposer(file.path, commit, row, this.viewportWidth) : void 0;
       items.push({ key: `line-${index2}`, height: ROW_HEIGHT, line: row, gutters: comment?.gutters });
       for (const [side, editor] of (comment?.editors ?? []).entries())
-        items.push({ key: `editor-${index2}-${side}`, height: 220, element: editor });
+        items.push({ key: `editor-${index2}-${side}`, height: COMPOSER_HEIGHT, element: editor });
       appendThreads(index2);
     });
     if (!rows.length && threads.length)
@@ -12721,7 +12761,7 @@ var Pull = class {
         postCard("pull-body", pull, "opened this pull request", onLink),
         // Discussion metadata is fetched once per PR; report its progress/failure once, not per thread.
         ...this.discussions?.loading || this.discussions?.failure ? [this.discussions.status()] : [],
-        ...(pull.timeline ?? []).map(
+        ...(this.discussions?.published.timeline(pull.timeline ?? []) ?? pull.timeline ?? []).map(
           (item) => timelineItem(item, this.discussions, onLink, (cx, path, comment) => this.select(cx, path, comment))
         ),
         v_flex11().gap(10).child(div15().font_semibold().child("Checks")).children(

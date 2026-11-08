@@ -3,6 +3,7 @@ import { h_flex, Textarea, TextareaState, v_flex } from "gpui-base";
 import { type Context, div, type Element } from "gpui-kit";
 import type { DetailRef } from "../core/detail.ts";
 import { commentTarget, type DiffLine } from "../core/diff.ts";
+import { PublishedComments } from "../core/published-comments.ts";
 import type { ReviewThread } from "../core/review-threads.ts";
 import { Notices } from "../io/changes.ts";
 import { failureOf } from "../io/gh.ts";
@@ -18,9 +19,11 @@ import { diffSnippet } from "./diff-lines.ts";
 import { button, colors, link, stop } from "./ui.ts";
 
 export const THREAD_HEIGHT = 340;
+export const COMPOSER_HEIGHT = 220;
 
 export class ReviewThreads {
 	threads: ReviewThread[] = [];
+	readonly published = new PublishedComments();
 	loading = false;
 	failure: string | null = null;
 	private latest = 0;
@@ -51,7 +54,7 @@ export class ReviewThreads {
 		cx.spawn(async (cx) => {
 			try {
 				const threads = await readPullThreads(this.ref.repo, this.ref.number, this.on);
-				if (request === this.latest) this.threads = threads;
+				if (request === this.latest) this.threads = this.published.threads(threads);
 			} catch (e) {
 				if (request === this.latest) this.failure = failureOf(e).message;
 			} finally {
@@ -84,7 +87,7 @@ export class ReviewThreads {
 	}
 
 	/** Register gutter handlers and editors before native deferred row rendering. */
-	newComment(
+	inlineComposer(
 		path: string,
 		commit: string,
 		row: DiffLine,
@@ -121,7 +124,7 @@ export class ReviewThreads {
 			editors.push(
 				v_flex()
 					.w(width)
-					.h(220)
+					.h(COMPOSER_HEIGHT)
 					.p(12)
 					.gap(8)
 					.bg(t.surface)
@@ -140,43 +143,25 @@ export class ReviewThreads {
 							.gap(8)
 							.child(
 								button(`post-inline-${key}`, busy ? "Saving…" : "Add Comment", "Add Comment", (_e, cx) => {
-									if (busy || !draft.box.value().trim()) return;
+									if (this.drafts.get(key) !== draft || !draft.box.value().trim()) return;
 									const body = draft.box.value();
-									this.latest++;
-									this.loading = false;
-									this.writing.add(key);
-									this.failures.delete(key);
-									cx.notify();
-									cx.spawn(async (cx) => {
-										try {
-											const comment = await addPullComment(this.ref.repo, this.ref.number, draft.target, body, this.on);
-											// Show the acknowledged comment while GitHub's thread identity is reloaded.
-											this.threads.push({
-												id: `comment-${comment.id}`,
-												root: comment.id,
+									this.write(cx, key, async () => {
+										const comment = await addPullComment(this.ref.repo, this.ref.number, draft.target, body, this.on);
+										this.threads.push(
+											this.published.add(comment, {
 												path,
 												side,
 												line: anchor.line,
 												outdated: draft.target.commit !== commit,
-												resolved: false,
-												canResolve: false,
-												canUnresolve: false,
-												comments: [comment],
-											});
-											if (draft.box.value() === body) this.drafts.delete(key);
-										} catch (e) {
-											this.failures.set(key, failureOf(e).message);
-										} finally {
-											this.writing.delete(key);
-											this.dirty = true;
-											cx.notify();
-										}
+											}),
+										);
+										if (draft.box.value() === body) this.drafts.delete(key);
 									});
 								}),
 							)
 							.child(
 								button(`cancel-inline-${key}`, "Cancel", "Cancel", (_e, cx) => {
-									if (busy) return;
+									if (this.writing.has(key)) return;
 									this.drafts.delete(key);
 									this.failures.delete(key);
 									cx.notify();
@@ -333,7 +318,7 @@ export class ReviewThreads {
 								}
 								const body = box.value();
 								if (!body.trim()) return;
-								this.write(cx, thread, async () => {
+								this.write(cx, thread.id, async () => {
 									const comment = await replyPullThread(this.ref.repo, this.ref.number, thread.root, body, this.on);
 									if (!thread.comments.some((c) => c.id === comment.id)) thread.comments.push(comment);
 									if (box.value() === body) box.set_value("");
@@ -348,7 +333,7 @@ export class ReviewThreads {
 								thread.resolved ? "Unresolve Conversation" : "Resolve Conversation",
 								"Change discussion resolution",
 								(_e, cx) => {
-									this.write(cx, thread, async () =>
+									this.write(cx, thread.id, async () =>
 										Object.assign(
 											thread,
 											await resolvePullThread(this.ref.repo, this.ref.number, thread.id, !thread.resolved, this.on),
@@ -361,20 +346,20 @@ export class ReviewThreads {
 			);
 	}
 
-	private write(cx: Context, thread: ReviewThread, act: () => Promise<unknown>): void {
-		if (this.writing.has(thread.id)) return;
+	private write(cx: Context, key: string, act: () => Promise<unknown>): void {
+		if (this.writing.has(key)) return;
 		this.latest++; // An older read must not overwrite a successful write.
 		this.loading = false;
-		this.writing.add(thread.id);
-		this.failures.delete(thread.id);
+		this.writing.add(key);
+		this.failures.delete(key);
 		cx.notify();
 		cx.spawn(async (cx) => {
 			try {
 				await act();
 			} catch (e) {
-				this.failures.set(thread.id, failureOf(e).message);
+				this.failures.set(key, failureOf(e).message);
 			} finally {
-				this.writing.delete(thread.id);
+				this.writing.delete(key);
 				this.dirty = true;
 				cx.notify();
 			}

@@ -5,7 +5,7 @@ import { type DiffLine, parsePatch } from "../core/diff.ts";
 import type { ChangedFile } from "../core/files.ts";
 import { type ReviewThread, threadRow } from "../core/review-threads.ts";
 import { diffRow, ROW_HEIGHT } from "./diff-lines.ts";
-import { type ReviewThreads, THREAD_HEIGHT } from "./review-threads.ts";
+import { COMPOSER_HEIGHT, type ReviewThreads, THREAD_HEIGHT } from "./review-threads.ts";
 import { colors, link } from "./ui.ts";
 
 export class FileDiff {
@@ -61,10 +61,10 @@ export class FileDiff {
 			}
 		};
 		rows.forEach((row, index) => {
-			const comment = commit ? discussions?.newComment(file.path, commit, row, this.viewportWidth) : undefined;
+			const comment = commit ? discussions?.inlineComposer(file.path, commit, row, this.viewportWidth) : undefined;
 			items.push({ key: `line-${index}`, height: ROW_HEIGHT, line: row, gutters: comment?.gutters });
 			for (const [side, editor] of (comment?.editors ?? []).entries())
-				items.push({ key: `editor-${index}-${side}`, height: 220, element: editor });
+				items.push({ key: `editor-${index}-${side}`, height: COMPOSER_HEIGHT, element: editor });
 			appendThreads(index);
 		});
 		// Native layout measures a representative row twice; keep it non-interactive even without a patch.

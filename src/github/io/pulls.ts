@@ -156,12 +156,19 @@ export async function addPullComment(
 	body: string,
 	on: string | null,
 ): Promise<Comment> {
-	const raw = await api(`repos/${repo}/pulls/${number}/comments`, {
-		on,
-		method: "POST",
-		fields: { line: target.line },
-		rawFields: { body, commit_id: target.commit, path: target.path, side: target.side },
-	});
+	let raw: unknown;
+	try {
+		raw = await api(`repos/${repo}/pulls/${number}/comments`, {
+			on,
+			method: "POST",
+			fields: { line: target.line },
+			rawFields: { body, commit_id: target.commit, path: target.path, side: target.side },
+		});
+	} catch (e) {
+		// A dropped reply is ambiguous: reconcile readers, but never retry the POST.
+		if (e instanceof GhError && e.transient) announce({ repo, number, threads: { on } });
+		throw e;
+	}
 	const comment = parseComment(raw, `https://github.com/${repo}/pull/${number}`);
 	announce({ repo, number, threads: { on } });
 	return comment;

@@ -2,10 +2,12 @@
 import { HoverCard, h_flex } from "gpui-base";
 import { type AsyncContext, type Context, div, View } from "gpui-kit";
 import { parsePatch } from "../../src/github/core/diff.ts";
+import { parseComment } from "../../src/github/core/discussion.ts";
 import { parseFiles } from "../../src/github/core/files.ts";
 import { parseIssueDetail } from "../../src/github/core/issue-detail.ts";
 import { browserUrl, detailLink, readerMarkdown } from "../../src/github/core/markdown.ts";
 import { PREVIEW_CLOSE_MS, PREVIEW_OPEN_MS, parsePreview } from "../../src/github/core/preview.ts";
+import { PublishedComments } from "../../src/github/core/published-comments.ts";
 import { parsePullDetail } from "../../src/github/core/pull-detail.ts";
 import { pullTimeline } from "../../src/github/core/pull-timeline.ts";
 import { parseThreads, threadRow } from "../../src/github/core/review-threads.ts";
@@ -21,6 +23,7 @@ import pull from "../fixtures/pull-cli-14974.json";
 import pullComments from "../fixtures/pull-cli-14974-comments.json";
 import pullIssue from "../fixtures/pull-cli-14974-issue.json";
 import pullReviews from "../fixtures/pull-cli-14974-reviews.json";
+import publishedComment from "../fixtures/pull-plugin-35-comment-right.json";
 import filePages from "../fixtures/pull-plugin-35-files.json";
 import inlinePages from "../fixtures/pull-plugin-35-inline.json";
 import threadPages from "../fixtures/pull-plugin-35-threads.json";
@@ -73,6 +76,23 @@ export default class Smoke extends View {
 			String(threadRow(parsePatch(threadFile.patch ?? ""), this.discussions.threads[0]!)),
 			"3",
 			"thread RIGHT anchor in QuickJS",
+		);
+		const acknowledged = new PublishedComments();
+		acknowledged.add(parseComment(publishedComment, "https://github.com/lw396/herdr-plugin-github/pull/35"), {
+			path: "docs/pr-fixture.md",
+			side: "RIGHT",
+			line: 2,
+			outdated: false,
+		});
+		expectEqual(
+			String(acknowledged.threads([])[0]?.root),
+			"4502971530",
+			"published diff comment survives stale QuickJS read",
+		);
+		expectEqual(
+			String(acknowledged.timeline([])[0]?.discussion[0]?.comment.id),
+			"4502971530",
+			"published timeline comment survives stale QuickJS read",
 		);
 		this.threadDiff.jump(4502780899);
 		for (const path of ["src/github/core/time.ts", "docs/adr/0005-one-repository-renamed.md"]) {
