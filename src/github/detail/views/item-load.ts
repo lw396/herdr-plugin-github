@@ -1,6 +1,5 @@
-// How issue and PR pages read their item: failures in the reader's words, then the optional Projects.
 import type { Context } from "gpui-kit";
-import { failureOf } from "../../shared/io/gh.ts";
+import { failureOf } from "../../shared/core/gh.ts";
 import { type DetailRef, notVisible } from "../core/detail.ts";
 import type { Projects } from "../core/projects.ts";
 import { readProjects } from "../io/projects.ts";

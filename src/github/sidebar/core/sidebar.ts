@@ -1,5 +1,3 @@
-// What the sidebar says besides its rows: a problem in the list's place, a folder without a repository,
-// and the footer's gh account and list checks (ADR 0003, 0006).
 import { ACCOUNT_PROBLEM, type Account, describeAccount } from "../../shared/core/account.ts";
 import type { Failure } from "../../shared/core/gh.ts";
 import type { RemoteRepo } from "../../shared/core/remote.ts";
@@ -28,7 +26,7 @@ export interface ListState {
  * a list, nothing known yet, or a folder without a GitHub remote (not a problem: see noRepository).
  */
 export function listNotice(s: ListState): string | null {
-	if (s.account && !s.account.status.ok) return describeAccount(s.account).text;
+	if (s.account && !s.account.status.ok) return describeAccount(s.account);
 	if (s.remote === null) return null;
 	const repo = s.remote ? `${s.remote.owner}/${s.remote.repo}` : "the repository";
 	if (s.failure?.notFound && s.remote) {

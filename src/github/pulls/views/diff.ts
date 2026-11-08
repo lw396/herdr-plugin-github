@@ -23,7 +23,7 @@ interface DiffItem {
 }
 
 export class FileDiff {
-	private file: DiffSubject | null = null;
+	private patch: string | null = null;
 	private rows: DiffLine[] = [];
 	private width = 0;
 	private offset = 0;
@@ -35,9 +35,6 @@ export class FileDiff {
 	/** A thumb drag: where the pointer and the thumb's top were when it started. */
 	private drag: { y: number; top: number } | null = null;
 
-	init(): void {
-		this.offset = 0;
-	}
 	jump(comment: number | null): void {
 		this.target = comment;
 		this.offset = 0;
@@ -53,9 +50,10 @@ export class FileDiff {
 	render(file: DiffSubject, discussions?: ReviewThreads, commit?: string): Element {
 		const t = colors();
 		const listed = "missing" in file ? null : file;
-		if (this.file !== file) {
-			this.file = file;
-			this.rows = parsePatch(listed?.patch ?? "");
+		const patch = listed?.patch ?? "";
+		if (this.patch !== patch) {
+			this.patch = patch;
+			this.rows = parsePatch(patch);
 			this.width = this.rows.reduce((width, row) => Math.max(width, row.text.length * 16 + 152), 240);
 		}
 		const rows = this.rows;

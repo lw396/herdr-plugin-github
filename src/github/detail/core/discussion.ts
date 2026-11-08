@@ -1,4 +1,3 @@
-// Posts as issue and PR pages show them: REST comments with their reactions, ready-to-render Markdown.
 import { readerMarkdown } from "./markdown.ts";
 
 export interface Reaction {
@@ -18,7 +17,6 @@ export interface Comment {
 	reactions: Reaction[];
 }
 
-/** A comments endpoint's comment; a timeline "commented" event has the same fields and its `event`. */
 interface RestComment {
 	id: number;
 	user: { login: string } | null;

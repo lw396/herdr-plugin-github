@@ -6,7 +6,6 @@ export class Facts<T> {
 	private cache: Cache<T>;
 	private asking = new Map<string, Promise<T>>();
 	private readonly fresh: number;
-	/** Only answers `keep` accepts are kept. */
 	private readonly keep: (value: T) => boolean;
 
 	constructor(limit: number, fresh: number, keep: (value: T) => boolean = () => true) {
@@ -38,7 +37,6 @@ export class Facts<T> {
 		return p;
 	}
 
-	/** Keeps `value` as the answer now (a page loaded by other means: Load more). */
 	put(key: string, value: T): void {
 		this.cache.set(key, value, Date.now());
 	}

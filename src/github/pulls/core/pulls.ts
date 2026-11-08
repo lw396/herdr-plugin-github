@@ -1,5 +1,3 @@
-// The Pull Requests tab: its groups (the VS Code extension's categories), their queries and rows.
-
 import { type PullState, pullState } from "../../detail/core/state.ts";
 import type { Query } from "../../shared/core/gh.ts";
 import type { RemoteRepo } from "../../shared/core/remote.ts";
@@ -43,19 +41,16 @@ const SEARCH_QUERY = `query($q: String!, $after: String) {
   }
 }`;
 
-/** The extension's searches for its categories, with the gh account's login for ${user}. */
 export function pullSearch(kind: "review" | "mine", remote: RemoteRepo, login: string): string {
 	const who = kind === "review" ? `review-requested:${login}` : `author:${login}`;
 	return `repo:${remote.owner}/${remote.repo} is:pr is:open ${who} sort:updated-desc`;
 }
 
-/** A group's page (`after` null: the first). */
 export function pullGroupQuery(kind: PullGroupKind, remote: RemoteRepo, login: string, after: string | null): Query {
 	if (kind === "all") return { query: ALL_OPEN_QUERY, variables: { owner: remote.owner, name: remote.repo, after } };
 	return { query: SEARCH_QUERY, variables: { q: pullSearch(kind, remote, login), after } };
 }
 
-/** A single batch: one connection for every local branch, including closed and merged PRs. */
 export function localPullsQuery(remote: RemoteRepo, branches: string[]): Query {
 	const declarations = branches.map((_, i) => `$branch${i}: String!`).join(", ");
 	const fields = branches

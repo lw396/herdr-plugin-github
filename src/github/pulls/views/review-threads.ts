@@ -1,10 +1,9 @@
-// A PR's discussions and review: replies, resolution, inline drafts and the pending review's submission.
 import { h_flex, Textarea, TextareaState, v_flex } from "gpui-base";
 import { type Context, div, type Element } from "gpui-kit";
 import { type DetailRef, detailUrl } from "../../detail/core/detail.ts";
 import { Notices } from "../../detail/io/changes.ts";
 import { type DetailHost, openLink, postCard } from "../../detail/views/detail.ts";
-import { failureOf } from "../../shared/io/gh.ts";
+import { failureOf } from "../../shared/core/gh.ts";
 import { actionButton, button, colors, link, stop } from "../../shared/views/ui.ts";
 import { Acknowledged } from "../core/acknowledged.ts";
 import { commentTarget, type DiffLine } from "../core/diff.ts";
@@ -20,10 +19,8 @@ import {
 import { addPullComment, type PullCommentTarget, readPullThreads, resolvePullThread } from "../io/pulls.ts";
 import { diffSnippet } from "./diff-lines.ts";
 
-/** An inline comment editor's height below its diff row. */
 const COMPOSER_HEIGHT = 220;
 
-/** Inline drafts are kept per line and side of a file. */
 const draftKey = (path: string, side: "LEFT" | "RIGHT", line: number): string => JSON.stringify([path, side, line]);
 
 /** A draft must look like an input, not another published comment. */
@@ -134,7 +131,6 @@ export class ReviewThreads {
 			.child(this.failure ?? (this.loading ? "Loading discussions…" : ""));
 	}
 
-	/** The height a row's open inline editors add, without creating native elements. */
 	inlineHeight(path: string, row: DiffLine): number {
 		let count = 0;
 		for (const side of ["LEFT", "RIGHT"] as const) {

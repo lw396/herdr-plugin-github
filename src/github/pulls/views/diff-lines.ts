@@ -1,4 +1,3 @@
-// Shared rendering for viewport-windowed file diffs and in-place review snippets.
 import { h_flex, v_flex } from "gpui-base";
 import { div, type Element } from "gpui-kit";
 import { colors } from "../../shared/views/ui.ts";

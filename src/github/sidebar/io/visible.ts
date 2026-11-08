@@ -1,4 +1,3 @@
-// Whether the sidebar is shown: core's rule fed Herdr's live layout.
 import { layout } from "herdr";
 import { layoutShows } from "../core/visibility.ts";
 

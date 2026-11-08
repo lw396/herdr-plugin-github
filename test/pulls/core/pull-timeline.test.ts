@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { pullTimeline } from "../../../src/github/pulls/core/pull-timeline.ts";
+import { pullTimeline, timelineKey } from "../../../src/github/pulls/core/pull-timeline.ts";
 
 test("commit activity shows only its subject and keeps multiline details available separately", () => {
 	const [commit] = pullTimeline(
@@ -110,4 +110,24 @@ test("label, assignment, force-push and merge events sort together, without dupl
 		["force-pushed the branch", "abcdefg"],
 		["merged this", "1234567"],
 	]);
+});
+
+test("commit identities survive inserted activity and distinguish identical messages on different SHAs", () => {
+	const commit = {
+		event: "committed",
+		sha: "aaaaaaa",
+		message: "Same subject",
+		author: { name: "author", date: "2026-01-01T00:00:00Z" },
+	};
+	const url = "https://github.com/o/r/pull/1";
+	const before = pullTimeline([], [commit], [], [], url)[0]!;
+	const after = pullTimeline(
+		[],
+		[{ event: "closed", id: 5, created_at: "2025-01-01T00:00:00Z" }, commit, { ...commit, sha: "bbbbbbb" }],
+		[],
+		[],
+		url,
+	);
+	expect(after.map(timelineKey)).toContain(timelineKey(before));
+	expect(new Set(after.map(timelineKey)).size).toBe(3);
 });

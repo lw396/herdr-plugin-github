@@ -43,9 +43,9 @@ test("conflicts, checks, protection, drafts and unknown states each say why they
 	);
 	expect(reason({ mergeable: null, mergeable_state: "unknown" })).toBe("Checking mergeability…");
 	expect(reason({ mergeable_state: "something_new" })).toBe("Merging is blocked: something_new");
-	expect(reason({ draft: true })).toBe("This pull request is still a draft");
-	expect(reason({ state: "closed" })).toBe("Pull request is closed");
-	expect(reason({ merged: true, state: "closed" })).toBe("Pull request successfully merged");
+	expect(reason({ draft: true })).toBe("This pull request is still a work in progress.");
+	expect(reason({ state: "closed" })).toBe("This pull request is closed.");
+	expect(reason({ merged: true, state: "closed" })).toBe("Pull request successfully merged.");
 });
 test("only merged non-default heads can be deleted, including forks", () => {
 	expect(mergeInfo({ ...p, merged: true }, {})).toMatchObject({ deletable: true, headRepo: "fork/repo" });

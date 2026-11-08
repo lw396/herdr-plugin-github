@@ -1,4 +1,3 @@
-// Small UI helpers shared by the views.
 import { Button } from "gpui-base";
 import { type AsyncContext, type Color, type Context, div, type Element, svg } from "gpui-kit";
 import { theme } from "herdr";

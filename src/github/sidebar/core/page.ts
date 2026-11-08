@@ -1,5 +1,3 @@
-// A sidebar group's loaded pages: every group, Issues' and Pull Requests' alike, pages the same way.
-
 /** Rows per page: the first page, and each Load more. */
 export const PAGE = 30;
 

@@ -1,4 +1,3 @@
-// Changed-file facts and navigation, independent of the GitHub transport and native UI.
 export type FileStatus = "added" | "removed" | "modified" | "renamed" | "copied" | "changed" | "unchanged";
 export interface ChangedFile {
 	path: string;

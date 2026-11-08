@@ -1,12 +1,9 @@
-// The issue page: its discussion, polled while shown (ADR 0006), and comment, close and reopen.
-// Writes are announced to the other views (detail/io/changes.ts); this one applies its own the same way.
-
 import { h_flex, Textarea, TextareaState, v_flex } from "gpui-base";
 import { type AsyncContext, type Context, div, type Element } from "gpui-kit";
 import { type Activity, activityText, issueTimeline } from "../../detail/core/activity.ts";
 import { type DetailRef, detailKey } from "../../detail/core/detail.ts";
 import type { Projects } from "../../detail/core/projects.ts";
-import { announce, type Notice, Notices } from "../../detail/io/changes.ts";
+import { type Notice, Notices } from "../../detail/io/changes.ts";
 import { detailLocation } from "../../detail/io/detail-tabs.ts";
 import {
 	type DetailHost,
@@ -22,16 +19,13 @@ import {
 	stateBadge,
 } from "../../detail/views/detail.ts";
 import { loadProjects, readFailure } from "../../detail/views/item-load.ts";
-import type { Change } from "../../shared/core/gh.ts";
-import { ConditionalPoll } from "../../shared/core/polling.ts";
+import { type Change, failureOf } from "../../shared/core/gh.ts";
+import { ConditionalPoll, DETAIL_POLL_MS } from "../../shared/core/polling.ts";
 import { relativeTime } from "../../shared/core/time.ts";
 import * as gh from "../../shared/io/gh.ts";
 import { colors, spinner, stop } from "../../shared/views/ui.ts";
 import type { IssueDetail } from "../core/issue-detail.ts";
 import { addComment, issueChanges, readIssue, setIssueState } from "../io/issues.ts";
-
-/** How often the shown issue checks for changes. */
-const POLL_MS = 10_000;
 
 interface Loaded {
 	key: string;
@@ -44,7 +38,6 @@ interface Loaded {
 	projectsLoading: boolean;
 }
 
-/** A composer button: enabled or not, and the one primary action. */
 interface Action {
 	id: string;
 	label: string;
@@ -56,13 +49,11 @@ interface Action {
 export class Issue {
 	ref: DetailRef | null = null;
 	entry: Loaded | null = null;
-	/** The new comment being written; kept when posting fails, and through refreshes. */
 	draft = "";
 	private readonly host: DetailHost;
 	private metadata = new DetailMetadata();
 	private notices = new Notices();
 	private box: TextareaState | null = null;
-	/** Unsent comments of the issues Back can return to. */
 	private drafts = new Map<string, string>();
 	private writing: "comment" | "state" | null = null;
 	private writeFailure: string | null = null;
@@ -84,7 +75,7 @@ export class Issue {
 			if (e.secondary) this.comment(cx);
 		});
 		this.box = box;
-		cx.timer.every(POLL_MS, (cx) => {
+		cx.timer.every(DETAIL_POLL_MS, (cx) => {
 			const shown = this.syncPolling();
 			if (!this.writing) this.load(cx, shown);
 		});
@@ -170,12 +161,10 @@ export class Issue {
 		});
 	}
 
-	/** Posts the comment box's text; the box is emptied once GitHub has it. */
 	private comment(cx: Context): void {
 		const body = this.draft;
 		this.write(cx, "comment", body.trim() !== "", async (repo, number, on) => {
-			const comment = await addComment(repo, number, body, on);
-			this.publish({ repo, number, comment });
+			await addComment(repo, number, body, on);
 			// Empty the box only if it still holds what was sent, on the issue it was sent to.
 			const sentKey = detailKey({ kind: "issue", repo, number });
 			if (this.ref && detailKey(this.ref) === sentKey && this.draft === body) {
@@ -187,14 +176,8 @@ export class Issue {
 
 	private setState(cx: Context, state: "open" | "closed"): void {
 		this.write(cx, "state", true, async (repo, number, on) => {
-			this.publish({ repo, number, state: await setIssueState(repo, number, state, on) });
+			await setIssueState(repo, number, state, on);
 		});
-	}
-
-	/** Shows this view's own write at once, then tells the other views. */
-	private publish(notice: Notice): void {
-		this.apply(notice);
-		announce(notice);
 	}
 
 	/** One write at a time, through the gh that read the issue; a failure is said with gh's words. */
@@ -215,9 +198,7 @@ export class Issue {
 			try {
 				await act(ref.repo, ref.number, on);
 			} catch (e) {
-				this.writeFailure = gh.failureOf(e).message;
-				// A dropped connection may still have reached GitHub: show what it has, so nothing is sent twice.
-				if (e instanceof gh.GhError && e.transient && this.entry === entry) this.load(cx);
+				this.writeFailure = failureOf(e).message;
 			} finally {
 				this.writing = null;
 				cx.notify();
@@ -225,7 +206,6 @@ export class Issue {
 		});
 	}
 
-	/** A write to the shown issue: a new comment joins the timeline (once), a new state shows. */
 	private apply(notice: Notice): void {
 		const issue = this.entry?.issue;
 		const comment = notice.comment;
@@ -238,7 +218,10 @@ export class Issue {
 
 	render(cx: Context, layout: DetailLayout): Element[] {
 		// Writes announced by other views (shared metadata re-renders this one).
-		for (const notice of this.notices.take()) this.apply(notice);
+		const notices = this.notices.take();
+		for (const notice of notices) this.apply(notice);
+		if (notices.some((n) => n.issue && this.ref && detailKey({ kind: "issue", ...n }) === detailKey(this.ref)))
+			this.load(cx);
 		if (this.syncPolling()) this.load(cx);
 		const ref = this.ref;
 		const entry = this.entry;
@@ -316,7 +299,6 @@ export class Issue {
 			.child(div().text_color(t.dim).tooltip(activity.createdAt).child(relativeTime(activity.createdAt, Date.now())));
 	}
 
-	/** A new comment, and close / reopen: GitHub's own order of the two buttons. */
 	private composer(issue: IssueDetail): Element {
 		const t = colors();
 		const box = this.box;

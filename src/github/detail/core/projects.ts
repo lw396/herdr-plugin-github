@@ -11,7 +11,6 @@ export type Projects = { ok: true; projects: Project[] } | { ok: false; message:
 
 const FIELD = { issue: "issue", pr: "pullRequest" } as const;
 
-/** A page of the item's Projects (`after` null: the first). */
 export function projectsQuery(ref: DetailRef, after: string | null): Query {
 	const { owner, name } = ownerName(ref.repo);
 	return {

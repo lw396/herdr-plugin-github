@@ -3,8 +3,9 @@
 import { afterEach, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { Notices } from "../../../src/github/detail/io/changes.ts";
 import { addComment, setIssueState } from "../../../src/github/issues/io/issues.ts";
-import { failureOf } from "../../../src/github/shared/io/gh.ts";
+import { failureOf } from "../../../src/github/shared/core/gh.ts";
 import { machine, reset } from "../../fake-herdr.ts";
 
 afterEach(reset);
@@ -59,12 +60,14 @@ test("a blank comment or a missing issue fails with GitHub's own words", async (
 });
 
 test("a dropped connection while posting is never posted again: GitHub may already have the comment", async () => {
+	const notices = new Notices();
 	machine(null, {
 		[comment]: { code: 1, stderr: `Post "https://api.github.com/repos/${REPO}/issues/20/comments": EOF\n` },
 	});
 	expect(await said(addComment(REPO, 20, BODY, null))).toMatchObject({ notFound: false });
 	const { execCalls } = await import("../../fake-herdr.ts");
 	expect(execCalls()).toHaveLength(1);
+	expect(notices.take()).toEqual([{ repo: REPO, number: 20, issue: true }]);
 });
 
 const row = {
@@ -75,6 +78,7 @@ const row = {
 };
 
 test("close and reopen: the issue's new state, and its row for the sidebar's groups", async () => {
+	const notices = new Notices();
 	machine("center", {
 		[`~$ gh api repos/${REPO}/issues/20 -X PATCH -f state=closed`]: { stdout: fixture("closed-plugin-20.json") },
 		[`~$ gh api repos/${REPO}/issues/20 -X PATCH -f state=open`]: { stdout: fixture("reopened-plugin-20.json") },
@@ -89,6 +93,10 @@ test("close and reopen: the issue's new state, and its row for the sidebar's gro
 		state: "open",
 		issue: { ...row, updatedAt: "2026-11-06T18:23:21Z" },
 	});
+	expect(notices.take().map((n) => [n.repo, n.number, n.state?.state])).toEqual([
+		[REPO, 20, "closed"],
+		[REPO, 20, "open"],
+	]);
 });
 
 test("closing without the rights to: GitHub's reason", async () => {
@@ -112,4 +120,21 @@ test("no gh on the reader's machine: rejects as Herdr does", async () => {
 		notFound: false,
 		message: "cannot start gh: No such file or directory (os error 2)",
 	});
+});
+
+test("issue IO announces the acknowledged comment without a view-side publish step", async () => {
+	const notices = new Notices();
+	machine("center", { [comment]: { stdout: fixture("comment-plugin-20.json") } });
+	const posted = await addComment(REPO, 20, BODY, "center");
+	expect(notices.take()).toEqual([{ repo: REPO, number: 20, comment: posted }]);
+});
+
+test("an unreadable issue write invalidates readers, while a definitive refusal does not", async () => {
+	const notices = new Notices();
+	machine("center", { [comment]: { stdout: "lost reply" } });
+	await expect(addComment(REPO, 20, BODY, "center")).rejects.toThrow("isn't JSON");
+	expect(notices.take()).toEqual([{ repo: REPO, number: 20, issue: true }]);
+	machine("center", { [comment]: { code: 1, stderr: "gh: Not Found (HTTP 404)" } });
+	await expect(addComment(REPO, 20, BODY, "center")).rejects.toMatchObject({ notFound: true });
+	expect(notices.take()).toEqual([]);
 });

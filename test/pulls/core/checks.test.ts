@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { checkSummary, parseChecks } from "../../../src/github/pulls/core/checks.ts";
+import { checkHolds, checkSummary, parseChecks } from "../../../src/github/pulls/core/checks.ts";
 
 test("a passing check is summarized like the VS Code status card", () => {
 	expect(checkSummary([{ status: "success" }])).toEqual({ label: "1 successful check", tone: "done", icon: "✓" });
@@ -47,4 +47,23 @@ test("checks include duration and browser target", () => {
 	).toEqual([
 		{ id: "check-1", name: "test", status: "success", duration: "1m 5s", url: "https://github.com/a/b/actions/runs/1" },
 	]);
+});
+
+test("failed and unfinished check states hold a protected merge; neutral and skipped do not", () => {
+	for (const status of [
+		"failure",
+		"error",
+		"timed_out",
+		"cancelled",
+		"action_required",
+		"startup_failure",
+		"stale",
+		"pending",
+		"queued",
+		"in_progress",
+		"waiting",
+		"requested",
+	])
+		expect(checkHolds({ status })).toBe(true);
+	for (const status of ["success", "neutral", "skipped"]) expect(checkHolds({ status })).toBe(false);
 });

@@ -1,5 +1,3 @@
-// What gh is asked and what it answers: arguments, output and failures. shared/io/gh.ts runs it.
-
 /** `gh api` flags: -X, -F (typed), -f (string), --paginate, --slurp, --jq. */
 export interface ApiOptions {
 	method?: string;
@@ -87,8 +85,33 @@ export function explain(stderr: string): string {
 	return errorMessage(stderr);
 }
 
-/** A failed ask as the UI says it: not there / not visible (404), or another reason. */
 export interface Failure {
 	notFound: boolean;
 	message: string;
+}
+
+export class GhError extends Error {
+	readonly code: number;
+	readonly stderr: string;
+	constructor(message: string, code: number, stderr: string) {
+		super(message);
+		this.code = code;
+		this.stderr = stderr;
+	}
+
+	/** Not there, or not visible to this account: REST's 404, GraphQL's NOT_FOUND for a repository. */
+	get notFound(): boolean {
+		return /HTTP 404|Could not resolve to a Repository/.test(this.stderr + this.message);
+	}
+
+	/** The connection dropped: GitHub may or may not have done a write. */
+	get transient(): boolean {
+		return transient(this.stderr);
+	}
+}
+
+/** A failed ask in the UI's words (a dropped connection reads as such, not as gh's `Post "…": EOF`). */
+export function failureOf(e: unknown): Failure {
+	if (e instanceof GhError) return { notFound: e.notFound, message: explain(e.message) };
+	return { notFound: false, message: e instanceof Error ? e.message : String(e) };
 }

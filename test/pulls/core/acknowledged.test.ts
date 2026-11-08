@@ -97,7 +97,8 @@ test("an empty reply-only submission keeps its diff reply without a phantom time
 		body: "",
 		markdown: "",
 		kind: "review",
-		verb: "reviewed",
+		reviewState: "COMMENTED",
+		verb: "display copy can change",
 		discussion: [],
 	};
 	expect(published.submitted(item, [thread])[0]?.comments[1]?.draft).toBeUndefined();

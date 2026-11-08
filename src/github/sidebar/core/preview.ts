@@ -1,4 +1,3 @@
-// The small session-cached excerpt shown while hovering an issue or PR row.
 import { type DetailKind, type DetailRef, detailKey } from "../../detail/core/detail.ts";
 import { type Label, parseLabel } from "../../detail/core/labels.ts";
 import { markdownSummary } from "../../detail/core/markdown.ts";

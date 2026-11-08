@@ -6,40 +6,13 @@ import {
 	apiArgs,
 	type Change,
 	errorMessage,
-	explain,
-	type Failure,
+	GhError,
 	graphqlArgs,
 	parseJson,
 	type Query,
 	responseHeaders,
 	transient,
 } from "../core/gh.ts";
-
-export class GhError extends Error {
-	readonly code: number;
-	readonly stderr: string;
-	constructor(message: string, code: number, stderr: string) {
-		super(message);
-		this.code = code;
-		this.stderr = stderr;
-	}
-
-	/** Not there, or not visible to this account: REST's 404, GraphQL's NOT_FOUND for a repository. */
-	get notFound(): boolean {
-		return /HTTP 404|Could not resolve to a Repository/.test(this.stderr + this.message);
-	}
-
-	/** The connection dropped: GitHub may or may not have done a write. */
-	get transient(): boolean {
-		return transient(this.stderr);
-	}
-}
-
-/** A failed ask in the UI's words (a dropped connection reads as such, not as gh's `Post "…": EOF`). */
-export function failureOf(e: unknown): Failure {
-	if (e instanceof GhError) return { notFound: e.notFound, message: explain(e.message) };
-	return { notFound: false, message: e instanceof Error ? e.message : String(e) };
-}
 
 /** How many times a read is asked in all when the connection drops before GitHub answers. */
 const TRIES = 3;
@@ -147,5 +120,5 @@ async function status(on: string | null): Promise<Status> {
 /** Rejects with what to do on that machine unless its gh is installed and signed in. */
 export async function signedIn(on: string | null): Promise<void> {
 	const a = await account(on);
-	if (!a.status.ok) throw new Error(describeAccount(a).text);
+	if (!a.status.ok) throw new Error(describeAccount(a));
 }

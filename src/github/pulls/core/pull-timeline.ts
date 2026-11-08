@@ -4,7 +4,7 @@ import { readerMarkdown } from "../../detail/core/markdown.ts";
 import { type RestReview, submitted } from "./reviewers.ts";
 
 interface Event {
-	id: number;
+	id?: number;
 	event: string;
 	actor?: { login: string };
 	created_at: string;
@@ -26,12 +26,23 @@ interface Inline {
 	created_at: string;
 	reactions?: Record<string, number | string>;
 }
-export interface PullTimelineItem extends Comment {
+export interface PullTimelineItem extends Omit<Comment, "id"> {
+	id: number | string;
 	kind: "comment" | "review" | "event";
 	verb: string;
+	reviewState?: string;
 	/** Commit message after the subject, hidden until explicitly expanded. */
 	details?: { body: string; markdown: string };
 	discussion: { root: number; comment: Comment; path: string; snippet: string }[];
+}
+
+export const timelineKey = (item: PullTimelineItem): string => `${item.kind}-${item.id}`;
+
+export function timelineOrder(a: PullTimelineItem, b: PullTimelineItem): number {
+	const time = a.createdAt.localeCompare(b.createdAt);
+	if (time) return time;
+	if (typeof a.id === "number") return typeof b.id === "number" ? a.id - b.id : -1;
+	return typeof b.id === "number" ? 1 : a.id.localeCompare(b.id);
 }
 
 /** A reply can create a body-less COMMENTED review; its content already belongs to the original conversation. */
@@ -83,6 +94,7 @@ export function pullTimeline(
 			...parseComment({ id: r.id, user: r.user, body: r.body, created_at: r.submitted_at }, url),
 			kind: "review",
 			verb: verbs[r.state] ?? "reviewed",
+			reviewState: r.state,
 			discussion,
 		});
 	}
@@ -110,7 +122,7 @@ export function pullTimeline(
 		else if (e.event === "reopened") verb = "reopened this";
 		else continue;
 		result.push({
-			id: e.id ?? result.length,
+			id: e.id ?? JSON.stringify([e.event, e.sha ?? e.commit_id, e.created_at ?? e.author?.date]),
 			author: e.actor ? login(e.actor) : (e.author?.name ?? "deleted user"),
 			createdAt: e.created_at ?? e.author?.date ?? "",
 			body,
@@ -122,5 +134,5 @@ export function pullTimeline(
 			discussion: [],
 		});
 	}
-	return result.sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id - b.id);
+	return result.sort(timelineOrder);
 }

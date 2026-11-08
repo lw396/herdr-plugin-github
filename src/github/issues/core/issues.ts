@@ -1,24 +1,9 @@
-// The Issues tab: its groups, their query and rows, and how a close or reopen moves a row between them.
-
+import type { IssueChange, IssueRow } from "../../detail/core/issue-change.ts";
 import type { Query } from "../../shared/core/gh.ts";
 import type { RemoteRepo } from "../../shared/core/remote.ts";
 import { PAGE, type Page } from "../../sidebar/core/page.ts";
 
-export interface Issue {
-	number: number;
-	title: string;
-	assignees: string[];
-	/** ISO time, as GitHub sends it. */
-	updatedAt: string;
-	url: string;
-}
-
-/** An issue closed or reopened in a reader: its repository (owner/repo), new state and row. */
-export interface IssueChange {
-	repo: string;
-	state: "open" | "closed";
-	issue: Issue;
-}
+export type Issue = IssueRow;
 
 interface RestIssueRow {
 	number: number;
@@ -52,7 +37,6 @@ export interface IssueGroup extends Page<Issue> {
 	issuesEnabled: boolean;
 }
 
-/** A group's page (`after` null: the first), most recently updated first, with whether Issues are on. */
 export function issueGroupQuery(kind: GroupKind, remote: RemoteRepo, login: string, after: string | null): Query {
 	const assigned = kind === "assigned";
 	return {

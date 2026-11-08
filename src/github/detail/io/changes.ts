@@ -1,9 +1,9 @@
 // Writes made in one view (a reader's comment, close or reopen) reach the others through Herdr's
 // shared metadata: setting it re-renders every mod, so listeners take new notices when they render.
 import { setShared, shared } from "herdr";
-import type { IssueChange } from "../../issues/core/issues.ts";
-import { GhError } from "../../shared/io/gh.ts";
+import { GhError } from "../../shared/core/gh.ts";
 import type { Comment } from "../core/discussion.ts";
+import type { IssueChange } from "../core/issue-change.ts";
 
 /** One write to an issue or PR, and what other views should show or read again because of it. */
 export interface Notice {
@@ -12,6 +12,8 @@ export interface Notice {
 	number: number;
 	comment?: Comment;
 	state?: IssueChange;
+	/** An issue write may have reached GitHub without returning an acknowledged result. */
+	issue?: boolean;
 	/** Re-read this PR's viewed-file state, only on the machine that performed the write. */
 	files?: { on: string | null };
 	/** Re-read discussions through the same machine/account, without sharing private review data. */
@@ -27,7 +29,6 @@ export interface Notice {
 type Log = { id: string; notice: Notice }[];
 
 const CHANGES = "github.changes";
-/** The most recent notices kept for views that render late. */
 const KEPT = 20;
 const log = (): Log => (shared(CHANGES) as { notices: Log } | null)?.notices ?? [];
 
@@ -40,10 +41,14 @@ export function announce(notice: Notice): void {
  * A write, never retried. Unless GitHub refused it, it may have happened even when its reply was lost
  * or unreadable: every view affected re-reads.
  */
-export async function written<T>(notice: Notice, write: () => Promise<T>): Promise<T> {
+export async function written<T>(
+	notice: Notice,
+	write: () => Promise<T>,
+	acknowledged: (result: T) => Notice = () => notice,
+): Promise<T> {
 	try {
 		const result = await write();
-		announce(notice);
+		announce(acknowledged(result));
 		return result;
 	} catch (e) {
 		if (!(e instanceof GhError) || e.transient) announce(notice);
@@ -55,7 +60,6 @@ export async function written<T>(notice: Notice, write: () => Promise<T>): Promi
 export class Notices {
 	private taken = new Set(log().map((n) => n.id));
 
-	/** Notices announced since the last take, oldest first. */
 	take(): Notice[] {
 		const notices = log(),
 			fresh = notices.filter((n) => !this.taken.has(n.id));

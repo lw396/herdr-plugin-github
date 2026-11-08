@@ -1,4 +1,3 @@
-// How an issue or PR state shows.
 import type { Color } from "gpui-kit";
 import type { PullState } from "../core/state.ts";
 

@@ -1,5 +1,3 @@
-// Times as the sidebar shows them.
-
 const MINUTE = 60_000,
 	HOUR = 60 * MINUTE,
 	DAY = 24 * HOUR;

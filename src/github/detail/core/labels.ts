@@ -1,4 +1,3 @@
-// GitHub issue labels as the reader shows them.
 export interface Label {
 	name: string;
 	color: `#${string}` | null;

@@ -18,18 +18,11 @@ const LEVELS: Record<string, number> = {
 	"main.ts": 5,
 };
 
-/** Upward imports allowed, each type-only (erased from the bundle) and with its reason. */
-const UPWARD = new Set([
-	// The write log carries an issue's new row so the sidebar's lists can move it before asking again.
-	"detail/io/changes.ts -> issues/core/issues.ts",
-]);
-
 interface Import {
 	file: string;
 	from: string;
 	/** Relative imports: the target, relative to src/github. */
 	target: string | null;
-	typeOnly: boolean;
 }
 
 const sources = readdirSync(SRC, { recursive: true, encoding: "utf8" })
@@ -44,7 +37,7 @@ const imports: Import[] = sources.flatMap((file) =>
 	].map((m) => {
 		const from = (m[3] ?? m[4])!;
 		const target = from.startsWith(".") ? relative(SRC, resolve(SRC, dirname(file), from)) : null;
-		return { file, from, target, typeOnly: m[2] !== undefined };
+		return { file, from, target };
 	}),
 );
 
@@ -84,12 +77,11 @@ test("io/ reaches Herdr and core/, never the UI", () => {
 });
 
 test("a feature imports only its own level or lower ones, never a sibling", () => {
-	const wrong = imports.filter(({ file, target, typeOnly }) => {
+	const wrong = imports.filter(({ file, target }) => {
 		if (!target) return false;
 		const a = feature(file),
 			b = feature(target);
-		if (a === b || LEVELS[b]! < LEVELS[a]!) return false;
-		return !(typeOnly && UPWARD.has(`${file} -> ${target}`));
+		return a !== b && LEVELS[b]! >= LEVELS[a]!;
 	});
 	expect(wrong.map(({ file, target }) => `${file} -> ${target}`)).toEqual([]);
 });

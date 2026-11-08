@@ -1,8 +1,5 @@
-// A small cache for what the sidebar shows (gh accounts, remotes, issue groups): one entry per
-// key, fresh for a while; a stale entry still shows while it is fetched again.
-
 export class Cache<T> {
-	readonly limit: number;
+	private readonly limit: number;
 	private entries = new Map<string, { value: T; at: number }>();
 
 	constructor(limit: number) {

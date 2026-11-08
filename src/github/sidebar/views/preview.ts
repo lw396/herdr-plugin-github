@@ -5,7 +5,7 @@ import type { DetailRef } from "../../detail/core/detail.ts";
 import { labels } from "../../detail/views/detail.ts";
 import { PULL_STATES } from "../../detail/views/state.ts";
 import { Cache } from "../../shared/core/cache.ts";
-import { failureOf } from "../../shared/io/gh.ts";
+import { failureOf } from "../../shared/core/gh.ts";
 import { colors, spinner, stop } from "../../shared/views/ui.ts";
 import {
 	PREVIEW_CLOSE_MS,

@@ -1,9 +1,8 @@
-// A changed-files navigator, shared by sidebar PR disclosures and the reader's Files control.
 import { h_flex, v_flex } from "gpui-base";
 import { type Context, div, type Element } from "gpui-kit";
 import type { DetailRef } from "../../detail/core/detail.ts";
 import { Notices } from "../../detail/io/changes.ts";
-import { failureOf } from "../../shared/io/gh.ts";
+import { failureOf } from "../../shared/core/gh.ts";
 import { button, colors, spinner, stop } from "../../shared/views/ui.ts";
 import { type ChangedFile, type FileNode, fileTree, flatFiles } from "../core/files.ts";
 import { readPullFiles, setPullFileViewed } from "../io/pulls.ts";

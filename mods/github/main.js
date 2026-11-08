@@ -99,9 +99,6 @@ import { closeOverlay, props as props2 } from "herdr";
 // src/github/detail/io/changes.ts
 import { setShared, shared } from "herdr";
 
-// src/github/shared/io/gh.ts
-import { exec } from "herdr";
-
 // src/github/shared/core/gh.ts
 function apiArgs(path, options = {}) {
   const args = ["api", path];
@@ -151,28 +148,6 @@ function explain(stderr) {
     return "Can't reach GitHub. Check the internet connection (or githubstatus.com).";
   return errorMessage(stderr);
 }
-
-// src/github/shared/core/account.ts
-var ACCOUNT_PROBLEM = {
-  missing: "gh is not installed",
-  auth: "Not signed in to gh",
-  error: "gh is not working"
-};
-function describeAccount(account3) {
-  const { on, status: status2 } = account3;
-  if (status2.ok) return { ok: true, text: `signed in as ${status2.user}${on ? ` on ${on}` : ""}` };
-  const machine = on ?? "this computer", there = on ? ` on ${on}` : "";
-  if (status2.reason === "missing") {
-    return {
-      ok: false,
-      text: `gh is not installed on ${machine}: install it${on ? " there" : ""}, then run gh auth login${there}`
-    };
-  }
-  if (status2.reason === "auth") return { ok: false, text: `not signed in on ${machine}: run gh auth login${there}` };
-  return { ok: false, text: `gh on ${machine}: ${explain(status2.message)}` };
-}
-
-// src/github/shared/io/gh.ts
 var GhError = class extends Error {
   code;
   stderr;
@@ -194,67 +169,6 @@ function failureOf(e) {
   if (e instanceof GhError) return { notFound: e.notFound, message: explain(e.message) };
   return { notFound: false, message: e instanceof Error ? e.message : String(e) };
 }
-var TRIES = 3;
-async function execute(args, on, read, conditional = false) {
-  for (let tried = 1; ; tried++) {
-    const r = await exec("gh", args, { on });
-    if (r.code === 0 || conditional && responseHeaders(r.stdout).status === 304) return r;
-    if (!read || tried >= TRIES || !transient(r.stderr)) throw new GhError(errorMessage(r.stderr), r.code, r.stderr);
-  }
-}
-async function changes(path, etag, on) {
-  const args = ["api", path, "--include"];
-  if (etag) args.push("-H", `If-None-Match: ${etag}`);
-  const headers = responseHeaders((await execute(args, on, true, true)).stdout);
-  if (headers.status === 304) return { changed: false };
-  if (headers.status !== 200) throw new Error("GitHub did not return an HTTP 200 or 304 response.");
-  return { changed: true, etag: headers.etag };
-}
-var reads = (method) => !method || method.toUpperCase() === "GET";
-async function api(path, { on, ...options }) {
-  const args = apiArgs(path, { ...options, slurp: options.paginate });
-  const data = parseJson((await execute(args, on, reads(options.method))).stdout);
-  return options.paginate && Array.isArray(data) && data.every(Array.isArray) ? data.flat() : data;
-}
-async function apiText(path, jq, { on, ...options }) {
-  return (await execute(apiArgs(path, { ...options, jq }), on, reads(options.method))).stdout.trim();
-}
-var graphql = (query, on) => run2(query, on, true);
-var mutate = (query, on) => run2(query, on, false);
-async function run2(query, on, read) {
-  const out = parseJson((await execute(graphqlArgs(query), on, read)).stdout);
-  if (out?.errors?.length) throw new GhError(out.errors.map((e) => e.message).join("; "), 1, "");
-  return out?.data;
-}
-async function eachPage(what, query, select, visit, on) {
-  let after = null;
-  for (; ; ) {
-    const page = select(await graphql(query(after), on));
-    if (!page) throw new Error(`GitHub did not return ${what}.`);
-    if (visit(page) === true || !page.pageInfo.hasNextPage) return;
-    const next = page.pageInfo.endCursor;
-    if (!next || next === after) throw new Error(`GitHub did not return the next page of ${what}.`);
-    after = next;
-  }
-}
-async function account(on) {
-  return { on, status: await status(on) };
-}
-async function status(on) {
-  try {
-    return { ok: true, user: await apiText("user", ".login", { on }) };
-  } catch (e) {
-    const message = e instanceof Error ? e.message : String(e);
-    if (!(e instanceof GhError))
-      return { ok: false, reason: /^cannot (run|start) gh\b/.test(message) ? "missing" : "error", message };
-    if (/gh auth login|HTTP 401/.test(e.stderr)) return { ok: false, reason: "auth", message };
-    return { ok: false, reason: "error", message };
-  }
-}
-async function signedIn(on) {
-  const a = await account(on);
-  if (!a.status.ok) throw new Error(describeAccount(a).text);
-}
 
 // src/github/detail/io/changes.ts
 var CHANGES = "github.changes";
@@ -264,10 +178,10 @@ function announce(notice) {
   const id = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
   setShared(CHANGES, { notices: [...log(), { id, notice }].slice(-KEPT) });
 }
-async function written(notice, write) {
+async function written(notice, write, acknowledged = () => notice) {
   try {
     const result = await write();
-    announce(notice);
+    announce(acknowledged(result));
     return result;
   } catch (e) {
     if (!(e instanceof GhError) || e.transient) announce(notice);
@@ -276,7 +190,6 @@ async function written(notice, write) {
 }
 var Notices = class {
   taken = new Set(log().map((n) => n.id));
-  /** Notices announced since the last take, oldest first. */
   take() {
     const notices = log(), fresh = notices.filter((n) => !this.taken.has(n.id));
     this.taken = new Set(notices.map((n) => n.id));
@@ -285,7 +198,7 @@ var Notices = class {
 };
 
 // src/github/detail/io/detail-tabs.ts
-import { exec as exec2, focused, panes as panes2, run as run3, setShared as setShared2, shared as shared2, spaces } from "herdr";
+import { exec, focused, panes as panes2, run as run2, setShared as setShared2, shared as shared2, spaces } from "herdr";
 
 // src/github/detail/core/detail.ts
 var detailKey = (ref) => `${ref.repo.toLowerCase()}${ref.kind === "pr" ? "/pull/" : "#"}${ref.number}`;
@@ -308,10 +221,10 @@ var DetailNavigation = class {
     return true;
   }
   back() {
-    const previous3 = this.history.pop();
-    if (!previous3) return null;
-    this.ref = previous3;
-    return previous3;
+    const previous2 = this.history.pop();
+    if (!previous2) return null;
+    this.ref = previous2;
+    return previous2;
   }
 };
 function ownerName(repo) {
@@ -372,14 +285,14 @@ var DetailTabs = class {
     remember(target.id, { ...target.reader, identity, request: `${Date.now()}-${Math.random()}`, ready: null });
     const tabName = owner.tabs.find((t) => t.id === target.reader.tab)?.name;
     if (oldName && tabName?.toLowerCase() === oldName && tabName !== detailTabName(ref)) {
-      run3("tab.rename", { id: target.reader.tab, name: detailTabName(ref) });
+      run2("tab.rename", { id: target.reader.tab, name: detailTabName(ref) });
     }
-    if (focused()?.space === space) run3("tab.select", { id: target.reader.tab });
+    if (focused()?.space === space) run2("tab.select", { id: target.reader.tab });
   }
   async create(space, ref) {
     const id = `detail-${Date.now()}-${Math.random().toString(36).slice(2)}`;
     const args = { space, name: detailTabName(ref), mod: "github", props: { role: ref.kind, reader: id } };
-    const result = await exec2("herdr-app", ["do", "tab.new", JSON.stringify(args)]);
+    const result = await exec("herdr-app", ["do", "tab.new", JSON.stringify(args)]);
     if (result.code !== 0) throw new Error(result.stderr.trim() || result.stdout.trim() || "Could not open the tab.");
     let reply;
     try {
@@ -402,7 +315,7 @@ var DetailTabs = class {
       }
       if (r.tab !== tab || r.ready !== r.request) continue;
       this.pending.delete(id);
-      run3(`github.${COMMAND}${JSON.stringify({ reader: id, ...ref })}`);
+      run2(`github.${COMMAND}${JSON.stringify({ reader: id, ...ref })}`);
     }
   }
 };
@@ -411,7 +324,7 @@ function navigatedDetail(id, ref) {
   if (!r || !space) return;
   remember(id, { ...r, identity: `${space.id}:${detailKey(ref)}` });
   const name = detailTabName(ref);
-  if (space.tabs.find((t) => t.id === r.tab)?.name !== name) run3("tab.rename", { id: r.tab, name });
+  if (space.tabs.find((t) => t.id === r.tab)?.name !== name) run2("tab.rename", { id: r.tab, name });
 }
 function detailLocation(id) {
   const r = reader(id);
@@ -428,8 +341,8 @@ function detailLocation(id) {
   };
 }
 function closeEmptyDetail(id) {
-  const location2 = detailLocation(id);
-  if (location2?.visible) run3("pane.close", { pane: location2.pane });
+  const location = detailLocation(id);
+  if (location?.visible) run2("pane.close", { pane: location.pane });
 }
 function detailCommand(command, id) {
   if (!command.startsWith(COMMAND)) return null;
@@ -485,7 +398,6 @@ var Facts = class {
   cache;
   asking = /* @__PURE__ */ new Map();
   fresh;
-  /** Only answers `keep` accepts are kept. */
   keep;
   constructor(limit, fresh, keep = () => true) {
     this.cache = new Cache(limit);
@@ -510,7 +422,6 @@ var Facts = class {
     this.asking.set(key, p);
     return p;
   }
-  /** Keeps `value` as the answer now (a page loaded by other means: Load more). */
   put(key, value) {
     this.cache.set(key, value, Date.now());
   }
@@ -538,28 +449,49 @@ function appendPage(group, page) {
 }
 
 // src/github/sidebar/io/groups.ts
-var where = (kind, r, cwd = null) => ({
-  kind,
-  on: r.on,
-  repo: `${r.remote.owner}/${r.remote.repo}`.toLowerCase(),
-  login: r.login,
-  cwd
-});
-var groupKey = (w) => JSON.stringify([w.kind, w.on, w.repo, w.login, w.cwd]);
-function groupOf(key) {
-  const [kind, on, repo, login2, cwd] = JSON.parse(key);
-  return { kind, on, repo, login: login2, cwd };
-}
+var GroupCache = class {
+  facts;
+  checkout;
+  constructor(fresh, checkout = false) {
+    this.facts = new Facts(64, fresh);
+    this.checkout = checkout;
+  }
+  key(kind, r) {
+    const where = {
+      kind,
+      on: r.on,
+      repo: `${r.remote.owner}/${r.remote.repo}`.toLowerCase(),
+      login: r.login,
+      cwd: this.checkout ? r.cwd : null
+    };
+    return JSON.stringify(where);
+  }
+  peek(kind, r) {
+    return this.facts.peek(this.key(kind, r));
+  }
+  look(kind, r, force, ask) {
+    return this.facts.look(this.key(kind, r), force, ask);
+  }
+  put(kind, r, value) {
+    this.facts.put(this.key(kind, r), value);
+  }
+  patch(change) {
+    this.facts.patch((key, value) => change(JSON.parse(key), value));
+  }
+  clear() {
+    this.facts.clear();
+  }
+};
 function pagedGroups(ask) {
-  const kept = new Facts(64, 6e4);
+  const cache = new GroupCache(6e4);
   return {
-    kept,
-    look: (kind, r, force = false) => kept.look(groupKey(where(kind, r)), force, () => ask(kind, r, null)),
-    peek: (kind, r) => kept.peek(groupKey(where(kind, r))),
+    patch: (change) => cache.patch(change),
+    clear: () => cache.clear(),
+    look: (kind, r, force = false) => cache.look(kind, r, force, () => ask(kind, r, null)),
+    peek: (kind, r) => cache.peek(kind, r),
     async more(kind, r, loaded) {
-      const key = groupKey(where(kind, r));
       const both = appendPage(loaded, await ask(kind, r, loaded.cursor));
-      if (kept.peek(key) === loaded) kept.put(key, both);
+      if (cache.peek(kind, r) === loaded) cache.put(kind, r, both);
       return both;
     }
   };
@@ -699,23 +631,23 @@ function decodeTrieDict(input, resultLength, atomCount, dict1AtomCount, ngramCou
   const start = new Int32Array(slotCount);
   const length = new Int32Array(slotCount);
   function decodeDelta(count, off) {
-    let previous3 = 0;
+    let previous2 = 0;
     let slot = off;
     const end = off + count;
     while (slot < end) {
       const code = BASE91_INVERSE[input.charCodeAt(pos++)];
       if (code < 89) {
-        previous3 += code;
-        single[slot++] = previous3;
+        previous2 += code;
+        single[slot++] = previous2;
       } else if (code === 89) {
         let runLength = BASE91_INVERSE[input.charCodeAt(pos++)] + 2;
         while (runLength--)
-          single[slot++] = ++previous3;
+          single[slot++] = ++previous2;
       } else {
         const next = BASE91_INVERSE[input.charCodeAt(pos++)];
-        previous3 += 89 + // eslint-disable-next-line unicorn/prefer-minimal-ternary -- branches read a different number of side-effecting input bytes
+        previous2 += 89 + // eslint-disable-next-line unicorn/prefer-minimal-ternary -- branches read a different number of side-effecting input bytes
         (next < 90 ? next * base + BASE91_INVERSE[input.charCodeAt(pos++)] : BASE91_INVERSE[input.charCodeAt(pos++)] * 8281 + BASE91_INVERSE[input.charCodeAt(pos++)] * base + BASE91_INVERSE[input.charCodeAt(pos++)]);
-        single[slot++] = previous3;
+        single[slot++] = previous2;
       }
     }
   }
@@ -5153,7 +5085,7 @@ var content = {
 };
 function initializeContent(effects) {
   const contentStart = effects.attempt(this.parser.constructs.contentInitial, afterContentStartConstruct, paragraphInitial);
-  let previous3;
+  let previous2;
   return contentStart;
   function afterContentStartConstruct(code) {
     if (code === null) {
@@ -5172,12 +5104,12 @@ function initializeContent(effects) {
   function lineStart(code) {
     const token = effects.enter("chunkText", {
       contentType: "text",
-      previous: previous3
+      previous: previous2
     });
-    if (previous3) {
-      previous3.next = token;
+    if (previous2) {
+      previous2.next = token;
     }
-    previous3 = token;
+    previous2 = token;
     return data(code);
   }
   function data(code) {
@@ -5607,8 +5539,8 @@ function resolveAllAttention(events, context) {
 }
 function tokenizeAttention(effects, ok) {
   const attentionMarkers2 = this.parser.constructs.attentionMarkers.null;
-  const previous3 = this.previous;
-  const before = classifyCharacter(previous3);
+  const previous2 = this.previous;
+  const before = classifyCharacter(previous2);
   let marker;
   return start;
   function start(code) {
@@ -5624,7 +5556,7 @@ function tokenizeAttention(effects, ok) {
     const token = effects.exit("attentionSequence");
     const after = classifyCharacter(code);
     const open = !after || after === 2 && before || attentionMarkers2.includes(code) && code !== 42 && code !== 95;
-    const close = !before || before === 2 && after || attentionMarkers2.includes(previous3) && previous3 !== 42 && previous3 !== 95;
+    const close = !before || before === 2 && after || attentionMarkers2.includes(previous2) && previous2 !== 42 && previous2 !== 95;
     token._open = Boolean(marker === 42 ? open : open && (before || !close));
     token._close = Boolean(marker === 42 ? close : close && (after || !open));
     return ok(code);
@@ -6540,7 +6472,7 @@ function subcontent(events, eventIndex) {
   const jumps = [];
   const gaps = {};
   let stream;
-  let previous3;
+  let previous2;
   let index2 = -1;
   let current = token;
   let adjust = 0;
@@ -6555,7 +6487,7 @@ function subcontent(events, eventIndex) {
       if (!current.next) {
         stream.push(null);
       }
-      if (previous3) {
+      if (previous2) {
         tokenizer.defineSkip(current.start);
       }
       if (current._isInFirstContentOfListItem) {
@@ -6566,7 +6498,7 @@ function subcontent(events, eventIndex) {
         tokenizer._gfmTasklistFirstContentOfListItem = void 0;
       }
     }
-    previous3 = current;
+    previous2 = current;
     current = current.next;
   }
   current = token;
@@ -6619,11 +6551,11 @@ function resolveContent(events) {
   return events;
 }
 function tokenizeContent(effects, ok) {
-  let previous3;
+  let previous2;
   return chunkStart;
   function chunkStart(code) {
     effects.enter("content");
-    previous3 = effects.enter("chunkContent", {
+    previous2 = effects.enter("chunkContent", {
       contentType: "content"
     });
     return chunkInside(code);
@@ -6646,11 +6578,11 @@ function tokenizeContent(effects, ok) {
   function contentContinue(code) {
     effects.consume(code);
     effects.exit("chunkContent");
-    previous3.next = effects.enter("chunkContent", {
+    previous2.next = effects.enter("chunkContent", {
       contentType: "content",
-      previous: previous3
+      previous: previous2
     });
-    previous3 = previous3.next;
+    previous2 = previous2.next;
     return chunkInside;
   }
 }
@@ -10063,6 +9995,87 @@ function parseComments(comments, url) {
   return comments.map((c) => parseComment(c, url)).sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id - b.id);
 }
 
+// src/github/shared/io/gh.ts
+import { exec as exec2 } from "herdr";
+
+// src/github/shared/core/account.ts
+var ACCOUNT_PROBLEM = {
+  missing: "gh is not installed",
+  auth: "Not signed in to gh",
+  error: "gh is not working"
+};
+function describeAccount({ on, status: status2 }) {
+  if (status2.ok) return `signed in as ${status2.user}${on ? ` on ${on}` : ""}`;
+  const machine = on ?? "this computer", there = on ? ` on ${on}` : "";
+  if (status2.reason === "missing")
+    return `gh is not installed on ${machine}: install it${on ? " there" : ""}, then run gh auth login${there}`;
+  if (status2.reason === "auth") return `not signed in on ${machine}: run gh auth login${there}`;
+  return `gh on ${machine}: ${explain(status2.message)}`;
+}
+
+// src/github/shared/io/gh.ts
+var TRIES = 3;
+async function execute(args, on, read, conditional = false) {
+  for (let tried = 1; ; tried++) {
+    const r = await exec2("gh", args, { on });
+    if (r.code === 0 || conditional && responseHeaders(r.stdout).status === 304) return r;
+    if (!read || tried >= TRIES || !transient(r.stderr)) throw new GhError(errorMessage(r.stderr), r.code, r.stderr);
+  }
+}
+async function changes(path, etag, on) {
+  const args = ["api", path, "--include"];
+  if (etag) args.push("-H", `If-None-Match: ${etag}`);
+  const headers = responseHeaders((await execute(args, on, true, true)).stdout);
+  if (headers.status === 304) return { changed: false };
+  if (headers.status !== 200) throw new Error("GitHub did not return an HTTP 200 or 304 response.");
+  return { changed: true, etag: headers.etag };
+}
+var reads = (method) => !method || method.toUpperCase() === "GET";
+async function api(path, { on, ...options }) {
+  const args = apiArgs(path, { ...options, slurp: options.paginate });
+  const data = parseJson((await execute(args, on, reads(options.method))).stdout);
+  return options.paginate && Array.isArray(data) && data.every(Array.isArray) ? data.flat() : data;
+}
+async function apiText(path, jq, { on, ...options }) {
+  return (await execute(apiArgs(path, { ...options, jq }), on, reads(options.method))).stdout.trim();
+}
+var graphql = (query, on) => run3(query, on, true);
+var mutate = (query, on) => run3(query, on, false);
+async function run3(query, on, read) {
+  const out = parseJson((await execute(graphqlArgs(query), on, read)).stdout);
+  if (out?.errors?.length) throw new GhError(out.errors.map((e) => e.message).join("; "), 1, "");
+  return out?.data;
+}
+async function eachPage(what, query, select, visit, on) {
+  let after = null;
+  for (; ; ) {
+    const page = select(await graphql(query(after), on));
+    if (!page) throw new Error(`GitHub did not return ${what}.`);
+    if (visit(page) === true || !page.pageInfo.hasNextPage) return;
+    const next = page.pageInfo.endCursor;
+    if (!next || next === after) throw new Error(`GitHub did not return the next page of ${what}.`);
+    after = next;
+  }
+}
+async function account(on) {
+  return { on, status: await status(on) };
+}
+async function status(on) {
+  try {
+    return { ok: true, user: await apiText("user", ".login", { on }) };
+  } catch (e) {
+    const message = e instanceof Error ? e.message : String(e);
+    if (!(e instanceof GhError))
+      return { ok: false, reason: /^cannot (run|start) gh\b/.test(message) ? "missing" : "error", message };
+    if (/gh auth login|HTTP 401/.test(e.stderr)) return { ok: false, reason: "auth", message };
+    return { ok: false, reason: "error", message };
+  }
+}
+async function signedIn(on) {
+  const a = await account(on);
+  if (!a.status.ok) throw new Error(describeAccount(a));
+}
+
 // src/github/detail/core/labels.ts
 function parseLabel(label) {
   return typeof label === "string" ? { name: label, color: null } : {
@@ -10081,11 +10094,11 @@ function issueTimeline(comments, activities) {
   items.sort((a, b) => time(a).localeCompare(time(b)));
   const shown = [];
   for (const item of items) {
-    const previous3 = shown.at(-1);
-    if (item.type === "activity" && "labels" in item.activity && previous3?.type === "activity" && "labels" in previous3.activity && item.activity.kind === previous3.activity.kind && item.activity.actor === previous3.activity.actor && item.activity.createdAt === previous3.activity.createdAt) {
+    const previous2 = shown.at(-1);
+    if (item.type === "activity" && "labels" in item.activity && previous2?.type === "activity" && "labels" in previous2.activity && item.activity.kind === previous2.activity.kind && item.activity.actor === previous2.activity.actor && item.activity.createdAt === previous2.activity.createdAt) {
       shown[shown.length - 1] = {
         type: "activity",
-        activity: { ...previous3.activity, labels: [...previous3.activity.labels, ...item.activity.labels] }
+        activity: { ...previous2.activity, labels: [...previous2.activity.labels, ...item.activity.labels] }
       };
     } else shown.push(item);
   }
@@ -10154,13 +10167,23 @@ async function readIssue(repo, number, on) {
   return parseIssueDetail(issue, timeline);
 }
 async function addComment(repo, number, body, on) {
-  const comment = await api(`repos/${repo}/issues/${number}/comments`, { on, method: "POST", rawFields: { body } });
-  return parseComment(comment, detailUrl({ kind: "issue", repo, number }));
+  return written(
+    { repo, number, issue: true },
+    async () => parseComment(
+      await api(`repos/${repo}/issues/${number}/comments`, { on, method: "POST", rawFields: { body } }),
+      detailUrl({ kind: "issue", repo, number })
+    ),
+    (comment) => ({ repo, number, comment })
+  );
 }
 async function setIssueState(repo, number, state, on) {
-  return parseIssueChange(
-    await api(`repos/${repo}/issues/${number}`, { on, method: "PATCH", rawFields: { state } }),
-    repo
+  return written(
+    { repo, number, issue: true },
+    async () => parseIssueChange(
+      await api(`repos/${repo}/issues/${number}`, { on, method: "PATCH", rawFields: { state } }),
+      repo
+    ),
+    (state2) => ({ repo, number, state: state2 })
   );
 }
 
@@ -10173,10 +10196,10 @@ var peekIssueGroup = issueGroups.peek;
 var moreIssues = issueGroups.more;
 function issueChanged(change) {
   const repo = change.repo.toLowerCase();
-  issueGroups.kept.patch((key, group) => {
-    const g = groupOf(key);
-    return g.repo === repo ? applyChange(g.kind, group, change, g.login) : void 0;
-  });
+  issueGroups.patch((g, group) => g.repo === repo ? applyChange(g.kind, group, change, g.login) : void 0);
+}
+function invalidateIssues(repo) {
+  issueGroups.patch((where, group) => where.repo === repo.toLowerCase() ? group : void 0);
 }
 
 // src/github/issues/views/issues.ts
@@ -10261,7 +10284,7 @@ var detailEmpty = () => div3().flex_1();
 function detailHeader(host, ref, shown, refresh) {
   const t = colors();
   const url = shown.url ?? detailUrl(ref);
-  const previous3 = host.previous();
+  const previous2 = host.previous();
   const number = link(`${ref.kind}-browser`, url, `#${ref.number}`).px(2).rounded(4).text_color(t.accent).hover((s) => s.bg(t.hover)).tooltip(`Open ${ref.repo} #${ref.number} in browser`).accessibility_label(`Open #${ref.number} in browser`);
   const copy = button(
     `${ref.kind}-copy`,
@@ -10270,9 +10293,9 @@ function detailHeader(host, ref, shown, refresh) {
     (_e, cx) => cx.write_to_clipboard(url)
   );
   return h_flex2().flex_none().px(24).pt(18).pb(12).gap(12).items_start().when(
-    previous3 !== null,
+    previous2 !== null,
     (el) => el.child(
-      square(button(`${ref.kind}-back`, "\u2190", `Back to #${previous3?.number}`, (_e, cx) => host.back(cx))).text_size(
+      square(button(`${ref.kind}-back`, "\u2190", `Back to #${previous2?.number}`, (_e, cx) => host.back(cx))).text_size(
         22
       )
     )
@@ -10477,7 +10500,6 @@ var RowPreviews = class {
 
 // src/github/sidebar/views/groups.ts
 var GroupList = class {
-  /** The row under the pointer ("<kind>#<number>"): it shows its actions. */
   hovered = null;
   groups;
   host;
@@ -10509,11 +10531,9 @@ var GroupList = class {
   get notFound() {
     return this.all().map((g) => g.failure).find((f) => f?.notFound);
   }
-  /** A loaded page of any group (what the tab's notice may depend on). */
   get anyPage() {
     return this.all().map((g) => g.page).find((p) => p !== void 0);
   }
-  /** Shows what is kept for this place at once (another place: nothing yet). */
   show() {
     for (const { kind } of this.source.groups) this.reset(kind);
   }
@@ -10523,7 +10543,6 @@ var GroupList = class {
     g.failure = void 0;
     g.loading = g.loadingMore = false;
   }
-  /** Asks for every expanded group's first page (fresh kept pages are reused unless `force`). */
   load(cx, force = false, kinds) {
     for (const { kind } of this.source.groups) {
       if (!kinds || kinds.includes(kind)) this.loadGroup(cx, kind, force);
@@ -10551,7 +10570,6 @@ var GroupList = class {
       }
     });
   }
-  /** Unfolding shows what is kept and asks for what is stale. */
   toggle(cx, kind) {
     const g = this.groups[kind];
     g.expanded = !g.expanded;
@@ -10583,7 +10601,6 @@ var GroupList = class {
   render(cx) {
     return this.source.groups.map((spec) => this.group(spec, cx));
   }
-  /** A foldable group: its title and count, then (unfolded) why it failed, its rows and Load more. */
   group({ kind, title, empty }, cx) {
     const t = colors();
     const id = this.source.kind;
@@ -10613,7 +10630,6 @@ var GroupList = class {
       ).children(rows.map((row) => this.row(kind, row, cx))).when(Boolean(page?.more), (el2) => el2.child(more))
     );
   }
-  /** A row's frame: click opens it; the pointer over it swaps its end for Copy and Open in browser. */
   row(kind, row, cx) {
     const t = colors();
     const id = this.source.kind;
@@ -10656,7 +10672,6 @@ function issueList(host, failed) {
   return new GroupList(host, {
     kind: "issue",
     groups: [
-      // One word like the others; the empty text says whose.
       { kind: "assigned", title: "Assigned", empty: "No open issues assigned to you." },
       { kind: "open", title: "Open", empty: "No open issues." },
       { kind: "closed", title: "Closed", empty: "No closed issues." }
@@ -10883,15 +10898,15 @@ function parseChecks(pages, statuses) {
   }
   return checks;
 }
+function checkState(status2) {
+  if (/^(failure|error|timed_out|cancelled|action_required|startup_failure|stale)$/.test(status2)) return "failed";
+  if (/^(pending|queued|in_progress|waiting|requested)$/.test(status2)) return "pending";
+  return status2 === "success" ? "successful" : "other";
+}
 function checkSummary(checks) {
   if (!checks.length) return { label: "No checks reported", tone: "dim", icon: "\u25CB" };
   const counts = { failed: 0, pending: 0, successful: 0, other: 0 };
-  for (const { status: status2 } of checks) {
-    if (/^(failure|error|timed_out|cancelled|action_required|startup_failure|stale)$/.test(status2)) counts.failed++;
-    else if (/^(pending|queued|in_progress|waiting|requested)$/.test(status2)) counts.pending++;
-    else if (status2 === "success") counts.successful++;
-    else counts.other++;
-  }
+  for (const { status: status2 } of checks) counts[checkState(status2)]++;
   const label = Object.entries(counts).filter(([, count]) => count > 0).map(([kind, count]) => `${count} ${kind} check${count === 1 ? "" : "s"}`).join(", ");
   return {
     label,
@@ -10899,7 +10914,10 @@ function checkSummary(checks) {
     icon: counts.failed ? "\xD7" : counts.pending || counts.other ? "\u25CB" : "\u2713"
   };
 }
-var checkHolds = (check) => /fail|pending|queued|progress|error/i.test(check.status);
+var checkHolds = (check) => {
+  const state = checkState(check.status);
+  return state === "failed" || state === "pending";
+};
 
 // src/github/pulls/core/merge.ts
 function selectedMergeMethod(methods, selected) {
@@ -10922,10 +10940,23 @@ function blockers(reviewers, checks) {
     checks.some(checkHolds) && CHECKS
   ].filter((x) => Boolean(x));
 }
+function mergeStateReason(state) {
+  switch (state) {
+    case "merged":
+      return "Pull request successfully merged.";
+    case "closed":
+      return "This pull request is closed.";
+    case "draft":
+      return "This pull request is still a work in progress.";
+    default:
+      return null;
+  }
+}
 function reason(p, methods, reviewers, checks) {
-  if (p.merged) return "Pull request successfully merged";
-  if (p.state !== "open") return "Pull request is closed";
-  if (p.draft) return "This pull request is still a draft";
+  const stateReason = mergeStateReason(
+    pullState(p.merged ? "merged" : p.state === "open" ? "open" : "closed", p.draft ?? false)
+  );
+  if (stateReason) return stateReason;
   const state = p.mergeable_state ?? "unknown";
   if (p.mergeable === true && (state === "clean" || state === "has_hooks"))
     return methods.length === 0 ? "No merge methods are enabled" : null;
@@ -10967,6 +10998,13 @@ function parseReviewers(pull, reviews) {
 }
 
 // src/github/pulls/core/pull-timeline.ts
+var timelineKey = (item) => `${item.kind}-${item.id}`;
+function timelineOrder(a, b) {
+  const time = a.createdAt.localeCompare(b.createdAt);
+  if (time) return time;
+  if (typeof a.id === "number") return typeof b.id === "number" ? a.id - b.id : -1;
+  return typeof b.id === "number" ? 1 : a.id.localeCompare(b.id);
+}
 var replyOnlyReview = (commented, body, roots, replies) => commented && !body?.trim() && roots === 0 && replies > 0;
 function pullTimeline(comments, events, reviews, inline, url) {
   const result = comments.map((c) => ({
@@ -10999,6 +11037,7 @@ function pullTimeline(comments, events, reviews, inline, url) {
       ...parseComment({ id: r.id, user: r.user, body: r.body, created_at: r.submitted_at }, url),
       kind: "review",
       verb: verbs[r.state] ?? "reviewed",
+      reviewState: r.state,
       discussion
     });
   }
@@ -11026,7 +11065,7 @@ function pullTimeline(comments, events, reviews, inline, url) {
     else if (e.event === "reopened") verb = "reopened this";
     else continue;
     result.push({
-      id: e.id ?? result.length,
+      id: e.id ?? JSON.stringify([e.event, e.sha ?? e.commit_id, e.created_at ?? e.author?.date]),
       author: e.actor ? login(e.actor) : e.author?.name ?? "deleted user",
       createdAt: e.created_at ?? e.author?.date ?? "",
       body,
@@ -11038,7 +11077,7 @@ function pullTimeline(comments, events, reviews, inline, url) {
       discussion: []
     });
   }
-  return result.sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id - b.id);
+  return result.sort(timelineOrder);
 }
 
 // src/github/pulls/core/pull-detail.ts
@@ -11098,7 +11137,6 @@ function threadRow(rows, thread) {
 
 // src/github/pulls/io/pulls.ts
 var pullListChanges = (repo, etag, on) => changes(`repos/${repo}/pulls?state=all&sort=updated&per_page=1`, etag, on);
-var pullChanges = (repo, number, etag, on) => changes(`repos/${repo}/pulls/${number}`, etag, on);
 async function pullPage(kind, remote2, login2, on, after) {
   return parsePullGroup(await graphql(pullGroupQuery(kind, remote2, login2, after), on));
 }
@@ -11120,6 +11158,60 @@ async function readPull(repo, number, on) {
   ]);
   return parsePullDetail({ pull, issue, repository, comments, reviews, events, inline, checkRuns, statuses });
 }
+var PullReader = class {
+  validators = /* @__PURE__ */ new Map();
+  head = null;
+  latest = 0;
+  repo;
+  number;
+  on;
+  constructor(repo, number, on) {
+    this.repo = repo;
+    this.number = number;
+    this.on = on;
+  }
+  async refresh(force = false, active = () => true) {
+    const request = ++this.latest;
+    const current = () => request === this.latest && active();
+    const base = `repos/${this.repo}`;
+    const paths = [
+      `${base}/pulls/${this.number}`,
+      `${base}/issues/${this.number}`,
+      `${base}/pulls/${this.number}/reviews`,
+      `${base}/pulls/${this.number}/comments`
+    ];
+    if (this.head) paths.push(`${base}/commits/${this.head}/check-runs`, `${base}/commits/${this.head}/statuses`);
+    try {
+      if (force || !this.head) {
+        await signedIn(this.on);
+        if (!current()) return null;
+        const pull2 = await readPull(this.repo, this.number, this.on);
+        if (!current()) return null;
+        this.head = pull2.headSha;
+        this.validators.clear();
+        return pull2;
+      }
+      const replies = await Promise.all(
+        paths.map(async (path) => ({
+          path,
+          change: await changes(path, this.validators.get(path) ?? null, this.on)
+        }))
+      );
+      if (!current()) return null;
+      if (!replies.some((r) => r.change.changed)) return null;
+      const pull = await readPull(this.repo, this.number, this.on);
+      if (!current()) return null;
+      this.validators = new Map(
+        replies.map(({ path, change }) => [path, change.changed ? change.etag : this.validators.get(path) ?? null])
+      );
+      this.head = pull.headSha;
+      return pull;
+    } catch (e) {
+      if (current()) this.validators.clear();
+      throw e;
+    }
+  }
+};
 async function setPullState(repo, number, state, on) {
   return written({ repo, number, pull: true }, async () => {
     const raw = await api(`repos/${repo}/pulls/${number}`, {
@@ -11285,43 +11377,34 @@ async function localPulls(remote2, { branches, head }, on) {
 var pullGroups = pagedGroups(
   (kind, r, after) => pullPage(kind, r.remote, r.login, r.on, after)
 );
-var localMatches = new Facts(64, 0);
-var localShown = /* @__PURE__ */ new WeakMap();
-var localKey = (r) => groupKey(where("local", r, r.cwd));
-function showLocal(rows, count) {
-  const page = localPage(rows, count);
-  localShown.set(rows, page);
-  return page;
-}
+var localMatches = new GroupCache(0, true);
 async function localGroup(r, force) {
-  const key = localKey(r);
-  const { rows } = await localMatches.look(key, force, async () => {
+  const batch = await localMatches.look("local", r, force, async () => {
     const snapshot = await localBranches(r.remote, r);
     const signature = JSON.stringify(snapshot);
-    const kept = localMatches.peek(key);
+    const kept = localMatches.peek("local", r);
     if (!force && kept?.signature === signature) return kept;
-    return { signature, rows: await localPulls(r.remote, snapshot, r.on) };
+    const rows = await localPulls(r.remote, snapshot, r.on);
+    return { signature, rows, page: localPage(rows, PAGE) };
   });
-  return localShown.get(rows) ?? showLocal(rows, PAGE);
+  return batch.page;
 }
 function pullsChanged(repo, on) {
-  const matches = (key) => {
-    const w = groupOf(key);
-    return w.repo === repo.toLowerCase() && (on === void 0 || w.on === on);
-  };
-  pullGroups.kept.patch((key, group) => matches(key) ? group : void 0);
-  localMatches.patch((key, value) => matches(key) ? { ...value, signature: "" } : void 0);
+  const matches = (w) => w.repo === repo.toLowerCase() && (on === void 0 || w.on === on);
+  pullGroups.patch((where, group) => matches(where) ? group : void 0);
+  localMatches.patch((where, value) => matches(where) ? { ...value, signature: "" } : void 0);
 }
 var pullGroup = (kind, r, force = false) => kind === "local" ? localGroup(r, force) : pullGroups.look(kind, r, force);
 function peekPullGroup(kind, r) {
   if (kind !== "local") return pullGroups.peek(kind, r);
-  const rows = localMatches.peek(localKey(r))?.rows;
-  return rows && localShown.get(rows);
+  return localMatches.peek("local", r)?.page;
 }
 async function morePulls(kind, r, loaded) {
   if (kind !== "local") return pullGroups.more(kind, r, loaded);
-  const rows = localMatches.peek(localKey(r))?.rows;
-  return rows && localShown.get(rows) === loaded ? showLocal(rows, loaded.rows.length + PAGE) : loaded;
+  const batch = localMatches.peek("local", r);
+  if (!batch || batch.page !== loaded) return loaded;
+  batch.page = localPage(batch.rows, loaded.rows.length + PAGE);
+  return batch.page;
 }
 
 // src/github/pulls/views/pulls.ts
@@ -11557,6 +11640,7 @@ function pullList(host) {
 }
 
 // src/github/shared/core/polling.ts
+var DETAIL_POLL_MS = 1e4;
 var ConditionalPoll = class {
   key = null;
   visible = false;
@@ -11617,7 +11701,7 @@ var ConditionalPoll = class {
 import { focused as focused2, panes as panes3, spaces as spaces2 } from "herdr";
 
 // src/github/shared/core/location.ts
-function focusedFolder(herdr, previous3) {
+function focusedFolder(herdr, previous2) {
   const space = herdr.spaces.find((s) => s.active), f = herdr.focused, id = space?.id ?? null;
   if (f && !f.pane && f.terminal && f.cwd) {
     return { cwd: f.cwd, on: f.terminal.includes("/") ? f.terminal.split("/")[0] ?? null : null, space: id };
@@ -11625,16 +11709,18 @@ function focusedFolder(herdr, previous3) {
   const pane = f?.pane ? herdr.panes.find((p) => p.pane === f.pane) : null;
   if (pane?.terminal)
     return { cwd: pane.cwd || f?.cwd || space?.folder || null, on: space?.machine ?? null, space: id };
-  if (previous3 && previous3.space === id) return previous3;
+  if (previous2 && previous2.space === id) return previous2;
   return { cwd: space?.folder || null, on: space?.machine ?? null, space: id };
 }
 
 // src/github/shared/io/context.ts
-var previous2 = null;
-function location() {
-  previous2 = focusedFolder({ spaces: spaces2(), panes: panes3(), focused: focused2() }, previous2);
-  return previous2;
-}
+var LocationTracker = class {
+  previous = null;
+  read() {
+    this.previous = focusedFolder({ spaces: spaces2(), panes: panes3(), focused: focused2() }, this.previous);
+    return this.previous;
+  }
+};
 
 // src/github/shared/io/place.ts
 var accounts = new Facts(16, 60 * 6e4, (a) => a.status.ok);
@@ -11653,7 +11739,7 @@ function noRepository(cwd) {
   return { title: "No GitHub repository", detail: name ? `${name} has no GitHub remote. ${hint}` : hint };
 }
 function listNotice(s) {
-  if (s.account && !s.account.status.ok) return describeAccount(s.account).text;
+  if (s.account && !s.account.status.ok) return describeAccount(s.account);
   if (s.remote === null) return null;
   const repo = s.remote ? `${s.remote.owner}/${s.remote.repo}` : "the repository";
   if (s.failure?.notFound && s.remote) {
@@ -11701,25 +11787,21 @@ var TABS = [
   { id: "prs", label: "Pull Requests" }
 ];
 var Panel = class {
-  /** The place shown (the focused folder and its machine), and which refresh is the latest: older ones drop their results. */
   context = null;
+  location = new LocationTracker();
+  folder = null;
   latest = 0;
   // undefined: not known yet for this place.
   account;
   remote;
-  /** The place could not be read (its git remote): said in the list's place. */
   failure;
-  /** The last list-change check failed: said in the footer, while the rows already shown stay. */
   checkFailed = false;
   loading = false;
-  /** The tab shown; each keeps its own state (folded groups and pages) while the other is shown. */
   tab = "issues";
   details = new DetailTabs();
   openFailure = null;
   notices = new Notices();
-  /** The repository's issue list, checked for changes while the sidebar is shown. */
   poll = new ConditionalPoll();
-  /** When this place's lists were last confirmed fresh, for the footer. */
   checkedAt = null;
   host = {
     ready: () => this.ready(),
@@ -11727,14 +11809,12 @@ var Panel = class {
     asking: () => this.isVisible(),
     open: (cx, ref, file) => this.open(cx, ref, file)
   };
-  /** Folded groups ask for nothing; which are expanded stays as the place changes. */
   issues = issueList(this.host, () => this.poll.invalidate());
-  /** They load only while their tab is shown. */
   pulls = pullList(this.host);
   init(cx) {
     cx.timer.every(POLL_SECONDS * 1e3, (cx2) => {
       if (!this.isVisible()) {
-        this.poll.sync(this.context, false);
+        this.poll.sync(this.pollKey(), false);
         return;
       }
       if (!this.loading) {
@@ -11742,6 +11822,9 @@ var Panel = class {
         if (this.tab === "prs" && !this.pulls.busy) this.pulls.load(cx2, false, ["local"]);
       }
     });
+  }
+  pollKey() {
+    return JSON.stringify([this.context, this.tab]);
   }
   isVisible() {
     return Boolean(props2()?.overlay) || sidebarVisible();
@@ -11775,22 +11858,22 @@ var Panel = class {
       }
     });
   }
-  /** The gh account's login on the folder's machine and the remote, once both are known and usable. */
   ready() {
     const status2 = this.account?.status;
-    return this.remote && status2?.ok && this.account ? { remote: this.remote, login: status2.user, on: this.account.on, cwd: location().cwd } : null;
+    return this.remote && status2?.ok && this.account ? { remote: this.remote, login: status2.user, on: this.account.on, cwd: this.folder?.cwd ?? null } : null;
   }
   /** Shows what is known about the focused place at once, then asks for what is stale (all of it unless it only moved). */
   refresh(cx, why) {
-    const where2 = location(), run4 = ++this.latest, current = () => run4 === this.latest, context = JSON.stringify(where2), force = why !== "moved";
+    const where = this.location.read(), run4 = ++this.latest, current = () => run4 === this.latest, context = JSON.stringify(where), force = why !== "moved";
     if (context !== this.context) {
       this.issues.hovered = this.pulls.hovered = null;
       this.checkedAt = null;
     }
     this.context = context;
-    this.poll.sync(context, true);
-    this.account = peekAccount(where2.on);
-    this.remote = peekRemote(where2);
+    this.folder = where;
+    this.poll.sync(this.pollKey(), true);
+    this.account = peekAccount(where.on);
+    this.remote = peekRemote(where);
     this.failure = void 0;
     this.checkFailed = false;
     this.issues.show();
@@ -11799,10 +11882,10 @@ var Panel = class {
     cx.spawn(async (cx2) => {
       try {
         const [, remote2] = await Promise.all([
-          account2(where2.on, force).then((a) => {
+          account2(where.on, force).then((a) => {
             if (current()) this.account = a;
           }),
-          remote(where2, force)
+          remote(where, force)
         ]);
         if (!current()) return;
         this.remote = remote2;
@@ -11833,8 +11916,10 @@ var Panel = class {
     }
     if (shownPullsChanged && this.isVisible() && this.tab === "prs") this.pulls.load(cx, true);
     const changes2 = notices.flatMap((n) => n.state ? [n.state] : []);
-    if (changes2.length === 0) return;
+    const invalidated = notices.filter((n) => n.issue);
+    if (changes2.length === 0 && invalidated.length === 0) return;
     changes2.forEach(issueChanged);
+    for (const notice of invalidated) invalidateIssues(notice.repo);
     this.issues.show();
     this.issues.load(cx);
   }
@@ -11852,17 +11937,16 @@ var Panel = class {
   render(cx) {
     this.details.deliver();
     this.receive(cx);
-    const where2 = location();
+    const where = this.location.read();
     const visible = this.isVisible();
-    if (!visible) this.poll.sync(this.context, false);
+    if (!visible) this.poll.sync(this.pollKey(), false);
     else if (!this.poll.shown) this.refresh(cx, "shown");
-    else if (JSON.stringify(where2) !== this.context) this.refresh(cx, "moved");
+    else if (JSON.stringify(where) !== this.context) this.refresh(cx, "moved");
     const t = colors();
     const overlay = props2()?.overlay;
     const noRemote = this.remote === null && !(this.account && !this.account.status.ok);
-    return v_flex5().id("github").size_full().min_h(0).overflow_hidden().bg(t.background).text_color(t.foreground).text_size(13).when(!overlay, (el) => el.rounded(10).border_1().border_color(t.border)).child(this.header(overlay, where2.cwd ?? "no folder")).when(noRemote, (el) => el.child(this.noRemote(where2.cwd))).when(!noRemote, (el) => el.child(this.tabs()).child(this.list(cx))).child(this.statusCard(where2.on, where2.cwd));
+    return v_flex5().id("github").size_full().min_h(0).overflow_hidden().bg(t.background).text_color(t.foreground).text_size(13).when(!overlay, (el) => el.rounded(10).border_1().border_color(t.border)).child(this.header(overlay, where.cwd ?? "no folder")).when(noRemote, (el) => el.child(this.noRemote(where.cwd))).when(!noRemote, (el) => el.child(this.tabs()).child(this.list(cx))).child(this.statusCard(where.on, where.cwd));
   }
-  /** The repository, then ↻ (Herdr's own spinner while anything loads, as its tab bar shows a working agent). */
   header(overlay, context) {
     const t = colors();
     const busy = this.loading || this.issues.busy || this.pulls.busy;
@@ -11873,7 +11957,6 @@ var Panel = class {
     const repo = this.remote ? `${this.remote.owner}/${this.remote.repo}` : "";
     return h_flex6().h(42).flex_none().px(14).gap(8).items_center().border_b(1).border_color(t.border).child(div9().font_semibold().tooltip(context).child("GitHub")).child(div9().flex_1().min_w(0).truncate().text_right().text_size(12).text_color(t.dim).child(repo)).child(busy ? div9().size(24).flex_none().flex().items_center().justify_center().child(spinner()) : refresh).when(overlay !== void 0, (el) => el.child(button("gh-close", "\xD7", "Close", () => closeOverlay(overlay))));
   }
-  /** The gh account on the folder's machine, then how fresh the lists are. What to do about a problem is said in the list. */
   statusCard(on, cwd) {
     const t = colors();
     const s = footerStatus(
@@ -11886,7 +11969,7 @@ var Panel = class {
       },
       Date.now()
     );
-    const tip = `${this.account ? describeAccount(this.account).text : "checking gh\u2026"} \xB7 ${cwd ?? "no folder"}`;
+    const tip = `${this.account ? describeAccount(this.account) : "checking gh\u2026"} \xB7 ${cwd ?? "no folder"}`;
     const dot = s.tone === "pending" ? spinner(10) : div9().size(8).rounded(4).bg(s.tone === "ok" ? t.done : t.blocked);
     return v_flex5().id("gh-status").flex_none().px(14).py(8).gap(2).border_t(1).border_color(t.border).bg(t.surface).text_size(12).tooltip(tip).accessibility_label(`${s.account} on ${s.machine}${s.sync ? `. ${s.sync}` : ""}`).child(
       h_flex6().gap(8).items_center().child(div9().w(10).flex_none().flex().items_center().justify_center().child(dot)).child(div9().flex_none().max_w(160).truncate().font_medium().child(s.account)).child(div9().flex_none().text_color(t.dim).child("\xB7")).child(div9().flex_1().min_w(0).truncate().text_color(t.dim).child(s.machine))
@@ -11903,14 +11986,13 @@ var Panel = class {
     const empty = noRepository(cwd);
     return v_flex5().flex_1().min_h(0).px(28).gap(8).items_center().justify_center().child(svg6("mods/github/assets/github.svg").size(28).text_color(t.dim)).child(div9().pt(4).font_medium().text_color(t.muted).child(empty.title)).child(div9().text_size(12).text_center().text_color(t.dim).child(empty.detail));
   }
-  /** Issues and Pull Requests; Actions and notifications join them later. */
   tabs() {
     const t = colors();
     return h_flex6().h(34).flex_none().px(10).gap(4).items_center().border_b(1).border_color(t.border).children(
       TABS.map(
         ({ id, label }) => div9().id(`gh-tab-${id}`).px(8).py(3).rounded(6).text_size(12).font_medium().cursor_pointer().text_color(this.tab === id ? t.foreground : t.muted).when(this.tab === id, (el) => el.bg(t.hover)).when(this.tab !== id, (el) => el.hover((s) => s.bg(t.hover))).accessibility_label(label).on_mouse_down("left", stop).on_click((_e, cx) => {
           this.tab = id;
-          this.poll.invalidate();
+          this.poll.sync(this.pollKey(), this.isVisible());
           this.check(cx, "shown");
           this.openFailure = null;
           if (id === "prs") this.pulls.load(cx);
@@ -12012,17 +12094,14 @@ function loadProjects(cx, ref, on, entry, current) {
 }
 
 // src/github/issues/views/issue.ts
-var POLL_MS = 1e4;
 var Issue = class {
   ref = null;
   entry = null;
-  /** The new comment being written; kept when posting fails, and through refreshes. */
   draft = "";
   host;
   metadata = new DetailMetadata();
   notices = new Notices();
   box = null;
-  /** Unsent comments of the issues Back can return to. */
   drafts = /* @__PURE__ */ new Map();
   writing = null;
   writeFailure = null;
@@ -12041,7 +12120,7 @@ var Issue = class {
       if (e.secondary) this.comment(cx2);
     });
     this.box = box;
-    cx.timer.every(POLL_MS, (cx2) => {
+    cx.timer.every(DETAIL_POLL_MS, (cx2) => {
       const shown = this.syncPolling();
       if (!this.writing) this.load(cx2, shown);
     });
@@ -12072,13 +12151,13 @@ ${detailKey(this.ref)}` : null;
     const request = this.polling.begin(force);
     if (!ref || !place || !request) return;
     const key = detailKey(ref);
-    const previous3 = this.entry?.key === key ? this.entry : null;
-    let entry = !force && previous3 ? previous3 : {
+    const previous2 = this.entry?.key === key ? this.entry : null;
+    let entry = !force && previous2 ? previous2 : {
       key,
-      issue: previous3?.issue,
-      on: previous3?.on,
-      failure: previous3?.failure,
-      projects: previous3?.projects,
+      issue: previous2?.issue,
+      on: previous2?.on,
+      failure: previous2?.failure,
+      projects: previous2?.projects,
       loading: force,
       projectsLoading: false
     };
@@ -12115,12 +12194,10 @@ ${detailKey(this.ref)}` : null;
       }
     });
   }
-  /** Posts the comment box's text; the box is emptied once GitHub has it. */
   comment(cx) {
     const body = this.draft;
     this.write(cx, "comment", body.trim() !== "", async (repo, number, on) => {
-      const comment = await addComment(repo, number, body, on);
-      this.publish({ repo, number, comment });
+      await addComment(repo, number, body, on);
       const sentKey = detailKey({ kind: "issue", repo, number });
       if (this.ref && detailKey(this.ref) === sentKey && this.draft === body) {
         this.draft = "";
@@ -12130,13 +12207,8 @@ ${detailKey(this.ref)}` : null;
   }
   setState(cx, state) {
     this.write(cx, "state", true, async (repo, number, on) => {
-      this.publish({ repo, number, state: await setIssueState(repo, number, state, on) });
+      await setIssueState(repo, number, state, on);
     });
-  }
-  /** Shows this view's own write at once, then tells the other views. */
-  publish(notice) {
-    this.apply(notice);
-    announce(notice);
   }
   /** One write at a time, through the gh that read the issue; a failure is said with gh's words. */
   write(cx, kind, ready, act) {
@@ -12152,14 +12224,12 @@ ${detailKey(this.ref)}` : null;
         await act(ref.repo, ref.number, on);
       } catch (e) {
         this.writeFailure = failureOf(e).message;
-        if (e instanceof GhError && e.transient && this.entry === entry) this.load(cx2);
       } finally {
         this.writing = null;
         cx2.notify();
       }
     });
   }
-  /** A write to the shown issue: a new comment joins the timeline (once), a new state shows. */
   apply(notice) {
     const issue = this.entry?.issue;
     const comment = notice.comment;
@@ -12170,7 +12240,10 @@ ${detailKey(this.ref)}` : null;
     if (notice.state) issue.state = notice.state.state;
   }
   render(cx, layout2) {
-    for (const notice of this.notices.take()) this.apply(notice);
+    const notices = this.notices.take();
+    for (const notice of notices) this.apply(notice);
+    if (notices.some((n) => n.issue && this.ref && detailKey({ kind: "issue", ...n }) === detailKey(this.ref)))
+      this.load(cx);
     if (this.syncPolling()) this.load(cx);
     const ref = this.ref;
     const entry = this.entry;
@@ -12222,7 +12295,6 @@ ${detailKey(this.ref)}` : null;
       )
     ).child(div10().flex_1()).child(div10().text_color(t.dim).tooltip(activity.createdAt).child(relativeTime(activity.createdAt, Date.now())));
   }
-  /** A new comment, and close / reopen: GitHub's own order of the two buttons. */
   composer(issue) {
     const t = colors();
     const box = this.box;
@@ -12353,7 +12425,6 @@ function scrollbar(offset, total, height) {
     max,
     thumb,
     top: max > 0 ? offset / max * travel : 0,
-    /** The offset when the thumb's top is at `y`. */
     offsetAt: (y) => travel > 0 ? clampOffset(y / travel * max, total, height) : 0
   };
 }
@@ -12380,7 +12451,7 @@ function diffRow(row, gutters) {
 // src/github/pulls/views/diff.ts
 var CARD_ESTIMATE = 160;
 var FileDiff = class {
-  file = null;
+  patch = null;
   rows = [];
   width = 0;
   offset = 0;
@@ -12391,9 +12462,6 @@ var FileDiff = class {
   threadHeights = /* @__PURE__ */ new Map();
   /** A thumb drag: where the pointer and the thumb's top were when it started. */
   drag = null;
-  init() {
-    this.offset = 0;
-  }
   jump(comment) {
     this.target = comment;
     this.offset = 0;
@@ -12407,9 +12475,10 @@ var FileDiff = class {
   render(file, discussions, commit) {
     const t = colors();
     const listed = "missing" in file ? null : file;
-    if (this.file !== file) {
-      this.file = file;
-      this.rows = parsePatch(listed?.patch ?? "");
+    const patch = listed?.patch ?? "";
+    if (this.patch !== patch) {
+      this.patch = patch;
+      this.rows = parsePatch(patch);
       this.width = this.rows.reduce((width, row) => Math.max(width, row.text.length * 16 + 152), 240);
     }
     const rows = this.rows;
@@ -12536,7 +12605,8 @@ import { div as div13 } from "gpui-kit";
 function timelineItem(item, discussions, onLink, open, activity) {
   const t = colors();
   if (item.kind === "event") {
-    return v_flex9().id(`pull-activity-${item.id}`).min_w(0).gap(6).px(16).py(8).text_size(12).child(
+    const key = timelineKey(item);
+    return v_flex9().id(`pull-activity-${key}`).min_w(0).gap(6).px(16).py(8).text_size(12).child(
       h_flex10().min_w(0).gap(8).items_center().child(div13().flex_none().text_color(t.dim).child("\u25C7")).child(div13().min_w(0).truncate().font_semibold().tooltip(item.author).child(item.author)).child(div13().flex_none().text_color(t.dim).child(item.verb)).child(div13().flex_1()).child(
         div13().flex_none().text_color(t.dim).tooltip(item.createdAt).child(relativeTime(item.createdAt, Date.now()))
       )
@@ -12546,13 +12616,13 @@ function timelineItem(item, discussions, onLink, open, activity) {
         v_flex9().min_w(0).pl(20).gap(6).when(
           Boolean(item.body.trim()),
           (el2) => el2.child(
-            TextView2.markdown(`pull-activity-body-${item.id}`, item.markdown).selectable(true).scrollable(false).on_link_click(onLink)
+            TextView2.markdown(`pull-activity-body-${key}`, item.markdown).selectable(true).scrollable(false).on_link_click(onLink)
           )
         ).when(
           Boolean(item.details && activity),
           (el2) => el2.child(
             button(
-              `pull-activity-toggle-${item.id}`,
+              `pull-activity-toggle-${key}`,
               activity?.expanded ? "Hide" : "Show",
               activity?.expanded ? "Hide Commit Details" : "Show Commit Details",
               (_e, cx) => activity?.toggle(cx)
@@ -12561,7 +12631,7 @@ function timelineItem(item, discussions, onLink, open, activity) {
         ).when(
           Boolean(item.details && activity?.expanded),
           (el2) => el2.child(
-            TextView2.markdown(`pull-activity-details-${item.id}`, item.details.markdown).selectable(true).scrollable(false).on_link_click(onLink)
+            TextView2.markdown(`pull-activity-details-${key}`, item.details.markdown).selectable(true).scrollable(false).on_link_click(onLink)
           )
         )
       )
@@ -12656,14 +12726,14 @@ var Acknowledged = class {
     }));
     const discussion = promoted.filter((t) => newRoots.has(t.root)).flatMap((t) => t.comments.map((comment) => ({ root: t.root, comment, path: t.path, snippet: "" })));
     const replies = pending.length - newRoots.size;
-    const commented = item.kind === "review" && item.verb === "reviewed";
+    const commented = item.kind === "review" && item.reviewState === "COMMENTED";
     const omitted = replyOnlyReview(commented, item.body, newRoots.size, replies);
     this.activity(omitted ? null : { ...item, discussion }, promoted);
     return threads.map((t) => promoted.find((p) => p.id === t.id) ?? t);
   }
   /** Keep an acknowledged submission visible while the review and diff endpoints catch up separately. */
   activity(item, threads = []) {
-    if (item) this.activities.set(`${item.kind}-${item.id}`, item);
+    if (item) this.activities.set(timelineKey(item), item);
     for (const thread of threads) {
       for (const comment of thread.comments) {
         this.threadsKept.delete(comment.id);
@@ -12676,7 +12746,7 @@ var Acknowledged = class {
   timeline(remote2) {
     for (const item of remote2) for (const d of item.discussion) this.pendingTimeline.delete(d.comment.id);
     const merged = remote2.map((item) => {
-      const key = `${item.kind}-${item.id}`;
+      const key = timelineKey(item);
       const local = this.activities.get(key);
       if (!local) return item;
       const missing = local.discussion.filter((d) => !item.discussion.some((r) => r.comment.id === d.comment.id));
@@ -12686,9 +12756,7 @@ var Acknowledged = class {
     const unseen = [...this.activities.values()].filter(
       (item) => !remote2.some((r) => r.kind === item.kind && r.id === item.id)
     );
-    return [...merged, ...this.pendingTimeline.values(), ...unseen].sort(
-      (a, b) => a.createdAt.localeCompare(b.createdAt) || a.id - b.id
-    );
+    return [...merged, ...this.pendingTimeline.values(), ...unseen].sort(timelineOrder);
   }
   /**
    * The diff's discussions: a read, plus every acknowledged comment it has not observed yet. Without a
@@ -12939,7 +13007,6 @@ var ReviewThreads = class {
   status() {
     return div14().text_size(12).text_color(this.failure ? colors().blocked : colors().dim).child(this.failure ?? (this.loading ? "Loading discussions\u2026" : ""));
   }
-  /** The height a row's open inline editors add, without creating native elements. */
   inlineHeight(path, row) {
     let count = 0;
     for (const side of ["LEFT", "RIGHT"]) {
@@ -13257,15 +13324,13 @@ var Pull = class {
   diff = new FileDiff();
   discussions = null;
   notices = new Notices();
-  missingFile = null;
   expandedActivity = /* @__PURE__ */ new Set();
   polling = new ConditionalPoll();
-  validators = /* @__PURE__ */ new Map();
+  reader = null;
   init(cx) {
-    this.diff.init();
-    cx.timer.every(1e4, (cx2) => {
+    cx.timer.every(DETAIL_POLL_MS, (cx2) => {
       const shown = this.syncPolling();
-      if (!this.writing && !this.entry?.loading) this.check(cx2, shown);
+      if (!this.writing && !this.entry?.loading) this.load(cx2, true, shown);
     });
   }
   syncPolling() {
@@ -13276,39 +13341,6 @@ ${place.pane}
 ${detailKey(this.ref)}` : null,
       Boolean(place?.visible) && this.host.active("pr")
     );
-  }
-  check(cx, force = false) {
-    this.syncPolling();
-    const request = this.polling.begin(force);
-    const ref = this.ref;
-    const place = detailLocation(this.host.reader);
-    if (!request || !ref || !place) return;
-    cx.spawn(async (cx2) => {
-      let completed;
-      try {
-        const change = await pullChanges(ref.repo, ref.number, request.etag, place.on);
-        this.syncPolling();
-        if (!this.polling.current(request)) return;
-        const paths = [`issues/${ref.number}`, `pulls/${ref.number}/reviews`, `pulls/${ref.number}/comments`];
-        const sha = this.entry?.pull?.headSha;
-        if (sha) paths.push(`commits/${sha}/check-runs`, `commits/${sha}/statuses`);
-        const replies = await Promise.all(
-          paths.map(async (path) => ({
-            path,
-            change: await changes(`repos/${ref.repo}/${path}`, this.validators.get(path) ?? null, place.on)
-          }))
-        );
-        if (!detailLocation(this.host.reader)?.visible) this.syncPolling();
-        if (!this.polling.current(request)) return;
-        const changed = change.changed || replies.some((r) => r.change.changed);
-        if (force || changed) this.load(cx2);
-        for (const reply of replies) if (reply.change.changed) this.validators.set(reply.path, reply.change.etag);
-        completed = change;
-      } catch {
-      } finally {
-        this.polling.finish(request, completed);
-      }
-    });
   }
   host;
   metadata = new DetailMetadata();
@@ -13324,12 +13356,11 @@ ${detailKey(this.ref)}` : null,
     this.stateFailure = "";
     this.metadata.expanded = false;
     this.ref = ref;
-    this.validators.clear();
+    this.reader = null;
     this.polling.invalidate();
     this.entry = null;
     this.files = null;
     this.discussions = null;
-    this.missingFile = null;
     this.expandedActivity.clear();
     this.diff.jump(null);
     this.selected = null;
@@ -13342,42 +13373,55 @@ ${detailKey(this.ref)}` : null,
     if (path !== null) this.files?.load(cx);
     cx.notify();
   }
-  load(cx, refreshRelated = true) {
+  load(cx, refreshRelated = true, force = true) {
     const ref = this.ref;
     const place = detailLocation(this.host.reader);
-    if (!ref || !place || !this.host.active("pr")) return;
+    this.syncPolling();
+    const request = this.polling.begin(force);
+    if (!ref || !place || !request) return;
+    this.reader ??= new PullReader(ref.repo, ref.number, place.on);
+    const reader2 = this.reader;
     this.discussions ??= new ReviewThreads(ref, place.on, this.host);
-    if (refreshRelated) this.discussions.load(cx);
     this.files ??= new ChangedFiles(`reader-${this.host.reader}`, ref, place.on, (cx2, path) => this.select(cx2, path));
-    if (refreshRelated && this.selected !== null) this.files.load(cx, true);
-    const entry = { pull: this.entry?.pull, on: this.entry?.on, loading: true, projectsLoading: false };
+    if (force && refreshRelated) {
+      this.discussions.load(cx);
+      if (this.selected !== null) this.files.load(cx, true);
+    }
+    let entry = force ? { pull: this.entry?.pull, on: this.entry?.on, loading: true, projectsLoading: false } : this.entry ?? { loading: false, projectsLoading: false };
     this.entry = entry;
     cx.spawn(async (cx2) => {
-      const current = () => this.entry === entry && this.host.active("pr");
+      const current = () => {
+        this.syncPolling();
+        return this.entry === entry && this.polling.current(request) && this.host.active("pr");
+      };
+      let completed;
       try {
-        await signedIn(place.on);
+        const pull = await reader2.refresh(force, current);
+        this.syncPolling();
         if (!current()) return;
-        const pull = await readPull(ref.repo, ref.number, place.on);
-        if (!current()) return;
-        entry.pull = pull;
-        entry.on = place.on;
-        loadProjects(cx2, ref, place.on, entry, current);
+        if (pull) {
+          entry = { ...entry, pull, on: place.on, projectsLoading: false };
+          this.entry = entry;
+          loadProjects(cx2, ref, place.on, entry, () => this.entry === entry);
+          if (!force && refreshRelated) {
+            this.discussions?.load(cx2);
+            if (this.selected !== null) this.files?.load(cx2, true);
+          }
+        }
+        entry.failure = void 0;
+        completed = { changed: pull !== null, etag: null };
       } catch (e) {
-        if (current()) {
-          entry.failure = readFailure(ref, e);
-          this.polling.invalidate();
-          this.validators.clear();
-        }
+        if (current() && force) entry.failure = readFailure(ref, e);
       } finally {
-        if (current()) {
-          entry.loading = false;
-          cx2.notify();
-        }
+        this.syncPolling();
+        const result = this.polling.finish(request, completed);
+        if (this.entry === entry) entry.loading = false;
+        if (result.accepted && result.notify) cx2.notify();
       }
     });
   }
   render(cx, layout2) {
-    if (this.syncPolling()) this.check(cx, true);
+    if (this.syncPolling()) this.load(cx);
     const on = detailLocation(this.host.reader)?.on;
     if (this.notices.take().some(
       (n) => n.repo === this.ref?.repo && n.number === this.ref.number && (n.pull || n.threads && n.threads.on === on)
@@ -13423,12 +13467,11 @@ ${detailKey(this.ref)}` : null,
         )
       ).child(this.diff.render(file, this.discussions ?? void 0, this.entry?.pull?.headSha));
     if (this.selected && this.files?.files && this.discussions?.threads.some((thread) => thread.path === this.selected)) {
-      const missing = this.missingFile?.path === this.selected ? this.missingFile : {
+      const missing = {
         path: this.selected,
         url: this.entry?.pull?.url ?? (this.ref ? detailUrl(this.ref) : ""),
         missing: true
       };
-      this.missingFile = missing;
       return v_flex11().flex_1().min_h(0).child(quiet("This file is no longer in the changed-files list. Its discussions are shown below.")).child(this.diff.render(missing, this.discussions));
     }
     const failure = this.files?.failure ?? this.discussions?.failure;
@@ -13461,7 +13504,7 @@ ${detailKey(this.ref)}` : null,
         // Discussion metadata is fetched once per PR; report its progress/failure once, not per thread.
         ...this.discussions?.loading || this.discussions?.failure ? [this.discussions.status()] : [],
         ...(this.discussions?.acknowledged.timeline(pull.timeline) ?? pull.timeline).map((item) => {
-          const key = JSON.stringify([item.author, item.createdAt, item.body]);
+          const key = timelineKey(item);
           return timelineItem(item, this.discussions, onLink, (cx, path, comment) => this.select(cx, path, comment), {
             expanded: this.expandedActivity.has(key),
             toggle: (cx) => {
@@ -13539,7 +13582,7 @@ ${detailKey(this.ref)}` : null,
     const info = pull.merge;
     const method = selectedMergeMethod(info.methods, this.method);
     const t = colors();
-    const reason2 = pull.state === "draft" ? "This pull request is still a work in progress." : pull.state === "closed" ? "This pull request is closed." : pull.state === "merged" ? "Pull request successfully merged." : info.reason ?? "This branch has no conflicts with the base branch.";
+    const reason2 = mergeStateReason(pull.state) ?? info.reason ?? "This branch has no conflicts with the base branch.";
     const area = v_flex11().border_t(1).border_color(t.border).child(
       h_flex12().px(16).py(12).gap(10).items_center().child(
         div15().text_color(!info.reason || pull.state === "merged" ? t.done : t.dim).child(!info.reason || pull.state === "merged" ? "\u2713" : "\u25CB")

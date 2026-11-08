@@ -1,6 +1,6 @@
 // Writes GitHub has acknowledged, shown until the discussion reads that lag behind them observe each one.
 import type { Comment } from "../../detail/core/discussion.ts";
-import { type PullTimelineItem, replyOnlyReview } from "./pull-timeline.ts";
+import { type PullTimelineItem, replyOnlyReview, timelineKey, timelineOrder } from "./pull-timeline.ts";
 import type { ReviewThread } from "./review-threads.ts";
 
 /** A comment is observed once a read returns it as it now is: a draft, or published. */
@@ -59,7 +59,7 @@ export class Acknowledged {
 			.filter((t) => newRoots.has(t.root))
 			.flatMap((t) => t.comments.map((comment) => ({ root: t.root, comment, path: t.path, snippet: "" })));
 		const replies = pending.length - newRoots.size;
-		const commented = item.kind === "review" && item.verb === "reviewed";
+		const commented = item.kind === "review" && item.reviewState === "COMMENTED";
 		const omitted = replyOnlyReview(commented, item.body, newRoots.size, replies);
 		this.activity(omitted ? null : { ...item, discussion }, promoted);
 		return threads.map((t) => promoted.find((p) => p.id === t.id) ?? t);
@@ -67,7 +67,7 @@ export class Acknowledged {
 
 	/** Keep an acknowledged submission visible while the review and diff endpoints catch up separately. */
 	activity(item: PullTimelineItem | null, threads: ReviewThread[] = []): void {
-		if (item) this.activities.set(`${item.kind}-${item.id}`, item);
+		if (item) this.activities.set(timelineKey(item), item);
 		for (const thread of threads) {
 			for (const comment of thread.comments) {
 				// A thread kept for one of its comments is replaced by the whole promoted thread.
@@ -82,7 +82,7 @@ export class Acknowledged {
 	timeline(remote: PullTimelineItem[]): PullTimelineItem[] {
 		for (const item of remote) for (const d of item.discussion) this.pendingTimeline.delete(d.comment.id);
 		const merged = remote.map((item) => {
-			const key = `${item.kind}-${item.id}`;
+			const key = timelineKey(item);
 			const local = this.activities.get(key);
 			if (!local) return item;
 			const missing = local.discussion.filter((d) => !item.discussion.some((r) => r.comment.id === d.comment.id));
@@ -92,9 +92,7 @@ export class Acknowledged {
 		const unseen = [...this.activities.values()].filter(
 			(item) => !remote.some((r) => r.kind === item.kind && r.id === item.id),
 		);
-		return [...merged, ...this.pendingTimeline.values(), ...unseen].sort(
-			(a, b) => a.createdAt.localeCompare(b.createdAt) || a.id - b.id,
-		);
+		return [...merged, ...this.pendingTimeline.values(), ...unseen].sort(timelineOrder);
 	}
 
 	/**

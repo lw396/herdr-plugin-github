@@ -29,7 +29,6 @@ export const remote = (folder: Folder, force = false): Promise<RemoteRepo | null
 /** undefined: not known (yet). */
 export const peekRemote = (folder: Folder): RemoteRepo | null | undefined => remotes.peek(folderKey(folder));
 
-/** Forgets everything (tests). */
 export function clear(): void {
 	accounts.clear();
 	remotes.clear();

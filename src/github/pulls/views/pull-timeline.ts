@@ -1,10 +1,9 @@
-// PR activity is compact; reviews own their code context and actionable conversations.
 import { h_flex, TextView, v_flex } from "gpui-base";
 import { type Context, div, type Element } from "gpui-kit";
 import { postCard } from "../../detail/views/detail.ts";
 import { relativeTime } from "../../shared/core/time.ts";
 import { button, colors } from "../../shared/views/ui.ts";
-import type { PullTimelineItem } from "../core/pull-timeline.ts";
+import { type PullTimelineItem, timelineKey } from "../core/pull-timeline.ts";
 import { diffSnippet } from "./diff-lines.ts";
 import type { ReviewThreads } from "./review-threads.ts";
 
@@ -17,8 +16,9 @@ export function timelineItem(
 ): Element {
 	const t = colors();
 	if (item.kind === "event") {
+		const key = timelineKey(item);
 		return v_flex()
-			.id(`pull-activity-${item.id}`)
+			.id(`pull-activity-${key}`)
 			.min_w(0)
 			.gap(6)
 			.px(16)
@@ -45,7 +45,7 @@ export function timelineItem(
 						.gap(6)
 						.when(Boolean(item.body.trim()), (el) =>
 							el.child(
-								TextView.markdown(`pull-activity-body-${item.id}`, item.markdown)
+								TextView.markdown(`pull-activity-body-${key}`, item.markdown)
 									.selectable(true)
 									.scrollable(false)
 									.on_link_click(onLink),
@@ -54,7 +54,7 @@ export function timelineItem(
 						.when(Boolean(item.details && activity), (el) =>
 							el.child(
 								button(
-									`pull-activity-toggle-${item.id}`,
+									`pull-activity-toggle-${key}`,
 									activity?.expanded ? "Hide" : "Show",
 									activity?.expanded ? "Hide Commit Details" : "Show Commit Details",
 									(_e, cx) => activity?.toggle(cx),
@@ -65,7 +65,7 @@ export function timelineItem(
 						)
 						.when(Boolean(item.details && activity?.expanded), (el) =>
 							el.child(
-								TextView.markdown(`pull-activity-details-${item.id}`, item.details!.markdown)
+								TextView.markdown(`pull-activity-details-${key}`, item.details!.markdown)
 									.selectable(true)
 									.scrollable(false)
 									.on_link_click(onLink),

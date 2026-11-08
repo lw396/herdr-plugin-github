@@ -1,5 +1,3 @@
-// The PR description page: every REST reply becomes ready-to-render Markdown, metadata and merge state.
-
 import { parseComments } from "../../detail/core/discussion.ts";
 import { type Item, parseItem, type RestItem } from "../../detail/core/item.ts";
 import { type PullState, pullState } from "../../detail/core/state.ts";

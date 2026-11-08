@@ -1,5 +1,3 @@
-// The sidebar's Pull Requests tab: the VS Code extension's categories as foldable groups (sidebar/views/groups.ts).
-
 import { div, svg } from "gpui-kit";
 import { PULL_STATES } from "../../detail/views/state.ts";
 import { button, colors } from "../../shared/views/ui.ts";

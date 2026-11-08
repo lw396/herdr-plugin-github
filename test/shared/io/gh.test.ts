@@ -1,5 +1,6 @@
 // gh.ts through a fake `exec`. Replies are real gh 2.96 output (stdout/stderr/exit code).
 import { afterEach, describe, expect, test } from "bun:test";
+import { GhError } from "../../../src/github/shared/core/gh.ts";
 import * as gh from "../../../src/github/shared/io/gh.ts";
 import { machine, reset } from "../../fake-herdr.ts";
 
@@ -117,7 +118,7 @@ describe("apiText", () => {
 			},
 		});
 		const error = await gh.apiText("repos/lw396/wechat-wcp", ".full_name", { on: null }).catch((e) => e);
-		expect(error).toBeInstanceOf(gh.GhError);
+		expect(error).toBeInstanceOf(GhError);
 		expect(error).toMatchObject({ message: "gh: Not Found (HTTP 404)", code: 1, notFound: true });
 	});
 
@@ -169,27 +170,6 @@ describe("api", () => {
 				fields: { enable_debug_logging: true },
 			}),
 		).toEqual({});
-	});
-});
-
-describe("failureOf: a failed ask in the UI's words", () => {
-	test("a dropped connection reads as such, not as gh's EOF line; 404s are marked", () => {
-		expect(gh.failureOf(new gh.GhError('Post "https://api.github.com/graphql": EOF', 1, ""))).toEqual({
-			notFound: false,
-			message: "The connection to GitHub dropped. Try again.",
-		});
-		expect(gh.failureOf(new gh.GhError("gh: Not Found (HTTP 404)", 1, "gh: Not Found (HTTP 404)\n"))).toEqual({
-			notFound: true,
-			message: "gh: Not Found (HTTP 404)",
-		});
-	});
-
-	test("other errors keep their own message", () => {
-		expect(gh.failureOf(new Error("cannot start gh: No such file or directory (os error 2)"))).toEqual({
-			notFound: false,
-			message: "cannot start gh: No such file or directory (os error 2)",
-		});
-		expect(gh.failureOf("plain")).toEqual({ notFound: false, message: "plain" });
 	});
 });
 
@@ -289,7 +269,7 @@ describe('a dropped connection (real gh 2.96 on center: exit 1, `Get "…": EOF`
 		});
 		expect(
 			await gh.api("repos/o/r/actions/runs/42/rerun", { on: null, method: "POST" }).catch((e: unknown) => e),
-		).toBeInstanceOf(gh.GhError);
+		).toBeInstanceOf(GhError);
 		expect(f.asked.count).toBe(1);
 	});
 
@@ -302,7 +282,7 @@ describe('a dropped connection (real gh 2.96 on center: exit 1, `Get "…": EOF`
 		});
 		expect(
 			await gh.mutate({ query: "mutation { closeIssue }", variables: {} }, null).catch((e: unknown) => e),
-		).toBeInstanceOf(gh.GhError);
+		).toBeInstanceOf(GhError);
 		expect(f.asked.count).toBe(1);
 	});
 });

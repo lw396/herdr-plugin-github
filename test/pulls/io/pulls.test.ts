@@ -5,7 +5,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { pullGroupQuery } from "../../../src/github/pulls/core/pulls.ts";
 import * as pulls from "../../../src/github/pulls/io/pulls.ts";
-import { failureOf } from "../../../src/github/shared/io/gh.ts";
+import { failureOf } from "../../../src/github/shared/core/gh.ts";
 import { machine, reset } from "../../fake-herdr.ts";
 
 afterEach(reset);

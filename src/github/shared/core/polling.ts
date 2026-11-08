@@ -2,6 +2,8 @@
 // the last answer that was taken in, and answers to an older check or another place dropped.
 import type { Change } from "./gh.ts";
 
+export const DETAIL_POLL_MS = 10_000;
+
 interface Request {
 	etag: string | null;
 	force: boolean;

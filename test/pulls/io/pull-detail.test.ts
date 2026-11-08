@@ -1,39 +1,14 @@
 // Real gh 2.96 REST replies captured on center, 2026-11-07.
 import { afterEach, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
 import { projectsQuery as projectsQueryOf } from "../../../src/github/detail/core/projects.ts";
 import { readProjects } from "../../../src/github/detail/io/projects.ts";
 import * as pulls from "../../../src/github/pulls/io/pulls.ts";
 import { machine, reset } from "../../fake-herdr.ts";
+import { fixture, replies } from "./replies.ts";
 
 afterEach(reset);
-const fixture = (name: string) => readFileSync(new URL(`../../fixtures/${name}`, import.meta.url), "utf8");
 // The query itself is specified in test/detail/core/projects.test.ts.
 const projectsQuery = projectsQueryOf({ kind: "pr", repo: "lw396/herdr-plugin-github", number: 35 }, null).query;
-
-function replies(number: number) {
-	const prefix = `pull-cli-${number}`;
-	const sha = JSON.parse(fixture(`${prefix}.json`)).head.sha;
-	return {
-		"~$ gh api repos/cli/cli": {
-			stdout: fixture("repository-cli-merge-methods.json"),
-		},
-		[`~$ gh api repos/cli/cli/issues/${number}/timeline?per_page=100 --paginate --slurp`]: { stdout: "[[]]" },
-		[`~$ gh api repos/cli/cli/pulls/${number}/comments?per_page=100 --paginate --slurp`]: { stdout: "[[]]" },
-		[`~$ gh api repos/cli/cli/commits/${sha}/check-runs?per_page=100 --paginate --slurp`]: {
-			stdout: '[{"check_runs":[]}]',
-		},
-		[`~$ gh api repos/cli/cli/commits/${sha}/statuses?per_page=100 --paginate --slurp`]: { stdout: "[[]]" },
-		[`~$ gh api repos/cli/cli/pulls/${number}`]: { stdout: fixture(`${prefix}.json`) },
-		[`~$ gh api repos/cli/cli/issues/${number}`]: { stdout: fixture(`${prefix}-issue.json`) },
-		[`~$ gh api repos/cli/cli/issues/${number}/comments?per_page=100 --paginate --slurp`]: {
-			stdout: fixture(`${prefix}-comments.json`),
-		},
-		[`~$ gh api repos/cli/cli/pulls/${number}/reviews?per_page=100 --paginate --slurp`]: {
-			stdout: fixture(`${prefix}-reviews.json`),
-		},
-	};
-}
 
 test("timeline pages and check-run object pages are read on the PR machine", async () => {
 	const responses = replies(14974);

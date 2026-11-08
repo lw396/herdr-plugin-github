@@ -3,8 +3,9 @@ import { detailUrl, ownerName } from "../../detail/core/detail.ts";
 import { type Comment, parseComment } from "../../detail/core/discussion.ts";
 import { type PullState, pullState } from "../../detail/core/state.ts";
 import { written } from "../../detail/io/changes.ts";
+import { GhError } from "../../shared/core/gh.ts";
 import type { RemoteRepo } from "../../shared/core/remote.ts";
-import { api, changes, eachPage, GhError, graphql, mutate } from "../../shared/io/gh.ts";
+import { api, changes, eachPage, graphql, mutate, signedIn } from "../../shared/io/gh.ts";
 import type { LocalBranches } from "../../shared/io/git.ts";
 import { type ChangedFile, parseFiles } from "../core/files.ts";
 import type { MergeInfo, MergeMethod } from "../core/merge.ts";
@@ -23,10 +24,6 @@ import { parseThreads, type ReviewThread, type ThreadNode } from "../core/review
 export const pullListChanges = (repo: string, etag: string | null, on: string | null) =>
 	changes(`repos/${repo}/pulls?state=all&sort=updated&per_page=1`, etag, on);
 
-export const pullChanges = (repo: string, number: number, etag: string | null, on: string | null) =>
-	changes(`repos/${repo}/pulls/${number}`, etag, on);
-
-/** One page of a group, asked with the gh on `on`, whose account is `login` (for the searches). */
 export async function pullPage(
 	kind: PullGroupKind,
 	remote: RemoteRepo,
@@ -37,7 +34,6 @@ export async function pullPage(
 	return parsePullGroup(await graphql(pullGroupQuery(kind, remote, login, after), on));
 }
 
-/** A PR's description, discussion, checks and merge state. */
 export async function readPull(repo: string, number: number, on: string | null): Promise<PullDetail> {
 	const list = (path: string) => api(`${path}?per_page=100`, { on, paginate: true }) as Promise<unknown[]>;
 	const [pull, issue, repository, comments, reviews, events, inline] = await Promise.all([
@@ -55,6 +51,65 @@ export async function readPull(repo: string, number: number, on: string | null):
 		list(`repos/${repo}/commits/${sha}/statuses`),
 	]);
 	return parsePullDetail({ pull, issue, repository, comments, reviews, events, inline, checkRuns, statuses });
+}
+
+// GitHub's PR validator does not cover its discussion, review comments or commit checks.
+// Accept validators only with a successful read; otherwise the next tick must try the changed data again.
+export class PullReader {
+	private validators = new Map<string, string | null>();
+	private head: string | null = null;
+	private latest = 0;
+	private readonly repo: string;
+	private readonly number: number;
+	private readonly on: string | null;
+
+	constructor(repo: string, number: number, on: string | null) {
+		this.repo = repo;
+		this.number = number;
+		this.on = on;
+	}
+
+	async refresh(force = false, active: () => boolean = () => true): Promise<PullDetail | null> {
+		const request = ++this.latest;
+		const current = () => request === this.latest && active();
+		const base = `repos/${this.repo}`;
+		const paths = [
+			`${base}/pulls/${this.number}`,
+			`${base}/issues/${this.number}`,
+			`${base}/pulls/${this.number}/reviews`,
+			`${base}/pulls/${this.number}/comments`,
+		];
+		if (this.head) paths.push(`${base}/commits/${this.head}/check-runs`, `${base}/commits/${this.head}/statuses`);
+		try {
+			if (force || !this.head) {
+				await signedIn(this.on);
+				if (!current()) return null;
+				const pull = await readPull(this.repo, this.number, this.on);
+				if (!current()) return null;
+				this.head = pull.headSha;
+				this.validators.clear();
+				return pull;
+			}
+			const replies = await Promise.all(
+				paths.map(async (path) => ({
+					path,
+					change: await changes(path, this.validators.get(path) ?? null, this.on),
+				})),
+			);
+			if (!current()) return null;
+			if (!replies.some((r) => r.change.changed)) return null;
+			const pull = await readPull(this.repo, this.number, this.on);
+			if (!current()) return null;
+			this.validators = new Map(
+				replies.map(({ path, change }) => [path, change.changed ? change.etag : (this.validators.get(path) ?? null)]),
+			);
+			this.head = pull.headSha;
+			return pull;
+		} catch (e) {
+			if (current()) this.validators.clear();
+			throw e;
+		}
+	}
 }
 
 /** Close/reopen through the PR endpoint: reopening a draft keeps it a draft. */
@@ -161,7 +216,6 @@ export async function readPullViewed(repo: string, number: number, on: string | 
 	return viewed;
 }
 
-/** The pull request's GraphQL node id, which its mutations name. */
 export async function pullId(repo: string, number: number, on: string | null): Promise<string> {
 	const { owner, name } = ownerName(repo);
 	const data = await graphql<PullConnection<{ id: string }>>(
@@ -306,7 +360,6 @@ export async function readPullThreads(
 	return parseThreads(nodes, comments as unknown[], pullUrl(repo, number), drafts as unknown[]);
 }
 
-/** The local branches' latest PRs, in one batch. */
 export async function localPulls(
 	remote: RemoteRepo,
 	{ branches, head }: LocalBranches,

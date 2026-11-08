@@ -5,7 +5,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { type GroupKind, issueGroupQuery } from "../../../src/github/issues/core/issues.ts";
 import * as issues from "../../../src/github/issues/io/issues.ts";
-import { GhError } from "../../../src/github/shared/io/gh.ts";
+import { GhError } from "../../../src/github/shared/core/gh.ts";
 import { machine, reset } from "../../fake-herdr.ts";
 
 afterEach(reset);

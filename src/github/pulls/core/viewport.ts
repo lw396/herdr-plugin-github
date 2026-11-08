@@ -27,7 +27,6 @@ export function scrollbar(offset: number, total: number, height: number) {
 		max,
 		thumb,
 		top: max > 0 ? (offset / max) * travel : 0,
-		/** The offset when the thumb's top is at `y`. */
 		offsetAt: (y: number): number => (travel > 0 ? clampOffset((y / travel) * max, total, height) : 0),
 	};
 }

@@ -3,6 +3,8 @@ import {
 	apiArgs,
 	errorMessage,
 	explain,
+	failureOf,
+	GhError,
 	graphqlArgs,
 	parseJson,
 	transient,
@@ -100,5 +102,26 @@ describe("explain: gh's failure as the sidebar says it (real gh 2.96 stderr)", (
 
 	test("anything else: gh's own words", () => {
 		expect(explain("gh: Bad credentials (HTTP 401)")).toBe("gh: Bad credentials (HTTP 401)");
+	});
+});
+
+describe("failureOf: a failed ask in the UI's words", () => {
+	test("a dropped connection reads as such, not as gh's EOF line; 404s are marked", () => {
+		expect(failureOf(new GhError('Post "https://api.github.com/graphql": EOF', 1, ""))).toEqual({
+			notFound: false,
+			message: "The connection to GitHub dropped. Try again.",
+		});
+		expect(failureOf(new GhError("gh: Not Found (HTTP 404)", 1, "gh: Not Found (HTTP 404)\n"))).toEqual({
+			notFound: true,
+			message: "gh: Not Found (HTTP 404)",
+		});
+	});
+
+	test("other errors keep their own message", () => {
+		expect(failureOf(new Error("cannot start gh: No such file or directory (os error 2)"))).toEqual({
+			notFound: false,
+			message: "cannot start gh: No such file or directory (os error 2)",
+		});
+		expect(failureOf("plain")).toEqual({ notFound: false, message: "plain" });
 	});
 });

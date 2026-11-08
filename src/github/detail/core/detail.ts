@@ -1,5 +1,3 @@
-// What a detail pane shows: one issue or one PR of a repository.
-
 export type DetailKind = "issue" | "pr";
 
 export interface DetailRef {
@@ -56,6 +54,5 @@ export const detailTabName = (ref: DetailRef): string => `#${ref.number} · ${re
 export const detailUrl = (ref: DetailRef): string =>
 	`https://github.com/${ref.repo}/${ref.kind === "pr" ? "pull" : "issues"}/${ref.number}`;
 
-/** What a reader says when GitHub answers 404. */
 export const notVisible = (ref: DetailRef): string =>
 	`${ref.repo} #${ref.number} isn't on GitHub, or this account can't see it.`;

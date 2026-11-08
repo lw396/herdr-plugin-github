@@ -1,23 +1,21 @@
-// The panel role (the sidebar): the current repository's Issues and Pull Requests.
-
 import { h_flex, v_flex } from "gpui-base";
 import { type AsyncContext, type Context, div, type Element, svg } from "gpui-kit";
 import { closeOverlay, props } from "herdr";
 import type { DetailRef } from "../detail/core/detail.ts";
 import { Notices } from "../detail/io/changes.ts";
 import { DetailTabs } from "../detail/io/detail-tabs.ts";
-import { issueChanged } from "../issues/io/groups.ts";
+import { invalidateIssues, issueChanged } from "../issues/io/groups.ts";
 import { listChanges } from "../issues/io/issues.ts";
 import { issueList } from "../issues/views/issues.ts";
 import { pullsChanged } from "../pulls/io/groups.ts";
 import { pullListChanges } from "../pulls/io/pulls.ts";
 import { pullList } from "../pulls/views/pulls.ts";
 import { type Account, describeAccount } from "../shared/core/account.ts";
-import type { Change, Failure } from "../shared/core/gh.ts";
+import { type Change, type Failure, failureOf } from "../shared/core/gh.ts";
+import type { Location } from "../shared/core/location.ts";
 import { ConditionalPoll } from "../shared/core/polling.ts";
 import type { RemoteRepo } from "../shared/core/remote.ts";
-import { location } from "../shared/io/context.ts";
-import * as gh from "../shared/io/gh.ts";
+import { LocationTracker } from "../shared/io/context.ts";
 import * as place from "../shared/io/place.ts";
 import { button, colors, type Role, spinner, stop } from "../shared/views/ui.ts";
 import { footerStatus, listNotice, noRepository, POLL_SECONDS } from "../sidebar/core/sidebar.ts";
@@ -25,36 +23,30 @@ import type { Ready } from "../sidebar/io/groups.ts";
 import { sidebarVisible } from "../sidebar/io/visible.ts";
 import type { ListHost } from "../sidebar/views/groups.ts";
 
-/** The sidebar's tabs, in order: id and label (the VS Code extension's view name for PRs). */
 type SidebarTab = "issues" | "prs";
 const TABS: { id: SidebarTab; label: string }[] = [
 	{ id: "issues", label: "Issues" },
 	{ id: "prs", label: "Pull Requests" },
 ];
 
-/** Why the place is asked again: focus moved to another, the sidebar was shown, or ↻ was pressed. */
 type Refresh = "moved" | "shown" | "asked";
 
 export class Panel implements Role {
-	/** The place shown (the focused folder and its machine), and which refresh is the latest: older ones drop their results. */
 	private context: string | null = null;
+	private readonly location = new LocationTracker();
+	private folder: Location | null = null;
 	private latest = 0;
 	// undefined: not known yet for this place.
 	private account: Account | undefined;
 	private remote: RemoteRepo | null | undefined;
-	/** The place could not be read (its git remote): said in the list's place. */
 	private failure: Failure | undefined;
-	/** The last list-change check failed: said in the footer, while the rows already shown stay. */
 	private checkFailed = false;
 	private loading = false;
-	/** The tab shown; each keeps its own state (folded groups and pages) while the other is shown. */
 	private tab: SidebarTab = "issues";
 	private details = new DetailTabs();
 	private openFailure: string | null = null;
 	private notices = new Notices();
-	/** The repository's issue list, checked for changes while the sidebar is shown. */
 	private poll = new ConditionalPoll();
-	/** When this place's lists were last confirmed fresh, for the footer. */
 	private checkedAt: number | null = null;
 	private host: ListHost = {
 		ready: () => this.ready(),
@@ -62,15 +54,13 @@ export class Panel implements Role {
 		asking: () => this.isVisible(),
 		open: (cx, ref, file) => this.open(cx, ref, file),
 	};
-	/** Folded groups ask for nothing; which are expanded stays as the place changes. */
 	private issues = issueList(this.host, () => this.poll.invalidate());
-	/** They load only while their tab is shown. */
 	private pulls = pullList(this.host);
 
 	init(cx: AsyncContext): void {
 		cx.timer.every(POLL_SECONDS * 1000, (cx) => {
 			if (!this.isVisible()) {
-				this.poll.sync(this.context, false);
+				this.poll.sync(this.pollKey(), false);
 				return;
 			}
 			if (!this.loading) {
@@ -79,6 +69,10 @@ export class Panel implements Role {
 				if (this.tab === "prs" && !this.pulls.busy) this.pulls.load(cx, false, ["local"]);
 			}
 		});
+	}
+
+	private pollKey(): string {
+		return JSON.stringify([this.context, this.tab]);
 	}
 
 	private isVisible(): boolean {
@@ -119,17 +113,16 @@ export class Panel implements Role {
 		});
 	}
 
-	/** The gh account's login on the folder's machine and the remote, once both are known and usable. */
 	private ready(): Ready | null {
 		const status = this.account?.status;
 		return this.remote && status?.ok && this.account
-			? { remote: this.remote, login: status.user, on: this.account.on, cwd: location().cwd }
+			? { remote: this.remote, login: status.user, on: this.account.on, cwd: this.folder?.cwd ?? null }
 			: null;
 	}
 
 	/** Shows what is known about the focused place at once, then asks for what is stale (all of it unless it only moved). */
 	private refresh(cx: Context, why: Refresh): void {
-		const where = location(),
+		const where = this.location.read(),
 			run = ++this.latest,
 			current = () => run === this.latest,
 			context = JSON.stringify(where),
@@ -140,7 +133,8 @@ export class Panel implements Role {
 			this.checkedAt = null;
 		}
 		this.context = context;
-		this.poll.sync(context, true);
+		this.folder = where;
+		this.poll.sync(this.pollKey(), true);
 		// Never the previous place's facts: this place's known ones, or "…" until they arrive.
 		this.account = place.peekAccount(where.on);
 		this.remote = place.peekRemote(where);
@@ -162,7 +156,7 @@ export class Panel implements Role {
 				this.remote = remote;
 				this.check(cx, why);
 			} catch (e) {
-				if (current()) this.failure = gh.failureOf(e);
+				if (current()) this.failure = failureOf(e);
 			} finally {
 				if (current()) {
 					this.loading = false;
@@ -192,8 +186,10 @@ export class Panel implements Role {
 		}
 		if (shownPullsChanged && this.isVisible() && this.tab === "prs") this.pulls.load(cx, true);
 		const changes = notices.flatMap((n) => (n.state ? [n.state] : []));
-		if (changes.length === 0) return;
+		const invalidated = notices.filter((n) => n.issue);
+		if (changes.length === 0 && invalidated.length === 0) return;
 		changes.forEach(issueChanged);
+		for (const notice of invalidated) invalidateIssues(notice.repo);
 		this.issues.show();
 		this.issues.load(cx);
 	}
@@ -215,9 +211,9 @@ export class Panel implements Role {
 		this.details.deliver();
 		this.receive(cx);
 		// Follow the focused folder: live data re-renders us, so compare here.
-		const where = location();
+		const where = this.location.read();
 		const visible = this.isVisible();
-		if (!visible) this.poll.sync(this.context, false);
+		if (!visible) this.poll.sync(this.pollKey(), false);
 		else if (!this.poll.shown) this.refresh(cx, "shown");
 		else if (JSON.stringify(where) !== this.context) this.refresh(cx, "moved");
 		const t = colors();
@@ -243,7 +239,6 @@ export class Panel implements Role {
 		);
 	}
 
-	/** The repository, then ↻ (Herdr's own spinner while anything loads, as its tab bar shows a working agent). */
 	private header(overlay: string | undefined, context: string): Element {
 		const t = colors();
 		const busy = this.loading || this.issues.busy || this.pulls.busy;
@@ -266,7 +261,6 @@ export class Panel implements Role {
 			.when(overlay !== undefined, (el) => el.child(button("gh-close", "×", "Close", () => closeOverlay(overlay!))));
 	}
 
-	/** The gh account on the folder's machine, then how fresh the lists are. What to do about a problem is said in the list. */
 	private statusCard(on: string | null, cwd: string | null): Element {
 		const t = colors();
 		const s = footerStatus(
@@ -279,7 +273,7 @@ export class Panel implements Role {
 			},
 			Date.now(),
 		);
-		const tip = `${this.account ? describeAccount(this.account).text : "checking gh…"} · ${cwd ?? "no folder"}`;
+		const tip = `${this.account ? describeAccount(this.account) : "checking gh…"} · ${cwd ?? "no folder"}`;
 		const dot =
 			s.tone === "pending"
 				? spinner(10)
@@ -335,7 +329,6 @@ export class Panel implements Role {
 			.child(div().text_size(12).text_center().text_color(t.dim).child(empty.detail));
 	}
 
-	/** Issues and Pull Requests; Actions and notifications join them later. */
 	private tabs(): Element {
 		const t = colors();
 		return h_flex()
@@ -363,7 +356,7 @@ export class Panel implements Role {
 						.on_mouse_down("left", stop)
 						.on_click((_e, cx) => {
 							this.tab = id;
-							this.poll.invalidate();
+							this.poll.sync(this.pollKey(), this.isVisible());
 							this.check(cx, "shown");
 							// A tab that failed to open was asked from the other list.
 							this.openFailure = null;

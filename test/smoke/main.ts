@@ -63,7 +63,6 @@ export default class Smoke extends View {
 
 		const files = parseFiles(filePages.flat()).map((file, index) => ({ ...file, viewed: index === 0 }));
 		const fileRef = { kind: "pr", repo: "lw396/herdr-plugin-github", number: 35 } as const;
-		this.threadDiff.init();
 		this.discussions = new ReviewThreads(fileRef, "center", {
 			reader: "smoke-threads",
 			active: () => true,
@@ -73,7 +72,6 @@ export default class Smoke extends View {
 		});
 		// Exercise the native state lifecycle: create in init, then render the real summary below.
 		this.discussions.init();
-		this.discussions.init(); // Re-initializing must retain the same editor and its draft.
 		this.discussions.threads = parseThreads(
 			threadPages.data.repository.pullRequest.reviewThreads
 				.nodes as import("../../src/github/pulls/core/review-threads.ts").ThreadNode[],

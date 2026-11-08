@@ -1,3 +1,4 @@
+import { type PullState, pullState } from "../../detail/core/state.ts";
 import { checkHolds, type PullCheck } from "./checks.ts";
 import type { Reviewer } from "./reviewers.ts";
 
@@ -45,10 +46,24 @@ function blockers(reviewers: Reviewer[], checks: PullCheck[]): string[] {
 	].filter((x): x is string => Boolean(x));
 }
 
+export function mergeStateReason(state: PullState): string | null {
+	switch (state) {
+		case "merged":
+			return "Pull request successfully merged.";
+		case "closed":
+			return "This pull request is closed.";
+		case "draft":
+			return "This pull request is still a work in progress.";
+		default:
+			return null;
+	}
+}
+
 function reason(p: RestMergePull, methods: MergeMethod[], reviewers: Reviewer[], checks: PullCheck[]): string | null {
-	if (p.merged) return "Pull request successfully merged";
-	if (p.state !== "open") return "Pull request is closed";
-	if (p.draft) return "This pull request is still a draft";
+	const stateReason = mergeStateReason(
+		pullState(p.merged ? "merged" : p.state === "open" ? "open" : "closed", p.draft ?? false),
+	);
+	if (stateReason) return stateReason;
 	const state = p.mergeable_state ?? "unknown";
 	if (p.mergeable === true && (state === "clean" || state === "has_hooks"))
 		return methods.length === 0 ? "No merge methods are enabled" : null;

@@ -158,7 +158,6 @@ type ReviewPage = {
 	pageInfo: { hasNextPage: boolean; endCursor: string | null };
 };
 
-/** The viewer's own pending review, if any; `id` is the pull request's node id. */
 export async function readPullReview(
 	repo: string,
 	number: number,

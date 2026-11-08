@@ -1,12 +1,7 @@
-// The sidebar's foldable groups (Issues' and Pull Requests' alike): a heading with the count, then the rows,
-// why the group failed with Retry, and Load more. Each tab supplies what its groups are, how they are asked,
-// and what a row shows; this keeps their pages, folding, loading and the row under the pointer.
-
 import { h_flex, v_flex } from "gpui-base";
 import { type Context, div, type Element } from "gpui-kit";
 import type { DetailKind, DetailRef } from "../../detail/core/detail.ts";
-import type { Failure } from "../../shared/core/gh.ts";
-import * as gh from "../../shared/io/gh.ts";
+import { type Failure, failureOf } from "../../shared/core/gh.ts";
 import { button, colors, spinner, stop } from "../../shared/views/ui.ts";
 import type { Page } from "../core/page.ts";
 import { previewKey } from "../core/preview.ts";
@@ -20,7 +15,6 @@ export interface ListHost {
 	run(): number;
 	/** False stops asking (a hidden sidebar). */
 	asking(): boolean;
-	/** Opens (or selects) the row's reader tab. */
 	open(cx: Context, ref: DetailRef, file?: string): void;
 }
 
@@ -45,14 +39,12 @@ export interface GroupSource<K extends string, R extends Row, P extends Page<R>>
 	peek(kind: K, r: Ready): P | undefined;
 	ask(kind: K, r: Ready, force: boolean): Promise<P>;
 	more(kind: K, r: Ready, loaded: P): Promise<P>;
-	/** What the row always shows first. */
 	cells(row: R): Element[];
 	/** What follows, unless the pointer is over the row: then Copy and Open in browser do. */
 	idle(row: R): Element[];
 	/** Optional PR disclosure before the row, with its expanded changed-files navigator below. */
 	disclosure?(row: R, key: string): Element;
 	expandedRow?(row: R, key: string, cx: Context): Element | null;
-	/** A failed ask (Issues forget their list's validator, so the next check asks again). */
 	failed?(): void;
 }
 
@@ -65,7 +57,6 @@ interface Group<P> {
 }
 
 export class GroupList<K extends string, R extends Row, P extends Page<R>> {
-	/** The row under the pointer ("<kind>#<number>"): it shows its actions. */
 	hovered: string | null = null;
 	private readonly groups: Record<K, Group<P>>;
 	private readonly host: ListHost;
@@ -104,14 +95,12 @@ export class GroupList<K extends string, R extends Row, P extends Page<R>> {
 			.find((f) => f?.notFound);
 	}
 
-	/** A loaded page of any group (what the tab's notice may depend on). */
 	get anyPage(): P | undefined {
 		return this.all()
 			.map((g) => g.page)
 			.find((p) => p !== undefined);
 	}
 
-	/** Shows what is kept for this place at once (another place: nothing yet). */
 	show(): void {
 		for (const { kind } of this.source.groups) this.reset(kind);
 	}
@@ -124,7 +113,6 @@ export class GroupList<K extends string, R extends Row, P extends Page<R>> {
 		g.loading = g.loadingMore = false;
 	}
 
-	/** Asks for every expanded group's first page (fresh kept pages are reused unless `force`). */
 	load(cx: Context, force = false, kinds?: readonly K[]): void {
 		for (const { kind } of this.source.groups) {
 			if (!kinds || kinds.includes(kind)) this.loadGroup(cx, kind, force);
@@ -145,7 +133,7 @@ export class GroupList<K extends string, R extends Row, P extends Page<R>> {
 				if (run === this.host.run()) g.page = this.source.peek(kind, r) ?? page;
 			} catch (e) {
 				if (run === this.host.run()) {
-					g.failure = gh.failureOf(e);
+					g.failure = failureOf(e);
 					this.source.failed?.();
 				}
 			} finally {
@@ -157,7 +145,6 @@ export class GroupList<K extends string, R extends Row, P extends Page<R>> {
 		});
 	}
 
-	/** Unfolding shows what is kept and asks for what is stale. */
 	private toggle(cx: Context, kind: K): void {
 		const g = this.groups[kind];
 		g.expanded = !g.expanded;
@@ -181,7 +168,7 @@ export class GroupList<K extends string, R extends Row, P extends Page<R>> {
 				const page = await this.source.more(kind, r, loaded);
 				if (run === this.host.run()) g.page = page;
 			} catch (e) {
-				if (run === this.host.run()) g.failure = gh.failureOf(e);
+				if (run === this.host.run()) g.failure = failureOf(e);
 			} finally {
 				if (run === this.host.run()) {
 					g.loadingMore = false;
@@ -195,7 +182,6 @@ export class GroupList<K extends string, R extends Row, P extends Page<R>> {
 		return this.source.groups.map((spec) => this.group(spec, cx));
 	}
 
-	/** A foldable group: its title and count, then (unfolded) why it failed, its rows and Load more. */
 	private group({ kind, title, empty }: GroupSpec<K>, cx: Context): Element {
 		const t = colors();
 		const id = this.source.kind;
@@ -280,7 +266,6 @@ export class GroupList<K extends string, R extends Row, P extends Page<R>> {
 			);
 	}
 
-	/** A row's frame: click opens it; the pointer over it swaps its end for Copy and Open in browser. */
 	private row(kind: K, row: R, cx: Context): Element {
 		const t = colors();
 		const id = this.source.kind;

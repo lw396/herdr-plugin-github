@@ -4,9 +4,11 @@
 import { focused, panes, spaces } from "herdr";
 import { focusedFolder, type Location } from "../core/location.ts";
 
-let previous: Location | null = null;
+export class LocationTracker {
+	private previous: Location | null = null;
 
-export function location(): Location {
-	previous = focusedFolder({ spaces: spaces(), panes: panes(), focused: focused() }, previous);
-	return previous;
+	read(): Location {
+		this.previous = focusedFolder({ spaces: spaces(), panes: panes(), focused: focused() }, this.previous);
+		return this.previous;
+	}
 }

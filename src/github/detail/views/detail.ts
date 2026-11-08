@@ -1,4 +1,3 @@
-// The parts issue and PR pages share inside a reader tab: header, body, posts, metadata and links.
 import { h_flex, TextView, v_flex } from "gpui-base";
 import { type Color, type Context, div, type Element, svg } from "gpui-kit";
 import { relativeTime } from "../../shared/core/time.ts";
@@ -308,7 +307,6 @@ export function labels(list: Label[]): Element {
 
 const milestone = (title: string | null): Element => (title ? div().text_size(13).child(title) : quiet("No milestone"));
 
-/** Each Project opens in the browser; why there are none shows in a tooltip. */
 function projects(list: Projects | undefined, loading: boolean): Element {
 	const t = colors();
 	if (!list) return quiet(loading ? "Loading Projects…" : "Projects not loaded.");

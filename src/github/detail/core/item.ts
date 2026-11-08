@@ -1,4 +1,3 @@
-// What issue and PR pages share: GitHub's REST issue-like fields, ready to render.
 import { login, parseReactions, type Reaction } from "./discussion.ts";
 import { type Label, parseLabel } from "./labels.ts";
 import { readerMarkdown } from "./markdown.ts";

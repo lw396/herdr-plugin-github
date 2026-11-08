@@ -1,4 +1,3 @@
-// A PR reader switches between its published discussion and a changed file's read-only unified diff.
 import { h_flex, v_flex } from "gpui-base";
 import { type AsyncContext, type Context, div, type Element } from "gpui-kit";
 import { type DetailRef, detailKey, detailUrl } from "../../detail/core/detail.ts";
@@ -20,14 +19,15 @@ import {
 } from "../../detail/views/detail.ts";
 import { loadProjects, readFailure } from "../../detail/views/item-load.ts";
 import { PULL_STATES } from "../../detail/views/state.ts";
-import { ConditionalPoll } from "../../shared/core/polling.ts";
-import * as gh from "../../shared/io/gh.ts";
+import { failureOf } from "../../shared/core/gh.ts";
+import { ConditionalPoll, DETAIL_POLL_MS } from "../../shared/core/polling.ts";
 import { actionButton, button, colors, link } from "../../shared/views/ui.ts";
 import { checkSummary } from "../core/checks.ts";
-import { type MergeMethod, selectedMergeMethod } from "../core/merge.ts";
+import { type MergeMethod, mergeStateReason, selectedMergeMethod } from "../core/merge.ts";
 import type { PullDetail } from "../core/pull-detail.ts";
+import { timelineKey } from "../core/pull-timeline.ts";
 import type { ReviewState } from "../core/reviewers.ts";
-import { deletePullBranch, mergePull, pullChanges, readPull, readyPull, setPullState } from "../io/pulls.ts";
+import { deletePullBranch, mergePull, PullReader, readyPull, setPullState } from "../io/pulls.ts";
 import { type DiffSubject, FileDiff } from "./diff.ts";
 import { ChangedFiles } from "./files.ts";
 import { timelineItem } from "./pull-timeline.ts";
@@ -66,17 +66,15 @@ export class Pull {
 	private diff = new FileDiff();
 	private discussions: ReviewThreads | null = null;
 	private notices = new Notices();
-	private missingFile: Extract<DiffSubject, { missing: true }> | null = null;
 	private expandedActivity = new Set<string>();
 
 	private polling = new ConditionalPoll();
-	private validators = new Map<string, string | null>();
+	private reader: PullReader | null = null;
 
 	init(cx: AsyncContext): void {
-		this.diff.init();
-		cx.timer.every(10_000, (cx) => {
+		cx.timer.every(DETAIL_POLL_MS, (cx) => {
 			const shown = this.syncPolling();
-			if (!this.writing && !this.entry?.loading) this.check(cx, shown);
+			if (!this.writing && !this.entry?.loading) this.load(cx, true, shown);
 		});
 	}
 
@@ -88,41 +86,6 @@ export class Pull {
 		);
 	}
 
-	private check(cx: Context, force = false): void {
-		this.syncPolling();
-		const request = this.polling.begin(force);
-		const ref = this.ref;
-		const place = detailLocation(this.host.reader);
-		if (!request || !ref || !place) return;
-		cx.spawn(async (cx) => {
-			let completed: import("../../shared/core/gh.ts").Change | undefined;
-			try {
-				const change = await pullChanges(ref.repo, ref.number, request.etag, place.on);
-				this.syncPolling();
-				if (!this.polling.current(request)) return;
-				// PR validators are not assumed to cover discussions or commit checks.
-				const paths = [`issues/${ref.number}`, `pulls/${ref.number}/reviews`, `pulls/${ref.number}/comments`];
-				const sha = this.entry?.pull?.headSha;
-				if (sha) paths.push(`commits/${sha}/check-runs`, `commits/${sha}/statuses`);
-				const replies = await Promise.all(
-					paths.map(async (path) => ({
-						path,
-						change: await gh.changes(`repos/${ref.repo}/${path}`, this.validators.get(path) ?? null, place.on),
-					})),
-				);
-				if (!detailLocation(this.host.reader)?.visible) this.syncPolling();
-				if (!this.polling.current(request)) return;
-				const changed = change.changed || replies.some((r) => r.change.changed);
-				if (force || changed) this.load(cx);
-				for (const reply of replies) if (reply.change.changed) this.validators.set(reply.path, reply.change.etag);
-				completed = change;
-			} catch {
-				// Keep the discussion and drafts on transient failures; retry next tick.
-			} finally {
-				this.polling.finish(request, completed);
-			}
-		});
-	}
 	private readonly host: DetailHost;
 	private metadata = new DetailMetadata();
 
@@ -139,12 +102,11 @@ export class Pull {
 		this.stateFailure = "";
 		this.metadata.expanded = false;
 		this.ref = ref;
-		this.validators.clear();
+		this.reader = null;
 		this.polling.invalidate();
 		this.entry = null;
 		this.files = null;
 		this.discussions = null;
-		this.missingFile = null;
 		this.expandedActivity.clear();
 		this.diff.jump(null);
 		this.selected = null;
@@ -159,44 +121,58 @@ export class Pull {
 		cx.notify();
 	}
 
-	private load(cx: Context, refreshRelated = true): void {
+	private load(cx: Context, refreshRelated = true, force = true): void {
 		const ref = this.ref;
 		const place = detailLocation(this.host.reader);
-		if (!ref || !place || !this.host.active("pr")) return;
+		this.syncPolling();
+		const request = this.polling.begin(force);
+		if (!ref || !place || !request) return;
+		this.reader ??= new PullReader(ref.repo, ref.number, place.on);
+		const reader = this.reader;
 		this.discussions ??= new ReviewThreads(ref, place.on, this.host);
-		if (refreshRelated) this.discussions.load(cx);
 		this.files ??= new ChangedFiles(`reader-${this.host.reader}`, ref, place.on, (cx, path) => this.select(cx, path));
-		if (refreshRelated && this.selected !== null) this.files.load(cx, true);
-		const entry: Loaded = { pull: this.entry?.pull, on: this.entry?.on, loading: true, projectsLoading: false };
+		if (force && refreshRelated) {
+			this.discussions.load(cx);
+			if (this.selected !== null) this.files.load(cx, true);
+		}
+		let entry: Loaded = force
+			? { pull: this.entry?.pull, on: this.entry?.on, loading: true, projectsLoading: false }
+			: (this.entry ?? { loading: false, projectsLoading: false });
 		this.entry = entry;
 		cx.spawn(async (cx) => {
-			const current = () => this.entry === entry && this.host.active("pr");
+			const current = () => {
+				this.syncPolling();
+				return this.entry === entry && this.polling.current(request) && this.host.active("pr");
+			};
+			let completed: import("../../shared/core/gh.ts").Change | undefined;
 			try {
-				// Each explicit load checks gh first, so a lost login reads as what to do (the issue page polls, so it checks once).
-				await gh.signedIn(place.on);
+				const pull = await reader.refresh(force, current);
+				this.syncPolling();
 				if (!current()) return;
-				const pull = await readPull(ref.repo, ref.number, place.on);
-				if (!current()) return;
-				entry.pull = pull;
-				entry.on = place.on;
-				loadProjects(cx, ref, place.on, entry, current);
+				if (pull) {
+					entry = { ...entry, pull, on: place.on, projectsLoading: false };
+					this.entry = entry;
+					loadProjects(cx, ref, place.on, entry, () => this.entry === entry);
+					if (!force && refreshRelated) {
+						this.discussions?.load(cx);
+						if (this.selected !== null) this.files?.load(cx, true);
+					}
+				}
+				entry.failure = undefined;
+				completed = { changed: pull !== null, etag: null };
 			} catch (e) {
-				if (current()) {
-					entry.failure = readFailure(ref, e);
-					this.polling.invalidate();
-					this.validators.clear();
-				}
+				if (current() && force) entry.failure = readFailure(ref, e);
 			} finally {
-				if (current()) {
-					entry.loading = false;
-					cx.notify();
-				}
+				this.syncPolling();
+				const result = this.polling.finish(request, completed);
+				if (this.entry === entry) entry.loading = false;
+				if (result.accepted && result.notify) cx.notify();
 			}
 		});
 	}
 
 	render(cx: Context, layout: DetailLayout): Element[] {
-		if (this.syncPolling()) this.check(cx, true);
+		if (this.syncPolling()) this.load(cx);
 		const on = detailLocation(this.host.reader)?.on;
 		if (
 			this.notices
@@ -267,15 +243,11 @@ export class Pull {
 			this.files?.files &&
 			this.discussions?.threads.some((thread) => thread.path === this.selected)
 		) {
-			const missing =
-				this.missingFile?.path === this.selected
-					? this.missingFile
-					: {
-							path: this.selected,
-							url: this.entry?.pull?.url ?? (this.ref ? detailUrl(this.ref) : ""),
-							missing: true as const,
-						};
-			this.missingFile = missing;
+			const missing: DiffSubject = {
+				path: this.selected,
+				url: this.entry?.pull?.url ?? (this.ref ? detailUrl(this.ref) : ""),
+				missing: true,
+			};
 			return v_flex()
 				.flex_1()
 				.min_h(0)
@@ -324,8 +296,7 @@ export class Pull {
 				// Discussion metadata is fetched once per PR; report its progress/failure once, not per thread.
 				...(this.discussions?.loading || this.discussions?.failure ? [this.discussions.status()] : []),
 				...(this.discussions?.acknowledged.timeline(pull.timeline) ?? pull.timeline).map((item) => {
-					// Commit timeline events have no REST id; their fallback index can move during refresh.
-					const key = JSON.stringify([item.author, item.createdAt, item.body]);
+					const key = timelineKey(item);
 					return timelineItem(item, this.discussions, onLink, (cx, path, comment) => this.select(cx, path, comment), {
 						expanded: this.expandedActivity.has(key),
 						toggle: (cx) => {
@@ -368,7 +339,7 @@ export class Pull {
 					this.load(cx);
 				}
 			} catch (e) {
-				if (this.ref === ref) this.stateFailure = gh.failureOf(e).message;
+				if (this.ref === ref) this.stateFailure = failureOf(e).message;
 			} finally {
 				this.writing = false;
 				cx.notify();
@@ -436,14 +407,7 @@ export class Pull {
 		const info = pull.merge;
 		const method = selectedMergeMethod(info.methods, this.method);
 		const t = colors();
-		const reason =
-			pull.state === "draft"
-				? "This pull request is still a work in progress."
-				: pull.state === "closed"
-					? "This pull request is closed."
-					: pull.state === "merged"
-						? "Pull request successfully merged."
-						: (info.reason ?? "This branch has no conflicts with the base branch.");
+		const reason = mergeStateReason(pull.state) ?? info.reason ?? "This branch has no conflicts with the base branch.";
 		const area = v_flex()
 			.border_t(1)
 			.border_color(t.border)
@@ -485,7 +449,7 @@ export class Pull {
 						if (!remove) this.load(cx);
 					}
 				} catch (e) {
-					if (this.ref === ref) this.writeFailure = gh.failureOf(e).message;
+					if (this.ref === ref) this.writeFailure = failureOf(e).message;
 				} finally {
 					this.writing = false;
 					cx.notify();

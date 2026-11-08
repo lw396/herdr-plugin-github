@@ -1,4 +1,3 @@
-// A PR head commit's check runs and commit statuses, as the description page lists them.
 export interface PullCheck {
 	id: string;
 	name: string;
@@ -50,7 +49,12 @@ export function parseChecks(pages: unknown, statuses: unknown[]): PullCheck[] {
 	return checks;
 }
 
-/** Compact status-card heading; each check keeps its detail in the expandable list. */
+function checkState(status: string): "failed" | "pending" | "successful" | "other" {
+	if (/^(failure|error|timed_out|cancelled|action_required|startup_failure|stale)$/.test(status)) return "failed";
+	if (/^(pending|queued|in_progress|waiting|requested)$/.test(status)) return "pending";
+	return status === "success" ? "successful" : "other";
+}
+
 export function checkSummary(checks: Pick<PullCheck, "status">[]): {
 	label: string;
 	tone: "done" | "dim" | "blocked" | "working";
@@ -58,12 +62,7 @@ export function checkSummary(checks: Pick<PullCheck, "status">[]): {
 } {
 	if (!checks.length) return { label: "No checks reported", tone: "dim", icon: "○" };
 	const counts = { failed: 0, pending: 0, successful: 0, other: 0 };
-	for (const { status } of checks) {
-		if (/^(failure|error|timed_out|cancelled|action_required|startup_failure|stale)$/.test(status)) counts.failed++;
-		else if (/^(pending|queued|in_progress|waiting|requested)$/.test(status)) counts.pending++;
-		else if (status === "success") counts.successful++;
-		else counts.other++;
-	}
+	for (const { status } of checks) counts[checkState(status)]++;
 	const label = (Object.entries(counts) as [keyof typeof counts, number][])
 		.filter(([, count]) => count > 0)
 		.map(([kind, count]) => `${count} ${kind} check${count === 1 ? "" : "s"}`)
@@ -76,4 +75,7 @@ export function checkSummary(checks: Pick<PullCheck, "status">[]): {
 }
 
 /** Unfinished or failed: what holds back a merge that requires passing checks. */
-export const checkHolds = (check: PullCheck): boolean => /fail|pending|queued|progress|error/i.test(check.status);
+export const checkHolds = (check: Pick<PullCheck, "status">): boolean => {
+	const state = checkState(check.status);
+	return state === "failed" || state === "pending";
+};
