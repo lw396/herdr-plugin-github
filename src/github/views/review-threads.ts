@@ -46,9 +46,10 @@ export class ReviewThreads {
 	failure: string | null = null;
 	private latest = 0;
 	private pending: PendingReview | null = null;
-	private ready = false;
+	// Keyed by acknowledged comment ID (roots and replies), so each expires only when observed.
 	private localDrafts = new Map<number, ReviewThread>();
 	private summaryBox: TextareaState | null = null;
+	private summaryTouched = false;
 	private notices = new Notices();
 	private writing = new Set<string>();
 	private failures = new Map<string, string>();
@@ -84,7 +85,7 @@ export class ReviewThreads {
 				);
 				if (request === this.latest) {
 					this.pending = state.pending;
-					this.ready = true;
+					if (this.summaryBox && !this.summaryTouched) this.summaryBox.set_value(state.pending?.body ?? "");
 					if (!state.pending) this.localDrafts.clear();
 					const seen = new Set(threads.flatMap((t) => t.comments.map((c) => c.id)));
 					for (const id of seen) this.localDrafts.delete(id);
@@ -138,7 +139,7 @@ export class ReviewThreads {
 			if (!anchor) continue;
 			const key = JSON.stringify([path, side, anchor.line]);
 			const draft = this.drafts.get(key);
-			const busy = this.writing.has(key);
+			const busy = this.writing.size > 0;
 			gutters[side === "LEFT" ? "left" : "right"] = button(
 				`add-inline-${key}`,
 				`${anchor.line} +`,
@@ -183,7 +184,7 @@ export class ReviewThreads {
 							)
 							.when(!this.pending, (el) =>
 								el.child(
-									button(`start-review-${key}`, "Start Review", "Start Review", (_e, cx) =>
+									button(`start-review-${key}`, busy ? "Saving…" : "Start Review", "Start Review", (_e, cx) =>
 										this.postInline(cx, key, true, commit),
 									),
 								),
@@ -204,7 +205,7 @@ export class ReviewThreads {
 
 	private postInline(cx: Context, key: string, start: boolean, commit: string): void {
 		const draft = this.drafts.get(key);
-		if (!this.ready || !draft?.box.value().trim()) return;
+		if (!draft?.box.value().trim()) return;
 		const body = draft.box.value();
 		this.write(cx, key, async () => {
 			// A review may have been started in the browser since the last render.
@@ -234,7 +235,11 @@ export class ReviewThreads {
 	summary(commit: string): Element {
 		if (!this.summaryBox) {
 			this.summaryBox = TextareaState.new({ placeholder: "Leave a comment" });
-			this.summaryBox.on("change", (_e, cx) => cx.notify());
+			this.summaryBox.set_value(this.pending?.body ?? "");
+			this.summaryBox.on("change", (_e, cx) => {
+				this.summaryTouched = true;
+				cx.notify();
+			});
 		}
 		const box = this.summaryBox;
 		const busy = this.writing.size > 0;
@@ -265,14 +270,13 @@ export class ReviewThreads {
 						).map(([event, label]) =>
 							button(`submit-review-${event}`, busy ? "Saving…" : label, label, (_e, cx) => {
 								if (
-									!this.ready ||
 									busy ||
 									(event === "REQUEST_CHANGES" && !box.value().trim()) ||
 									(event === "COMMENT" && !this.pending && !box.value().trim())
 								)
 									return;
 								this.submit(cx, commit, event, box);
-							}).opacity(!this.ready || busy ? 0.5 : 1),
+							}).opacity(busy ? 0.5 : 1),
 						),
 					),
 			);
@@ -282,26 +286,13 @@ export class ReviewThreads {
 		const body = box.value();
 		this.write(cx, "summary", async () => {
 			const item = await submitPullReview(this.ref.repo, this.ref.number, commit, event, body, this.on);
-			const submitted = this.threads
-				.filter((t) => t.comments.some((c) => c.draft))
-				.map((t) => ({
-					...t,
-					comments: t.comments.map((c) => {
-						const { draft: _draft, ...published } = c;
-						return published;
-					}),
-				}));
-			const newRoots = new Set(
-				this.threads.filter((t) => t.comments.some((c) => c.id === t.root && c.draft)).map((t) => t.root),
-			);
-			item.discussion = submitted
-				.filter((t) => newRoots.has(t.root))
-				.flatMap((t) => t.comments.map((c) => ({ root: t.root, comment: c, path: t.path, snippet: "" })));
-			this.published.activity(item, submitted);
-			this.threads = this.threads.map((t) => submitted.find((s) => s.id === t.id) ?? t);
+			this.threads = this.published.submitted(item, this.threads);
 			this.pending = null;
 			this.localDrafts.clear();
-			if (box.value() === body) box.set_value("");
+			if (box.value() === body) {
+				box.set_value("");
+				this.summaryTouched = false;
+			}
 		});
 	}
 
@@ -362,7 +353,7 @@ export class ReviewThreads {
 		const t = colors();
 		const scope = virtual ? "diff" : "timeline";
 		const box = this.boxes.get(thread.id);
-		const busy = this.writing.has(thread.id);
+		const busy = this.writing.size > 0;
 		const url = `https://github.com/${this.ref.repo}/pull/${this.ref.number}#discussion_r${thread.root}`;
 		return v_flex()
 			.when(virtual, (el) => el.h(THREAD_HEIGHT))
@@ -471,7 +462,7 @@ export class ReviewThreads {
 						el.child(
 							button(
 								`${scope}-resolve-${thread.id}`,
-								thread.resolved ? "Unresolve Conversation" : "Resolve Conversation",
+								busy ? "Saving…" : thread.resolved ? "Unresolve Conversation" : "Resolve Conversation",
 								"Change discussion resolution",
 								(_e, cx) => {
 									this.write(cx, thread.id, async () =>
@@ -488,7 +479,11 @@ export class ReviewThreads {
 	}
 
 	private write(cx: Context, key: string, act: () => Promise<unknown>): void {
-		if (this.writing.size) return;
+		if (this.writing.size) {
+			this.failures.set(key, "Another update is in progress.");
+			cx.notify();
+			return;
+		}
 		this.latest++; // An older read must not overwrite a successful write.
 		this.loading = false;
 		this.writing.add(key);

@@ -12200,9 +12200,27 @@ var PublishedComments = class {
   pendingThreads = /* @__PURE__ */ new Map();
   pendingTimeline = /* @__PURE__ */ new Map();
   activities = /* @__PURE__ */ new Map();
+  /** Promote only this review's drafts; replies stay with their original timeline conversation. */
+  submitted(item, threads) {
+    const pending = threads.filter((t) => t.comments.some((c) => c.draft));
+    const newRoots = new Set(
+      pending.filter((t) => t.comments.some((c) => c.id === t.root && c.draft)).map((t) => t.root)
+    );
+    const promoted = pending.map((t) => ({
+      ...t,
+      comments: t.comments.map((c) => {
+        const { draft: _draft, ...published } = c;
+        return published;
+      })
+    }));
+    const discussion = promoted.filter((t) => newRoots.has(t.root)).flatMap((t) => t.comments.map((comment) => ({ root: t.root, comment, path: t.path, snippet: "" })));
+    const replyOnly = item.kind === "review" && item.verb === "reviewed" && !item.body.trim() && !discussion.length && pending.length > 0;
+    this.activity(replyOnly ? null : { ...item, discussion }, promoted);
+    return threads.map((t) => promoted.find((p) => p.id === t.id) ?? t);
+  }
   /** Keep an acknowledged submission visible while the review and diff endpoints catch up separately. */
   activity(item, threads = []) {
-    this.activities.set(`${item.kind}-${item.id}`, item);
+    if (item) this.activities.set(`${item.kind}-${item.id}`, item);
     for (const thread of threads) {
       this.pendingThreads.set(thread.root, thread);
       for (const comment of thread.comments) this.pendingTimeline.delete(comment.id);
@@ -12385,7 +12403,7 @@ async function readPullReview(repo, number, on) {
   for (; ; ) {
     const data = await graphql(
       {
-        query: "query($owner:String!,$repo:String!,$number:Int!,$after:String){repository(owner:$owner,name:$repo){pullRequest(number:$number){id reviews(first:100,states:PENDING,after:$after){nodes{id databaseId viewerDidAuthor} pageInfo{hasNextPage endCursor}}}}}",
+        query: "query($owner:String!,$repo:String!,$number:Int!,$after:String){repository(owner:$owner,name:$repo){pullRequest(number:$number){id reviews(first:100,states:PENDING,after:$after){nodes{id databaseId viewerDidAuthor body} pageInfo{hasNextPage endCursor}}}}}",
         variables: { owner, repo: name, number, after }
       },
       on
@@ -12393,7 +12411,15 @@ async function readPullReview(repo, number, on) {
     const pull = data?.repository?.pullRequest;
     if (!pull) throw new Error("GitHub did not return the pull request's pending review.");
     const pending = pull.reviews.nodes.find((r) => r.viewerDidAuthor);
-    if (pending) return { id: pull.id, pending: { id: pending.id, databaseId: pending.databaseId } };
+    if (pending)
+      return {
+        id: pull.id,
+        pending: {
+          id: pending.id,
+          databaseId: pending.databaseId,
+          ...pending.body === void 0 ? {} : { body: pending.body }
+        }
+      };
     if (!pull.reviews.pageInfo.hasNextPage) return { id: pull.id, pending: null };
     const next = pull.reviews.pageInfo.endCursor;
     if (!next || next === after) throw new Error("GitHub did not return the next reviews page.");
@@ -12435,9 +12461,10 @@ var ReviewThreads = class {
   failure = null;
   latest = 0;
   pending = null;
-  ready = false;
+  // Keyed by acknowledged comment ID (roots and replies), so each expires only when observed.
   localDrafts = /* @__PURE__ */ new Map();
   summaryBox = null;
+  summaryTouched = false;
   notices = new Notices();
   writing = /* @__PURE__ */ new Set();
   failures = /* @__PURE__ */ new Map();
@@ -12472,7 +12499,7 @@ var ReviewThreads = class {
         );
         if (request === this.latest) {
           this.pending = state.pending;
-          this.ready = true;
+          if (this.summaryBox && !this.summaryTouched) this.summaryBox.set_value(state.pending?.body ?? "");
           if (!state.pending) this.localDrafts.clear();
           const seen = new Set(threads.flatMap((t) => t.comments.map((c) => c.id)));
           for (const id of seen) this.localDrafts.delete(id);
@@ -12508,7 +12535,7 @@ var ReviewThreads = class {
       if (!anchor) continue;
       const key = JSON.stringify([path, side, anchor.line]);
       const draft = this.drafts.get(key);
-      const busy = this.writing.has(key);
+      const busy = this.writing.size > 0;
       gutters[side === "LEFT" ? "left" : "right"] = button(
         `add-inline-${key}`,
         `${anchor.line} +`,
@@ -12537,7 +12564,7 @@ var ReviewThreads = class {
             (el) => el.child(
               button(
                 `start-review-${key}`,
-                "Start Review",
+                busy ? "Saving\u2026" : "Start Review",
                 "Start Review",
                 (_e, cx) => this.postInline(cx, key, true, commit)
               )
@@ -12557,7 +12584,7 @@ var ReviewThreads = class {
   }
   postInline(cx, key, start, commit) {
     const draft = this.drafts.get(key);
-    if (!this.ready || !draft?.box.value().trim()) return;
+    if (!draft?.box.value().trim()) return;
     const body = draft.box.value();
     this.write(cx, key, async () => {
       const state = await readPullReview(this.ref.repo, this.ref.number, this.on);
@@ -12585,7 +12612,11 @@ var ReviewThreads = class {
   summary(commit) {
     if (!this.summaryBox) {
       this.summaryBox = TextareaState2.new({ placeholder: "Leave a comment" });
-      this.summaryBox.on("change", (_e, cx) => cx.notify());
+      this.summaryBox.set_value(this.pending?.body ?? "");
+      this.summaryBox.on("change", (_e, cx) => {
+        this.summaryTouched = true;
+        cx.notify();
+      });
     }
     const box = this.summaryBox;
     const busy = this.writing.size > 0;
@@ -12601,10 +12632,10 @@ var ReviewThreads = class {
           ["REQUEST_CHANGES", "Request Changes"]
         ].map(
           ([event, label]) => button(`submit-review-${event}`, busy ? "Saving\u2026" : label, label, (_e, cx) => {
-            if (!this.ready || busy || event === "REQUEST_CHANGES" && !box.value().trim() || event === "COMMENT" && !this.pending && !box.value().trim())
+            if (busy || event === "REQUEST_CHANGES" && !box.value().trim() || event === "COMMENT" && !this.pending && !box.value().trim())
               return;
             this.submit(cx, commit, event, box);
-          }).opacity(!this.ready || busy ? 0.5 : 1)
+          }).opacity(busy ? 0.5 : 1)
         )
       )
     );
@@ -12613,22 +12644,13 @@ var ReviewThreads = class {
     const body = box.value();
     this.write(cx, "summary", async () => {
       const item = await submitPullReview(this.ref.repo, this.ref.number, commit, event, body, this.on);
-      const submitted = this.threads.filter((t) => t.comments.some((c) => c.draft)).map((t) => ({
-        ...t,
-        comments: t.comments.map((c) => {
-          const { draft: _draft, ...published } = c;
-          return published;
-        })
-      }));
-      const newRoots = new Set(
-        this.threads.filter((t) => t.comments.some((c) => c.id === t.root && c.draft)).map((t) => t.root)
-      );
-      item.discussion = submitted.filter((t) => newRoots.has(t.root)).flatMap((t) => t.comments.map((c) => ({ root: t.root, comment: c, path: t.path, snippet: "" })));
-      this.published.activity(item, submitted);
-      this.threads = this.threads.map((t) => submitted.find((s) => s.id === t.id) ?? t);
+      this.threads = this.published.submitted(item, this.threads);
       this.pending = null;
       this.localDrafts.clear();
-      if (box.value() === body) box.set_value("");
+      if (box.value() === body) {
+        box.set_value("");
+        this.summaryTouched = false;
+      }
     });
   }
   /** Built during render, NOT in the virtual list's deferred row callback. */
@@ -12665,7 +12687,7 @@ var ReviewThreads = class {
     const t = colors();
     const scope = virtual ? "diff" : "timeline";
     const box = this.boxes.get(thread.id);
-    const busy = this.writing.has(thread.id);
+    const busy = this.writing.size > 0;
     const url = `https://github.com/${this.ref.repo}/pull/${this.ref.number}#discussion_r${thread.root}`;
     return v_flex8().when(virtual, (el) => el.h(THREAD_HEIGHT)).min_w(0).p(12).gap(8).when(virtual, (el) => el.border_1().border_color(t.border).bg(t.surface)).when(
       virtual,
@@ -12742,7 +12764,7 @@ var ReviewThreads = class {
         (el) => el.child(
           button(
             `${scope}-resolve-${thread.id}`,
-            thread.resolved ? "Unresolve Conversation" : "Resolve Conversation",
+            busy ? "Saving\u2026" : thread.resolved ? "Unresolve Conversation" : "Resolve Conversation",
             "Change discussion resolution",
             (_e, cx) => {
               this.write(
@@ -12760,7 +12782,11 @@ var ReviewThreads = class {
     );
   }
   write(cx, key, act) {
-    if (this.writing.size) return;
+    if (this.writing.size) {
+      this.failures.set(key, "Another update is in progress.");
+      cx.notify();
+      return;
+    }
     this.latest++;
     this.loading = false;
     this.writing.add(key);

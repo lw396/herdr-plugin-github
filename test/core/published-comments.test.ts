@@ -43,6 +43,66 @@ test("submitting a draft reply keeps it in the diff while the published root is 
 	expect(published.threads([])).toEqual([]);
 });
 
+test("submission promotes drafts without mutating inputs and groups only new conversation roots", () => {
+	const published = new PublishedComments();
+	const root = {
+		id: "root",
+		root: comment.id,
+		path: "file",
+		side: "RIGHT",
+		line: 2,
+		outdated: false,
+		resolved: false,
+		canResolve: false,
+		canUnresolve: false,
+		comments: [{ ...comment, draft: true }],
+	} as const;
+	const old = {
+		...root,
+		id: "old",
+		root: 1,
+		comments: [
+			{ ...comment, id: 1 },
+			{ ...comment, id: 2, draft: true },
+		],
+	};
+	const threads = [{ ...root, comments: [...root.comments] }, old];
+	const item: PullTimelineItem = { ...comment, id: 99, kind: "review", verb: "reviewed", discussion: [] };
+	const result = published.submitted(item, threads);
+	expect(result.flatMap((t) => t.comments).some((c) => c.draft)).toBe(false);
+	expect(threads[0]?.comments[0]?.draft).toBe(true);
+	expect(published.timeline([])[0]?.discussion.map((d) => d.root)).toEqual([comment.id]);
+	expect(published.threads([])).toHaveLength(2);
+});
+
+test("an empty reply-only submission keeps its diff reply without a phantom timeline review", () => {
+	const published = new PublishedComments();
+	const thread = {
+		id: "thread",
+		root: comment.id,
+		path: "file",
+		side: "RIGHT" as const,
+		line: 2,
+		outdated: false,
+		resolved: false,
+		canResolve: false,
+		canUnresolve: false,
+		comments: [comment, { ...comment, id: 999, draft: true }],
+	};
+	const item: PullTimelineItem = {
+		...comment,
+		id: 99,
+		body: "",
+		markdown: "",
+		kind: "review",
+		verb: "reviewed",
+		discussion: [],
+	};
+	expect(published.submitted(item, [thread])[0]?.comments[1]?.draft).toBeUndefined();
+	expect(published.timeline([])).toEqual([]);
+	expect(published.threads([])[0]?.comments.map((c) => c.id)).toEqual([comment.id, 999]);
+});
+
 const target = { path: "docs/pr-fixture.md", side: "RIGHT", line: 2, outdated: false } as const;
 
 test("diff and timeline catch up independently without losing or duplicating an acknowledged comment", () => {

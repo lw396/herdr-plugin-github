@@ -167,6 +167,7 @@ export async function submitPullReview(
 export interface PendingReview {
 	id: string;
 	databaseId: number;
+	body?: string;
 }
 
 export async function readPullReview(
@@ -190,7 +191,7 @@ export async function readPullReview(
 		} = await graphql(
 			{
 				query:
-					"query($owner:String!,$repo:String!,$number:Int!,$after:String){repository(owner:$owner,name:$repo){pullRequest(number:$number){id reviews(first:100,states:PENDING,after:$after){nodes{id databaseId viewerDidAuthor} pageInfo{hasNextPage endCursor}}}}}",
+					"query($owner:String!,$repo:String!,$number:Int!,$after:String){repository(owner:$owner,name:$repo){pullRequest(number:$number){id reviews(first:100,states:PENDING,after:$after){nodes{id databaseId viewerDidAuthor body} pageInfo{hasNextPage endCursor}}}}}",
 				variables: { owner, repo: name, number, after },
 			},
 			on,
@@ -198,7 +199,15 @@ export async function readPullReview(
 		const pull = data?.repository?.pullRequest;
 		if (!pull) throw new Error("GitHub did not return the pull request's pending review.");
 		const pending = pull.reviews.nodes.find((r) => r.viewerDidAuthor);
-		if (pending) return { id: pull.id, pending: { id: pending.id, databaseId: pending.databaseId } };
+		if (pending)
+			return {
+				id: pull.id,
+				pending: {
+					id: pending.id,
+					databaseId: pending.databaseId,
+					...(pending.body === undefined ? {} : { body: pending.body }),
+				},
+			};
 		if (!pull.reviews.pageInfo.hasNextPage) return { id: pull.id, pending: null };
 		const next = pull.reviews.pageInfo.endCursor;
 		if (!next || next === after) throw new Error("GitHub did not return the next reviews page.");

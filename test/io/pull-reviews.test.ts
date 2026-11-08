@@ -174,7 +174,14 @@ function emptyState(): string {
 afterEach(reset);
 const repo = "lw396/herdr-plugin-github";
 const query =
-	"query($owner:String!,$repo:String!,$number:Int!,$after:String){repository(owner:$owner,name:$repo){pullRequest(number:$number){id reviews(first:100,states:PENDING,after:$after){nodes{id databaseId viewerDidAuthor} pageInfo{hasNextPage endCursor}}}}}";
+	"query($owner:String!,$repo:String!,$number:Int!,$after:String){repository(owner:$owner,name:$repo){pullRequest(number:$number){id reviews(first:100,states:PENDING,after:$after){nodes{id databaseId viewerDidAuthor body} pageInfo{hasNextPage endCursor}}}}}";
+test("resuming a pending review preserves its existing summary", async () => {
+	const data = JSON.parse(JSON.stringify(pending));
+	data.data.repository.pullRequest.reviews.nodes[0].body = "Browser summary";
+	machine("center", { [stateCommand]: { stdout: JSON.stringify(data) } });
+	expect((await reviews.readPullReview(repo, 35, "center")).pending).toMatchObject({ body: "Browser summary" });
+});
+
 const stateCommand = `~$ gh api graphql -F number=35 -F after=null -f query=${query} -f owner=lw396 -f repo=herdr-plugin-github`;
 const commit = "63f52f1dddd87eecbe02a9013523124921ee4345";
 const startCommand = `~$ gh api graphql -f query=mutation($id:ID!,$commit:GitObjectID!){addPullRequestReview(input:{pullRequestId:$id,commitOID:$commit}){pullRequestReview{id databaseId state}}} -f id=PR_kwDOVkv4288AAAABNfEEsw -f commit=${commit}`;

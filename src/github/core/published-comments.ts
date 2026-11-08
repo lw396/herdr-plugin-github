@@ -8,9 +8,36 @@ export class PublishedComments {
 	private pendingTimeline = new Map<number, PullTimelineItem>();
 	private activities = new Map<string, PullTimelineItem>();
 
+	/** Promote only this review's drafts; replies stay with their original timeline conversation. */
+	submitted(item: PullTimelineItem, threads: ReviewThread[]): ReviewThread[] {
+		const pending = threads.filter((t) => t.comments.some((c) => c.draft));
+		const newRoots = new Set(
+			pending.filter((t) => t.comments.some((c) => c.id === t.root && c.draft)).map((t) => t.root),
+		);
+		const promoted = pending.map((t) => ({
+			...t,
+			comments: t.comments.map((c) => {
+				const { draft: _draft, ...published } = c;
+				return published;
+			}),
+		}));
+		const discussion = promoted
+			.filter((t) => newRoots.has(t.root))
+			.flatMap((t) => t.comments.map((comment) => ({ root: t.root, comment, path: t.path, snippet: "" })));
+		// Match pullTimeline's omission of empty COMMENTED reviews containing only replies.
+		const replyOnly =
+			item.kind === "review" &&
+			item.verb === "reviewed" &&
+			!item.body.trim() &&
+			!discussion.length &&
+			pending.length > 0;
+		this.activity(replyOnly ? null : { ...item, discussion }, promoted);
+		return threads.map((t) => promoted.find((p) => p.id === t.id) ?? t);
+	}
+
 	/** Keep an acknowledged submission visible while the review and diff endpoints catch up separately. */
-	activity(item: PullTimelineItem, threads: ReviewThread[] = []): void {
-		this.activities.set(`${item.kind}-${item.id}`, item);
+	activity(item: PullTimelineItem | null, threads: ReviewThread[] = []): void {
+		if (item) this.activities.set(`${item.kind}-${item.id}`, item);
 		for (const thread of threads) {
 			this.pendingThreads.set(thread.root, thread);
 			for (const comment of thread.comments) this.pendingTimeline.delete(comment.id);
