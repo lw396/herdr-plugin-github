@@ -1,12 +1,15 @@
 // The parts issue and PR pages share inside a reader tab: header, body, posts, metadata and links.
 import { h_flex, TextView, v_flex } from "gpui-base";
 import { type Color, type Context, div, type Element, svg } from "gpui-kit";
-import { type DetailKind, type DetailRef, detailKey, detailUrl } from "../core/detail.ts";
+import { type DetailKind, type DetailRef, detailKey, detailUrl, notVisible } from "../core/detail.ts";
 import type { Comment } from "../core/discussion.ts";
+import type { Item } from "../core/item.ts";
 import type { Label } from "../core/labels.ts";
 import { browserUrl, detailLink } from "../core/markdown.ts";
 import type { Projects } from "../core/projects.ts";
 import { relativeTime } from "../core/time.ts";
+import { failureOf } from "../io/gh.ts";
+import { readProjects } from "../io/projects.ts";
 import { button, chip, colors, link, spinner, square } from "./ui.ts";
 
 /** What a page asks of the reader tab that hosts it. */
@@ -33,10 +36,32 @@ export function openLink(cx: Context, host: DetailHost, url: string, page: strin
 	}
 }
 
-/** Leave the reader blank during its handshake; readers without an item close automatically. */
-export function detailEmpty(_kind: DetailKind): Element {
-	return div().flex_1();
+/** A page's failed read in the reader's words: GitHub's 404 means this account cannot see it. */
+export function readFailure(ref: DetailRef, e: unknown): string {
+	const failure = failureOf(e);
+	return failure.notFound ? notVisible(ref) : failure.message;
 }
+
+/** Optional Projects load after the item, on its machine; `current` drops a stale answer. */
+export function loadProjects(
+	cx: Context,
+	ref: DetailRef,
+	on: string | null,
+	entry: { projects?: Projects; projectsLoading: boolean },
+	current: () => boolean,
+): void {
+	entry.projectsLoading = true;
+	cx.spawn(async (cx) => {
+		const projects = await readProjects(ref, on);
+		if (!current()) return;
+		entry.projects = projects;
+		entry.projectsLoading = false;
+		cx.notify();
+	});
+}
+
+/** Leave the reader blank during its handshake; readers without an item close automatically. */
+export const detailEmpty = (): Element => div().flex_1();
 
 /** Back, the title with its number (opens the browser) and copy, and refresh. */
 export function detailHeader(
@@ -132,15 +157,29 @@ export function detailBody(
 
 export type DetailLayout = "wide" | "narrow" | "compact";
 
-type MetadataSection = [title: string, value: Element, count?: number];
+/** What issue and PR pages list beside the timeline; a page may add sections before the shared ones. */
+export interface Metadata {
+	item: Pick<Item, "assignees" | "labels" | "milestone">;
+	projects: Projects | undefined;
+	projectsLoading: boolean;
+	before?: [title: string, value: Element][];
+}
 
 /** Session-only disclosure state; resizing or refreshing does not discard the person's choice. */
 export class DetailMetadata {
 	expanded = false;
 
-	render(layout: DetailLayout, sections: MetadataSection[]): Element {
+	render(layout: DetailLayout, metadata: Metadata): Element {
 		const t = colors();
 		const wide = layout === "wide";
+		const { item } = metadata;
+		const sections: [string, Element][] = [
+			...(metadata.before ?? []),
+			["Assignees", people(item.assignees, "None yet")],
+			["Labels", labels(item.labels)],
+			["Project", projects(metadata.projects, metadata.projectsLoading)],
+			["Milestone", milestone(item.milestone)],
+		];
 		const fields = () =>
 			sections.map(([title, value]) =>
 				v_flex()
@@ -155,7 +194,6 @@ export class DetailMetadata {
 					.child(value),
 			);
 		if (wide) return v_flex().w(220).flex_none().children(fields());
-		const labels = sections.find(([title]) => title === "Labels");
 		const summary = () =>
 			h_flex()
 				.min_w(0)
@@ -164,7 +202,7 @@ export class DetailMetadata {
 				.items_center()
 				.flex_wrap()
 				.child(div().text_size(13).font_semibold().child("Labels"))
-				.child(layout === "compact" ? quiet(String(labels?.[2] ?? 0)) : (labels?.[1] ?? quiet("None yet")));
+				.child(layout === "compact" ? quiet(String(item.labels.length)) : labels(item.labels));
 		let content: Element;
 		if (!this.expanded) content = summary();
 		else if (layout === "compact") content = v_flex().children(fields());
@@ -193,7 +231,7 @@ export function detailDocument(
 	layout: DetailLayout,
 	heading: Element[],
 	timeline: Element[],
-	sections: MetadataSection[],
+	sections: Metadata,
 	metadata: DetailMetadata,
 ): Element {
 	const wide = layout === "wide";
@@ -210,7 +248,6 @@ export function detailDocument(
 		.child(wide ? h_flex().gap(24).items_start().child(posts).child(side) : v_flex().gap(20).child(side).child(posts));
 }
 
-/** An open, closed, merged… badge in its theme color. */
 export function stateBadge(label: string, color: Color, icon?: string): Element {
 	return h_flex()
 		.gap(6)
@@ -280,10 +317,9 @@ export function postCard(
 		);
 }
 
-/** Metadata that has nothing to show. */
 export const quiet = (text: string): Element => div().text_size(12).text_color(colors().dim).child(text);
 
-export function people(logins: string[], none: string): Element {
+function people(logins: string[], none: string): Element {
 	if (logins.length === 0) return quiet(none);
 	return v_flex()
 		.gap(8)
@@ -300,11 +336,10 @@ export function labels(list: Label[]): Element {
 	return h_flex().gap(6).flex_wrap().children(list.map(labelChip));
 }
 
-export const milestone = (title: string | null): Element =>
-	title ? div().text_size(13).child(title) : quiet("No milestone");
+const milestone = (title: string | null): Element => (title ? div().text_size(13).child(title) : quiet("No milestone"));
 
 /** Each Project opens in the browser; why there are none shows in a tooltip. */
-export function projects(list: Projects | undefined, loading: boolean): Element {
+function projects(list: Projects | undefined, loading: boolean): Element {
 	const t = colors();
 	if (!list) return quiet(loading ? "Loading Projects…" : "Projects not loaded.");
 	if (!list.ok) return quiet("None yet").tooltip(list.message);

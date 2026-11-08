@@ -1,7 +1,7 @@
 // A PR reader switches between its published discussion and a changed file's read-only unified diff.
 import { h_flex, v_flex } from "gpui-base";
 import { type Context, div, type Element } from "gpui-kit";
-import { type DetailRef, detailUrl, notVisible } from "../core/detail.ts";
+import { type DetailRef, detailUrl } from "../core/detail.ts";
 import type { ChangedFile } from "../core/files.ts";
 import type { MergeMethod } from "../core/merge.ts";
 import type { Projects } from "../core/projects.ts";
@@ -10,7 +10,6 @@ import type { ReviewState } from "../core/reviewers.ts";
 import { Notices } from "../io/changes.ts";
 import { detailLocation } from "../io/detail-tabs.ts";
 import * as gh from "../io/gh.ts";
-import { readProjects } from "../io/projects.ts";
 import { deletePullBranch, mergePull, readPull } from "../io/pulls.ts";
 import {
 	type DetailHost,
@@ -20,13 +19,11 @@ import {
 	detailDocument,
 	detailEmpty,
 	detailHeader,
-	labels,
-	milestone,
+	loadProjects,
 	openLink,
-	people,
 	postCard,
-	projects,
 	quiet,
+	readFailure,
 	stateBadge,
 } from "./detail.ts";
 import { FileDiff } from "./diff.ts";
@@ -65,6 +62,7 @@ export class Pull {
 	private notices = new Notices();
 	private missingFile: ChangedFile | null = null;
 	private expandedActivity = new Set<string>();
+	private where: { on: string | null } | null = null;
 
 	init(): void {
 		this.diff.init();
@@ -86,6 +84,7 @@ export class Pull {
 		this.files = null;
 		this.discussions = null;
 		this.missingFile = null;
+		this.where = null;
 		this.expandedActivity.clear();
 		this.diff.jump(null);
 		this.selected = null;
@@ -100,9 +99,16 @@ export class Pull {
 		cx.notify();
 	}
 
+	/** The machine whose gh shows this PR: fixed when it is first read, so reads and writes share an account. */
+	private machine(): { on: string | null } | null {
+		const place = detailLocation(this.host.reader);
+		this.where ??= place && { on: place.on };
+		return this.where;
+	}
+
 	private load(cx: Context, refreshRelated = true): void {
 		const ref = this.ref;
-		const place = detailLocation(this.host.reader);
+		const place = this.machine();
 		if (!ref || !place || !this.host.active("pr")) return;
 		this.discussions ??= new ReviewThreads(ref, place.on, this.host);
 		if (refreshRelated) this.discussions.load(cx);
@@ -118,19 +124,9 @@ export class Pull {
 				const pull = await readPull(ref.repo, ref.number, place.on);
 				if (!current()) return;
 				entry.pull = pull;
-				entry.projectsLoading = true;
-				cx.spawn(async (cx) => {
-					const projects = await readProjects(ref, place.on);
-					if (!current()) return;
-					entry.projects = projects;
-					entry.projectsLoading = false;
-					cx.notify();
-				});
+				loadProjects(cx, ref, place.on, entry, current);
 			} catch (e) {
-				if (current()) {
-					const failure = gh.failureOf(e);
-					entry.failure = failure.notFound ? notVisible(ref) : failure.message;
-				}
+				if (current()) entry.failure = readFailure(ref, e);
 			} finally {
 				if (current()) {
 					entry.loading = false;
@@ -141,7 +137,7 @@ export class Pull {
 	}
 
 	render(cx: Context, layout: DetailLayout): Element[] {
-		const on = detailLocation(this.host.reader)?.on;
+		const on = this.where?.on;
 		if (
 			this.notices
 				.take()
@@ -152,7 +148,7 @@ export class Pull {
 		this.discussions?.sync(cx);
 		const ref = this.ref;
 		const entry = this.entry;
-		if (!ref) return [detailEmpty("pr")];
+		if (!ref) return [detailEmpty()];
 		const pull = entry?.pull;
 		return [
 			detailHeader(this.host, ref, { title: pull?.title, url: pull?.url, loading: Boolean(entry?.loading) }, (cx) =>
@@ -292,13 +288,12 @@ export class Pull {
 					),
 				...(this.discussions ? [this.discussions.summary(pull.headSha)] : []),
 			],
-			[
-				["Reviewers", this.reviewers(pull)],
-				["Assignees", people(pull.assignees, "None yet")],
-				["Labels", labels(pull.labels), pull.labels.length],
-				["Project", projects(this.entry?.projects, Boolean(this.entry?.projectsLoading))],
-				["Milestone", milestone(pull.milestone)],
-			],
+			{
+				item: pull,
+				projects: this.entry?.projects,
+				projectsLoading: Boolean(this.entry?.projectsLoading),
+				before: [["Reviewers", this.reviewers(pull)]],
+			},
 			this.metadata,
 		);
 	}
@@ -310,7 +305,7 @@ export class Pull {
 		if (this.writeFailure) area.child(quiet(this.writeFailure));
 		const act = (cx: Context, remove: boolean) => {
 			const ref = this.ref,
-				place = detailLocation(this.host.reader);
+				place = this.where;
 			if (!ref || !place || this.writing) return;
 			this.writing = true;
 			cx.spawn(async (cx) => {

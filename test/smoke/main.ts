@@ -11,7 +11,7 @@ import { PublishedComments } from "../../src/github/core/published-comments.ts";
 import { parsePullDetail } from "../../src/github/core/pull-detail.ts";
 import { pullTimeline } from "../../src/github/core/pull-timeline.ts";
 import { parseThreads, threadRow } from "../../src/github/core/review-threads.ts";
-import { DetailMetadata, labels, people } from "../../src/github/views/detail.ts";
+import { DetailMetadata } from "../../src/github/views/detail.ts";
 import { FileDiff } from "../../src/github/views/diff.ts";
 import { ChangedFiles } from "../../src/github/views/files.ts";
 import { previewCard } from "../../src/github/views/preview.ts";
@@ -198,10 +198,11 @@ export default class Smoke extends View {
 		return [false, true].flatMap((expanded) => {
 			metadata.expanded = expanded;
 			return (["compact", "narrow", "wide"] as const).map((layout) => {
-				const sample = metadata.render(layout, [
-					["Assignees", people(detail.assignees, "None yet")],
-					["Labels", labels(detail.labels), detail.labels.length],
-				]);
+				const sample = metadata.render(layout, {
+					item: detail,
+					projects: { ok: true, projects: [] },
+					projectsLoading: false,
+				});
 				expectEqual(String(metadata.expanded), String(expanded), "resize keeps metadata disclosure");
 				return sample;
 			});

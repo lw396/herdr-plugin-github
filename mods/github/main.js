@@ -10976,6 +10976,58 @@ var Previews = class {
 // src/github/views/detail.ts
 import { h_flex as h_flex2, TextView, v_flex } from "gpui-base";
 import { div as div3, svg as svg3 } from "gpui-kit";
+
+// src/github/core/projects.ts
+var FIELD = { issue: "issue", pr: "pullRequest" };
+function projectsQuery(ref, after) {
+  const [owner = "", name = ""] = ref.repo.split("/");
+  return {
+    query: `query($owner: String!, $name: String!, $number: Int!, $after: String) {
+  repository(owner: $owner, name: $name) {
+    ${FIELD[ref.kind]}(number: $number) {
+      projectItems(first: 100, after: $after, includeArchived: true) {
+        pageInfo { hasNextPage endCursor }
+        nodes { project { title url } }
+      }
+    }
+  }
+}`,
+    variables: { owner, name, number: ref.number, after }
+  };
+}
+function projectItems(data, kind) {
+  const repository = data?.repository;
+  return repository?.[FIELD[kind]]?.projectItems;
+}
+function projectsFailure(message, on) {
+  const machine = on ?? "this computer";
+  return {
+    ok: false,
+    message: /read:project/.test(message) ? `Projects require read:project. Run gh auth refresh -h github.com -s read:project on ${machine}.` : `Projects unavailable on ${machine}. ${explain(message)}`
+  };
+}
+
+// src/github/io/projects.ts
+async function readProjects(ref, on) {
+  const projects2 = [];
+  try {
+    await eachPage(
+      `this ${ref.kind === "pr" ? "pull request" : "issue"}'s Projects`,
+      (after) => projectsQuery(ref, after),
+      (data) => projectItems(data, ref.kind),
+      (page) => {
+        projects2.push(...page.nodes.map((n) => ({ title: n.project.title, url: n.project.url })));
+        return false;
+      },
+      on
+    );
+    return { ok: true, projects: projects2 };
+  } catch (e) {
+    return projectsFailure(e instanceof Error ? e.message : String(e), on);
+  }
+}
+
+// src/github/views/detail.ts
 var NOUN = { issue: "issue", pr: "pull request" };
 var Noun = (kind) => NOUN[kind].charAt(0).toUpperCase() + NOUN[kind].slice(1);
 function openLink(cx, host, url, page) {
@@ -10986,9 +11038,21 @@ function openLink(cx, host, url, page) {
     if (external) cx.open_url(external);
   }
 }
-function detailEmpty(_kind) {
-  return div3().flex_1();
+function readFailure(ref, e) {
+  const failure = failureOf(e);
+  return failure.notFound ? notVisible(ref) : failure.message;
 }
+function loadProjects(cx, ref, on, entry, current) {
+  entry.projectsLoading = true;
+  cx.spawn(async (cx2) => {
+    const projects2 = await readProjects(ref, on);
+    if (!current()) return;
+    entry.projects = projects2;
+    entry.projectsLoading = false;
+    cx2.notify();
+  });
+}
+var detailEmpty = () => div3().flex_1();
 function detailHeader(host, ref, shown, refresh) {
   const t = colors();
   const url = shown.url ?? detailUrl(ref);
@@ -11031,15 +11095,22 @@ function detailBody(ref, loading, failure, document3) {
 }
 var DetailMetadata = class {
   expanded = false;
-  render(layout2, sections) {
+  render(layout2, metadata) {
     const t = colors();
     const wide = layout2 === "wide";
+    const { item } = metadata;
+    const sections = [
+      ...metadata.before ?? [],
+      ["Assignees", people(item.assignees, "None yet")],
+      ["Labels", labels(item.labels)],
+      ["Project", projects(metadata.projects, metadata.projectsLoading)],
+      ["Milestone", milestone(item.milestone)]
+    ];
     const fields = () => sections.map(
       ([title, value]) => v_flex().min_w(0).gap(10).py(16).border_b(1).border_color(t.border).when(layout2 === "narrow", (el) => el.w(180).min_w(140).flex_grow(1)).when(layout2 === "compact", (el) => el.w_full().flex_none()).child(div3().text_size(13).font_semibold().child(title)).child(value)
     );
     if (wide) return v_flex().w(220).flex_none().children(fields());
-    const labels2 = sections.find(([title]) => title === "Labels");
-    const summary = () => h_flex2().min_w(0).gap(10).py(16).items_center().flex_wrap().child(div3().text_size(13).font_semibold().child("Labels")).child(layout2 === "compact" ? quiet(String(labels2?.[2] ?? 0)) : labels2?.[1] ?? quiet("None yet"));
+    const summary = () => h_flex2().min_w(0).gap(10).py(16).items_center().flex_wrap().child(div3().text_size(13).font_semibold().child("Labels")).child(layout2 === "compact" ? quiet(String(item.labels.length)) : labels(item.labels));
     let content3;
     if (!this.expanded) content3 = summary();
     else if (layout2 === "compact") content3 = v_flex().children(fields());
@@ -11852,58 +11923,6 @@ import { nextCommand, props as props3 } from "herdr";
 // src/github/views/issue.ts
 import { h_flex as h_flex7, Textarea, TextareaState, v_flex as v_flex6 } from "gpui-base";
 import { div as div10 } from "gpui-kit";
-
-// src/github/core/projects.ts
-var FIELD = { issue: "issue", pr: "pullRequest" };
-function projectsQuery(ref, after) {
-  const [owner = "", name = ""] = ref.repo.split("/");
-  return {
-    query: `query($owner: String!, $name: String!, $number: Int!, $after: String) {
-  repository(owner: $owner, name: $name) {
-    ${FIELD[ref.kind]}(number: $number) {
-      projectItems(first: 100, after: $after, includeArchived: true) {
-        pageInfo { hasNextPage endCursor }
-        nodes { project { title url } }
-      }
-    }
-  }
-}`,
-    variables: { owner, name, number: ref.number, after }
-  };
-}
-function projectItems(data, kind) {
-  const repository = data?.repository;
-  return repository?.[FIELD[kind]]?.projectItems;
-}
-function projectsFailure(message, on) {
-  const machine = on ?? "this computer";
-  return {
-    ok: false,
-    message: /read:project/.test(message) ? `Projects require read:project. Run gh auth refresh -h github.com -s read:project on ${machine}.` : `Projects unavailable on ${machine}. ${explain(message)}`
-  };
-}
-
-// src/github/io/projects.ts
-async function readProjects(ref, on) {
-  const projects2 = [];
-  try {
-    await eachPage(
-      `this ${ref.kind === "pr" ? "pull request" : "issue"}'s Projects`,
-      (after) => projectsQuery(ref, after),
-      (data) => projectItems(data, ref.kind),
-      (page) => {
-        projects2.push(...page.nodes.map((n) => ({ title: n.project.title, url: n.project.url })));
-        return false;
-      },
-      on
-    );
-    return { ok: true, projects: projects2 };
-  } catch (e) {
-    return projectsFailure(e instanceof Error ? e.message : String(e), on);
-  }
-}
-
-// src/github/views/issue.ts
 var POLL_MS = 1e4;
 var Issue = class {
   ref = null;
@@ -11993,21 +12012,12 @@ ${detailKey(this.ref)}` : null;
           if (!current()) return;
           entry.issue = issue;
           entry.on = on;
-          entry.projectsLoading = true;
-          cx2.spawn(async (cx3) => {
-            const projects2 = await readProjects(ref, on);
-            if (this.entry !== entry) return;
-            entry.projects = projects2;
-            entry.projectsLoading = false;
-            cx3.notify();
-          });
+          loadProjects(cx2, ref, on, entry, () => this.entry === entry);
         }
         completed = change;
         entry.failure = void 0;
       } catch (e) {
-        if (!current()) return;
-        const failure = failureOf(e);
-        entry.failure = failure.notFound ? notVisible(ref) : failure.message;
+        if (current()) entry.failure = readFailure(ref, e);
       } finally {
         if (!detailLocation(this.host.reader)?.visible) this.syncPolling();
         const result = this.polling.finish(request, completed);
@@ -12075,7 +12085,7 @@ ${detailKey(this.ref)}` : null;
     if (this.syncPolling()) this.load(cx);
     const ref = this.ref;
     const entry = this.entry;
-    if (!ref) return [detailEmpty("issue")];
+    if (!ref) return [detailEmpty()];
     const issue = entry?.issue;
     return [
       detailHeader(
@@ -12104,16 +12114,14 @@ ${detailKey(this.ref)}` : null;
         ),
         this.composer(issue)
       ],
-      [
-        ["Assignees", people(issue.assignees, "No assignees")],
-        ["Labels", labels(issue.labels), issue.labels.length],
-        ["Project", projects(this.entry?.projects, Boolean(this.entry?.projectsLoading))],
-        ["Milestone", milestone(issue.milestone)]
-      ],
+      {
+        item: issue,
+        projects: this.entry?.projects,
+        projectsLoading: Boolean(this.entry?.projectsLoading)
+      },
       this.metadata
     );
   }
-  /** A label or assignment change between the comments. */
   activity(activity) {
     const t = colors();
     const avatar = div10().size(22).flex_none().rounded(11).bg(t.raised).text_color(t.muted).font_semibold().flex().items_center().justify_center().child(activity.actor.slice(0, 1).toUpperCase());
@@ -13130,6 +13138,7 @@ var Pull = class {
   notices = new Notices();
   missingFile = null;
   expandedActivity = /* @__PURE__ */ new Set();
+  where = null;
   init() {
     this.diff.init();
   }
@@ -13148,6 +13157,7 @@ var Pull = class {
     this.files = null;
     this.discussions = null;
     this.missingFile = null;
+    this.where = null;
     this.expandedActivity.clear();
     this.diff.jump(null);
     this.selected = null;
@@ -13160,9 +13170,15 @@ var Pull = class {
     if (path !== null) this.files?.load(cx);
     cx.notify();
   }
+  /** The machine whose gh shows this PR: fixed when it is first read, so reads and writes share an account. */
+  machine() {
+    const place = detailLocation(this.host.reader);
+    this.where ??= place && { on: place.on };
+    return this.where;
+  }
   load(cx, refreshRelated = true) {
     const ref = this.ref;
-    const place = detailLocation(this.host.reader);
+    const place = this.machine();
     if (!ref || !place || !this.host.active("pr")) return;
     this.discussions ??= new ReviewThreads(ref, place.on, this.host);
     if (refreshRelated) this.discussions.load(cx);
@@ -13178,19 +13194,9 @@ var Pull = class {
         const pull = await readPull(ref.repo, ref.number, place.on);
         if (!current()) return;
         entry.pull = pull;
-        entry.projectsLoading = true;
-        cx2.spawn(async (cx3) => {
-          const projects2 = await readProjects(ref, place.on);
-          if (!current()) return;
-          entry.projects = projects2;
-          entry.projectsLoading = false;
-          cx3.notify();
-        });
+        loadProjects(cx2, ref, place.on, entry, current);
       } catch (e) {
-        if (current()) {
-          const failure = failureOf(e);
-          entry.failure = failure.notFound ? notVisible(ref) : failure.message;
-        }
+        if (current()) entry.failure = readFailure(ref, e);
       } finally {
         if (current()) {
           entry.loading = false;
@@ -13200,14 +13206,14 @@ var Pull = class {
     });
   }
   render(cx, layout2) {
-    const on = detailLocation(this.host.reader)?.on;
+    const on = this.where?.on;
     if (this.notices.take().some((n) => n.repo === this.ref?.repo && n.number === this.ref.number && n.threads?.on === on && n.threads))
       this.load(cx, false);
     this.files?.sync(cx);
     this.discussions?.sync(cx);
     const ref = this.ref;
     const entry = this.entry;
-    if (!ref) return [detailEmpty("pr")];
+    if (!ref) return [detailEmpty()];
     const pull = entry?.pull;
     return [
       detailHeader(
@@ -13304,13 +13310,12 @@ var Pull = class {
         ),
         ...this.discussions ? [this.discussions.summary(pull.headSha)] : []
       ],
-      [
-        ["Reviewers", this.reviewers(pull)],
-        ["Assignees", people(pull.assignees, "None yet")],
-        ["Labels", labels(pull.labels), pull.labels.length],
-        ["Project", projects(this.entry?.projects, Boolean(this.entry?.projectsLoading))],
-        ["Milestone", milestone(pull.milestone)]
-      ],
+      {
+        item: pull,
+        projects: this.entry?.projects,
+        projectsLoading: Boolean(this.entry?.projectsLoading),
+        before: [["Reviewers", this.reviewers(pull)]]
+      },
       this.metadata
     );
   }
@@ -13320,7 +13325,7 @@ var Pull = class {
     area.child(quiet(info.reason ?? "This branch has no conflicts with the base branch"));
     if (this.writeFailure) area.child(quiet(this.writeFailure));
     const act = (cx, remove) => {
-      const ref = this.ref, place = detailLocation(this.host.reader);
+      const ref = this.ref, place = this.where;
       if (!ref || !place || this.writing) return;
       this.writing = true;
       cx.spawn(async (cx2) => {

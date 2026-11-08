@@ -4,7 +4,7 @@
 import { h_flex, Textarea, TextareaState, v_flex } from "gpui-base";
 import { type AsyncContext, type Context, div, type Element } from "gpui-kit";
 import { type Activity, activityText, issueTimeline } from "../core/activity.ts";
-import { type DetailRef, detailKey, notVisible } from "../core/detail.ts";
+import { type DetailRef, detailKey } from "../core/detail.ts";
 import type { Change } from "../core/gh.ts";
 import type { IssueDetail } from "../core/issue-detail.ts";
 import { ConditionalPoll } from "../core/polling.ts";
@@ -14,7 +14,6 @@ import { announce, type Notice, Notices } from "../io/changes.ts";
 import { detailLocation } from "../io/detail-tabs.ts";
 import * as gh from "../io/gh.ts";
 import { addComment, issueChanges, readIssue, setIssueState } from "../io/issues.ts";
-import { readProjects } from "../io/projects.ts";
 import {
 	type DetailHost,
 	type DetailLayout,
@@ -24,12 +23,10 @@ import {
 	detailEmpty,
 	detailHeader,
 	labelChip,
-	labels,
-	milestone,
+	loadProjects,
 	openLink,
-	people,
 	postCard,
-	projects,
+	readFailure,
 	stateBadge,
 } from "./detail.ts";
 import { colors, spinner, stop } from "./ui.ts";
@@ -158,22 +155,13 @@ export class Issue {
 					if (!current()) return;
 					entry.issue = issue;
 					entry.on = on;
-					entry.projectsLoading = true;
 					// Projects load on their own, only after an actual discussion reload.
-					cx.spawn(async (cx) => {
-						const projects = await readProjects(ref, on);
-						if (this.entry !== entry) return;
-						entry.projects = projects;
-						entry.projectsLoading = false;
-						cx.notify();
-					});
+					loadProjects(cx, ref, on, entry, () => this.entry === entry);
 				}
 				completed = change;
 				entry.failure = undefined;
 			} catch (e) {
-				if (!current()) return;
-				const failure = gh.failureOf(e);
-				entry.failure = failure.notFound ? notVisible(ref) : failure.message;
+				if (current()) entry.failure = readFailure(ref, e);
 			} finally {
 				if (!detailLocation(this.host.reader)?.visible) this.syncPolling();
 				const result = this.polling.finish(request, completed);
@@ -255,7 +243,7 @@ export class Issue {
 		if (this.syncPolling()) this.load(cx);
 		const ref = this.ref;
 		const entry = this.entry;
-		if (!ref) return [detailEmpty("issue")];
+		if (!ref) return [detailEmpty()];
 		const issue = entry?.issue;
 		return [
 			detailHeader(this.host, ref, { title: issue?.title, url: issue?.url, loading: Boolean(entry?.loading) }, (cx) =>
@@ -284,17 +272,15 @@ export class Issue {
 				),
 				this.composer(issue),
 			],
-			[
-				["Assignees", people(issue.assignees, "No assignees")],
-				["Labels", labels(issue.labels), issue.labels.length],
-				["Project", projects(this.entry?.projects, Boolean(this.entry?.projectsLoading))],
-				["Milestone", milestone(issue.milestone)],
-			],
+			{
+				item: issue,
+				projects: this.entry?.projects,
+				projectsLoading: Boolean(this.entry?.projectsLoading),
+			},
 			this.metadata,
 		);
 	}
 
-	/** A label or assignment change between the comments. */
 	private activity(activity: Activity): Element {
 		const t = colors();
 		const avatar = div()
