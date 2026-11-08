@@ -1,46 +1,62 @@
 # herdr-plugin-github
 
-A GitHub mod for [Herdr](https://herdr.dev) that brings repository Issues and Pull Requests into your development workspace. Browse them alongside your terminals and read discussions in native Herdr tabs without switching to a browser. The interface follows the VS Code GitHub Pull Requests extension.
+[![verify](https://github.com/lw396/herdr-plugin-github/actions/workflows/verify.yml/badge.svg)](https://github.com/lw396/herdr-plugin-github/actions/workflows/verify.yml)
+[![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
-The mod uses GitHub CLI (`gh`) on the machine hosting the repository, so local and remote folders use their own GitHub accounts and credentials.
+A GitHub mod for [Herdr](https://herdr.dev): browse, read and review the Issues and Pull Requests of
+the repository you are working in, right beside your terminals. The interface follows the
+[VS Code GitHub Pull Requests extension](https://marketplace.visualstudio.com/items?itemName=GitHub.vscode-pull-request-github).
+
+All GitHub access goes through the GitHub CLI (`gh`) on the machine that hosts the folder, so local
+and remote folders each use their own account and credentials.
 
 ## Features
 
-- **Repository detection** — identify the GitHub repository from the focused folder's git remotes.
-- **Issue sidebar** — browse issues assigned to you, all open issues, and closed issues, with pagination.
-- **Pull Requests tab** — **Local Pull Request Branches**, **Waiting For My Review**, **Created By Me** and **All Open**, as in the VS Code extension, list pull requests with a state icon, `#number title` (drafts in italics) and `by @author`, with pagination; hover a row to copy its number or open it in your browser. The local group batch-matches the focused folder's branches to their latest PRs, including closed and merged PRs, and checks head repositories to avoid fork-name collisions. Open a PR to read its description and comments, or expand its row to browse changed files.
-- **Hover previews** — rest the pointer on an issue or PR for half a second to see its repository, creation date, state, title, author, description excerpt, and labels in a native hover card. Summaries load only on hover using that repository machine's gh, are cached for one minute per account, and never fetch comments or reviews. A cold or slow read shows a loading indicator until the summary arrives.
-- **Status footer** — a fixed sidebar footer shows which gh account is used on which machine, and says when a check for list changes fails. It adds no requests; the issue list scrolls independently. The branch is left to Herdr's own display.
-- **Automatic list refresh** — while the GitHub sidebar is visible, check for changes every 60 seconds using ETags; refresh expanded groups only when changed. Showing it again refreshes immediately. While the PRs tab and local group are visible and expanded, local branches are re-read each minute; only a changed branch snapshot or an explicit refresh reissues their GraphQL batch.
-- **Native detail tabs** — open different issues and PRs in separate tabs; selecting an already-open item reuses its tab. Contents remain session-only.
-- **Discussion reader** — read Markdown descriptions, comments, and reaction counts in individual cards.
-- **Automatic discussion refresh** — check the visible issue or PR tab every 10 seconds using ETags; PRs also conditionally check discussion, review, inline-comment and commit-check resources rather than assuming the PR validator covers them; keep unsent comments through refreshes, stop polling hidden tabs, and refresh immediately when shown again.
-- **Issue and PR links** — links to the repository's issues and PRs open the appropriate reader in the same tab, with **←** to go back across both kinds; `#123` references open as issue links. Other links open in your browser.
-- **Comment, close and reopen** — post a new comment (⌘/Ctrl+Enter for issues) or close and reopen an issue or PR from its tab; mark a draft PR **Ready for Review**. The sidebar's groups and other readers update immediately after PR state changes; failed comments keep unsent text.
-- **Issue and PR metadata** — view colored labels, assignees, linked Projects, and milestones. PR descriptions also show reviewers with their review states and the source and target branches.
-- **Activity timeline** — see label and assignment changes between comments in chronological order. PR descriptions also include reviews with grouped inline discussions, colored code snippets with Show/Hide controls, and reply/resolve actions without leaving the timeline. Commits, force-pushes, merges, and close/reopen events use compact rows rather than empty comment cards. Commit rows show the SHA and subject, with Show/Hide controls for the remaining message; authors and timestamps stay in a separate heading.
-- **Changed files and unified diff** — browse a compact directory tree or flat list, with change-type badges. Expand a PR in the GitHub sidebar and select a file to view its diff in the same PR tab; **Description** switches back. The file tree stays in the sidebar, not above the reader. Diffs show old/new line numbers and colored additions/deletions using viewport-windowed rows. Files without a GitHub patch show an explanation; every file can be opened on GitHub.
-- **Inline comments** — select a LEFT or RIGHT line number in a diff to open a comment box, then **Add Comment** to publish a standalone review comment. Headers and notices cannot receive comments; failed writes keep the draft and show the error. Drafts survive discussion refreshes and switching files within the PR.
-- **Reviews** — use **Start Review** on a diff line to begin a pending review on GitHub; later inline comments join it and display as **Pending**. Existing pending reviews, including ones started in the browser, are resumed. With a pending review, write a summary below the description and submit with **Comment**, **Approve**, or **Request Changes**. Without a pending review, only **Comment** is shown and posts an ordinary discussion comment. Failed writes keep unsent text.
-- **Diff discussions** — existing review conversations appear beneath their LEFT/RIGHT diff line, with replies, reaction counts, and Resolve conversation / Unresolve conversation actions where permitted. Outdated or unavailable lines are explained rather than hidden. Select a discussion's file path in the timeline to jump to it in the same PR tab. Discussion cards fit their content, with long discussions scrolling internally. Replies keep unsent text through refreshes and can be cancelled; successful writes update immediately and notify other views on the same machine.
-- **Viewed files** — mark a file with **Mark File As Viewed** or **Mark File As Not Viewed** from the sidebar or its diff; changes sync to GitHub and other open views. **Toggle Hide Viewed Files** filters both tree and list layouts. GitHub-invalidated marks (files changed since viewing) count as not viewed on refresh.
-- **PR status card** — below the timeline, expand the checks summary to see check runs and commit statuses, including recorded duration when available; open each check in your browser. The same card shows mergeability and the merge action. **Create Merge Commit** is the default when allowed (otherwise the first allowed method is used); **Change method…** reveals other allowed methods inline. **Merge Pull Request** shows the selected method beside it, and confirmation names that method before merging. When there are no checks or statuses, the card shows No checks reported.
-- **Quick actions** — refresh an issue or PR, copy its URL, or open it in your browser.
+**Sidebar**
+
+- Detects the GitHub repository from the focused folder's git remotes.
+- **Issues**: assigned to me, open and closed, with pagination.
+- **Pull Requests**: Local Pull Request Branches, Waiting For My Review, Created By Me and All Open.
+  Local branches are matched to their PRs, including merged and closed ones, without fork-name collisions.
+- Hover previews with state, author, description excerpt and labels.
+- Expand a PR to browse its changed files as a tree or a flat list.
+- Refreshes automatically while visible, using ETags so unchanged lists cost no rate limit.
+
+**Issue and PR tabs**
+
+- Each issue or PR opens in its own native Herdr tab.
+- Markdown descriptions and comments with reactions, labels, assignees, Projects and milestones.
+- A chronological activity timeline: label and assignment changes, commits, force-pushes, reviews and
+  their inline discussions.
+- Links to issues and PRs in the same repository open in place, with **←** to go back.
+- Comment, close, reopen, and mark draft PRs ready for review.
+- Checks and commit statuses, mergeability, and merging with any method the repository allows.
+
+**Code review**
+
+- Unified diffs with old/new line numbers, rendered efficiently for large files.
+- Existing review conversations under their diff lines, with reply and resolve/unresolve.
+- Single inline comments, or **Start Review** for a pending review submitted as Comment, Approve or
+  Request Changes. Pending reviews started in the browser are resumed.
+- Mark files as viewed, synced with GitHub, and hide viewed files.
+
+Unsent text survives refreshes and failed writes, and changes made in one view update the others.
 
 ## Requirements
 
-- The Herdr desktop app.
+- The [Herdr](https://herdr.dev) desktop app. Developed and tested against Herdr 0.1.13.
 - A folder cloned from a GitHub repository.
-- `git` and GitHub CLI (`gh`) installed on the machine hosting that folder. The CLI must support `gh api --slurp`.
-- A GitHub account signed in on that machine with `gh auth login`.
+- On the machine hosting that folder: `git`, and a recent GitHub CLI (`gh`, with `gh api --slurp`)
+  signed in with `gh auth login`.
 
-For a remote folder, install and authenticate these tools on the remote machine. The mod does not fall back to your local account.
+For remote folders, install and sign in to `gh` on the remote machine. The mod never falls back to
+your local account.
 
 ## Installation
 
-Copy or sync the following files into your Herdr app home:
+Copy these into your Herdr app home:
 
-| Repository path       | Destination                               |
+| From this repository  | To                                        |
 | --------------------- | ----------------------------------------- |
 | `mods/github/`        | `~/.config/herdr-app/mods/github/`        |
 | `mods/tabs-github/`   | `~/.config/herdr-app/mods/tabs-github/`   |
@@ -52,24 +68,31 @@ Then switch to the included layout:
 herdr-app do layout.switch '{"name":"github"}'
 ```
 
-Focus a terminal in your repository, select **GitHub** in the sidebar, and click an issue to open its discussion, or switch to **Pull Requests** and select a PR to read its description. The included layout adds the GitHub sidebar tab and GitHub-aware pane headers.
+The layout adds a **GitHub** button beside Files and Changes in the tab bar. Focus a terminal in your
+repository and open it.
 
-## Current scope
+## Limitations
 
-Issues can be read, commented on, closed and reopened. Pull requests can be listed, commented on, closed and reopened, and drafts marked ready for review. Their descriptions and comments can be read, and their changed files viewed as unified diffs with standalone inline comments or pending reviews submitted with Comment, Approve, or Request Changes. Creating or editing issues and pull requests is left to the browser or to `gh`.
-
-Images are shown as browser links rather than loaded automatically. Open issue and PR contents are session-only: after restarting Herdr or hot-reloading the mod, empty detail panes close automatically after a short wait. Select the item from the sidebar to open it again.
-
-Linked Projects require the appropriate GitHub permissions. If Projects cannot be read, the reader displays `None yet`, with the reason available in its tooltip.
+- Creating or editing issues and pull requests is not supported yet; use the browser or `gh`.
+- Images are shown as links rather than loaded inline.
+- Open issue and PR tabs are not restored after restarting Herdr; reopen them from the sidebar.
+- Linked Projects need the corresponding GitHub token scope. Without it, Projects show `None yet`
+  and the tooltip explains why.
 
 ## Development
 
-Source code lives in `src/github/`; `mods/github/` contains the bundled, installable output and is committed to the repository. Installation does not require Node.js or npm packages.
+The source lives in `src/github/`. `mods/github/` is the bundled output and is committed, so
+installing needs neither Node.js nor npm packages.
 
 ```sh
 bun install
-bun run dev         # rebuild on source changes; restart after asset changes
-bun run verify      # build, typecheck, tests, and Herdr loading checks
+bun run dev      # rebuild on source changes
+bun run verify   # lint, build, typecheck, tests and Herdr loading checks
 ```
 
-Verification requires `herdr-app` on your PATH. The app runs on the user's Mac; loading checks do not replace visual and interaction testing there.
+`verify` needs `herdr-app` on your `PATH`. Loading checks do not lay out the UI, so check visual
+changes in the app as well.
+
+## License
+
+[Apache-2.0](LICENSE). Some files come from the Herdr app under the same license; see [NOTICE](NOTICE).

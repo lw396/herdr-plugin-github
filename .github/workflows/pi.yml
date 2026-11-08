@@ -13,7 +13,7 @@ on:
 jobs:
   pi:
     # Only owners, members and collaborators (not bots) start the job, so
-    # others' comments never reach the self-hosted runner. The action
+    # others' comments never spend the API keys or reach the agent. The action
     # still checks write permission. The comment's or review's author
     # comes first: on issue_comment the issue author may be someone else.
     if: |
@@ -34,7 +34,7 @@ jobs:
       github.event.issue.user.type != 'Bot' &&
       (contains(github.event.issue.body, '@pi') ||
       contains(github.event.issue.title, '@pi'))))
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
     env:
       # Same as verify.yml.
       HERDR_APP_VERSION: 0.1.13
@@ -57,11 +57,12 @@ jobs:
           fetch-depth: 0
           persist-credentials: false # The action configures its own App token.
 
-      # For bun run check/smoke. The runner needs libxkbcommon-x11-0 and
-      # libxcb-xkb1.
+      # For bun run check/smoke.
       - name: Install Herdr (subcommands only)
         run: |
           test "$(cat types/VERSION)" = "herdr-app $HERDR_APP_VERSION"
+          sudo apt-get update
+          sudo apt-get install -y libxkbcommon-x11-0 libxcb-xkb1
           base=https://releases.herdr.dev/app/$HERDR_APP_VERSION
           tgz=$RUNNER_TEMP/herdr-app.tgz
           curl -fsSL "$base/herdr-app-linux-x86_64.tar.gz" -o "$tgz"

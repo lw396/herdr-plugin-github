@@ -1,4 +1,0 @@
-{
-	"global": { "cmd-shift-g": "mod.open:github" },
-	"terminal": { "cmd-shift-g": "mod.open:github" }
-}
