@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
 import {
+	closeEmptyDetail,
 	DetailTabs,
 	detailCommand,
 	detailLocation,
@@ -53,6 +54,25 @@ test("the reader knows its own pane and shown tab even when keyboard focus is el
 	expect(detailLocation(reader)?.visible).toBe(false);
 	screen({ spaces: [space], panes: [source] });
 	expect(detailLocation(reader)).toBeNull();
+});
+
+test("an empty restored reader closes only its own pane, not the focused terminal", () => {
+	setShared("github.readers", { [reader]: { tab: detail.tab, request: "old", ready: "old" } });
+	screen({
+		spaces: [{ ...space, active: true, tabs: [{ id: detail.tab, active: true }] }],
+		panes: [source, detail],
+		focused: { space: space.id, tab: source.tab, pane: source.pane },
+	});
+	closeEmptyDetail(reader);
+	expect(commands()).toEqual([{ name: "pane.close", args: { pane: "center/p2" } }]);
+});
+
+test("empty reader cleanup ignores hidden tabs and missing readers", () => {
+	setShared("github.readers", { [reader]: { tab: detail.tab, request: "old", ready: "old" } });
+	atSource(true);
+	closeEmptyDetail(reader);
+	closeEmptyDetail("missing");
+	expect(commands()).toEqual([]);
 });
 
 test("older reader metadata resolves its pane by tab, but zooming another pane hides it", () => {
@@ -243,6 +263,31 @@ test("a PR opens its own native tab in the PR role, and a repeated click selects
 	await tabs.open({ kind: "pr", repo: "CLI/cli", number: 42 });
 	expect(commands().at(-1)).toEqual({ name: "tab.select", args: { id: detail.tab } });
 	expect(execCalls().filter((c) => c.command === "herdr-app")).toHaveLength(1);
+});
+
+test("files and Description select the same PR tab, with only the last queued file delivered", async () => {
+	atSource();
+	const pr = `~$ herdr-app do tab.new {"space":"center/s1","name":"#42 · cli","mod":"github","props":{"role":"pr","reader":"${reader}"}}`;
+	machine(null, { [pr]: { stdout: '{"tab":"center/tb2","pane":"center/p2"}' } });
+	const tabs = new DetailTabs();
+	const ref = { kind: "pr", repo: "cli/cli", number: 42 } as const;
+	await tabs.open(ref, "src/a.ts");
+	atDetail();
+	readyDetail(reader);
+	tabs.deliver();
+	expect(detailCommand(commands().at(-1)!.name.slice(7), reader)).toEqual({ ...ref, file: "src/a.ts" });
+	machine(null, {});
+	await tabs.open(ref, "src/b.ts");
+	await tabs.open(ref, "src/c.ts");
+	readyDetail(reader);
+	tabs.deliver();
+	expect(detailCommand(commands().at(-1)!.name.slice(7), reader)).toEqual({ ...ref, file: "src/c.ts" });
+	await tabs.open(ref);
+	readyDetail(reader);
+	tabs.deliver();
+	expect(detailCommand(commands().at(-1)!.name.slice(7), reader)).toEqual(ref);
+	expect(execCalls().filter((c) => c.command === "herdr-app")).toHaveLength(1);
+	expect(detailCommand(`detail:${JSON.stringify({ reader, ...ref, file: 12 })}`, reader)).toBeNull();
 });
 
 test("an issue and a PR with the same number do not share a tab", async () => {

@@ -1,6 +1,30 @@
 import { expect, test } from "bun:test";
 import { parseChecks, pullTimeline } from "../../src/github/core/pull-timeline.ts";
 
+test("commit activity shows only its subject and keeps multiline details available separately", () => {
+	const [commit] = pullTimeline(
+		[],
+		[
+			{
+				event: "committed",
+				sha: "1f7e702abcdef",
+				author: { name: "pi-agent-action[bot]", date: "2026-01-01T00:00:00Z" },
+				message:
+					"Add PR merge confirmation and remote branch deletion\r\n\r\nRefs #33.\r\n\r\nCo-authored-by: Valian <dev@example.com>",
+			},
+		],
+		[],
+		[],
+		"https://github.com/a/b/pull/39",
+	);
+	expect(commit?.body).toBe("1f7e702 Add PR merge confirmation and remote branch deletion");
+	expect(commit?.markdown).not.toContain("Co-authored-by");
+	expect(commit?.details).toEqual({
+		body: "Refs #33.\n\nCo-authored-by: Valian <dev@example.com>",
+		markdown: "Refs [#33](<https://github.com/a/b/issues/33>).\n\nCo-authored-by: Valian <dev@example.com>",
+	});
+});
+
 test("merge comments and commits by time, omit unsupported events", () => {
 	const items = pullTimeline(
 		[],
@@ -13,6 +37,9 @@ test("merge comments and commits by time, omit unsupported events", () => {
 		"https://github.com/a/b/pull/1",
 	);
 	expect(items.map((x) => x.verb)).toEqual(["committed", "closed this"]);
+	expect(items.map((x) => x.kind)).toEqual(["event", "event"]);
+	expect(items[0]).toMatchObject({ body: "abc Fix", markdown: "abc Fix" });
+	expect(items[0]?.details).toBeUndefined();
 });
 test("reviews carry inline code, replies and reactions, pending reviews are excluded", () => {
 	const url = "https://github.com/a/b/pull/1";
@@ -22,6 +49,7 @@ test("reviews carry inline code, replies and reactions, pending reviews are excl
 		[
 			{ id: 1, state: "APPROVED", submitted_at: "2026-01-01", user: { login: "reviewer" }, body: "Good" },
 			{ id: 2, state: "PENDING", submitted_at: null },
+			{ id: 3, state: "COMMENTED", submitted_at: "2026-01-02", user: { login: "author" }, body: "" },
 		],
 		[
 			{
@@ -47,6 +75,8 @@ test("reviews carry inline code, replies and reactions, pending reviews are excl
 		url,
 	);
 	expect(items).toHaveLength(1);
+	expect(items[0]?.kind).toBe("review");
+	expect(items[0]?.discussion.map((d) => d.root)).toEqual([10, 10]);
 	expect(items[0]?.discussion.map((d) => [d.comment.body, d.snippet, d.comment.reactions])).toEqual([
 		["Fix", "@@ -1 +1 @@\n-old\n+new", [{ emoji: "👍", count: 2 }]],
 		["Done", "", []],

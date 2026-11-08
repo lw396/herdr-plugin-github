@@ -6,7 +6,12 @@ const fixture = (name: string) => JSON.parse(readFileSync(new URL(`../fixtures/$
 const parse = (name: string) => parsePullDetail(fixture(name), { reactions: {} }, [], []);
 
 test("ready, draft, closed and merged PRs have distinct states", () => {
-	expect(parse("pull-plugin-35.json")).toMatchObject({ state: "open", head: "test/pr-fixture-a", base: "master" });
+	expect(parse("pull-plugin-35.json")).toMatchObject({
+		state: "open",
+		head: "test/pr-fixture-a",
+		headSha: "63f52f1dddd87eecbe02a9013523124921ee4345",
+		base: "master",
+	});
 	expect(parse("pull-plugin-36.json").state).toBe("draft");
 	expect(parse("pull-cli-14974.json").state).toBe("closed");
 	expect(parse("pull-cli-14976.json").state).toBe("merged");

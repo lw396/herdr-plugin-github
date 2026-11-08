@@ -7,8 +7,10 @@ import { type Context, div, type Element } from "gpui-kit";
 import type { DetailKind, DetailRef } from "../core/detail.ts";
 import type { Failure } from "../core/gh.ts";
 import type { Page } from "../core/page.ts";
+import { previewKey } from "../core/preview.ts";
 import * as gh from "../io/gh.ts";
 import type { Ready } from "../io/known.ts";
+import { RowPreviews } from "./preview.ts";
 import { button, colors, spinner, stop } from "./ui.ts";
 
 /** What a tab's groups ask of the sidebar, each time (the place can change between calls). */
@@ -19,7 +21,7 @@ export interface ListHost {
 	/** False stops asking (a hidden sidebar). */
 	asking(): boolean;
 	/** Opens (or selects) the row's reader tab. */
-	open(cx: Context, ref: DetailRef): void;
+	open(cx: Context, ref: DetailRef, file?: string): void;
 }
 
 export interface GroupSpec<K extends string> {
@@ -48,6 +50,9 @@ export interface GroupSource<K extends string, R extends Row, P extends Page<R>>
 	cells(row: R): Element[];
 	/** What follows, unless the pointer is over the row: then Copy and Open in browser do. */
 	idle(row: R): Element[];
+	/** Optional PR disclosure before the row, with its expanded changed-files navigator below. */
+	disclosure?(row: R, key: string): Element;
+	expandedRow?(row: R, key: string, cx: Context): Element | null;
 	/** A failed ask (Issues forget their list's validator, so the next check asks again). */
 	failed?(): void;
 }
@@ -66,6 +71,7 @@ export class GroupList<K extends string, R extends Row, P extends Page<R>> {
 	private readonly groups: Record<K, Group<P>>;
 	private readonly host: ListHost;
 	private readonly source: GroupSource<K, R, P>;
+	private readonly previews = new RowPreviews();
 
 	constructor(host: ListHost, source: GroupSource<K, R, P>) {
 		this.host = host;
@@ -186,12 +192,12 @@ export class GroupList<K extends string, R extends Row, P extends Page<R>> {
 		});
 	}
 
-	render(): Element[] {
-		return this.source.groups.map((spec) => this.group(spec));
+	render(cx: Context): Element[] {
+		return this.source.groups.map((spec) => this.group(spec, cx));
 	}
 
 	/** A foldable group: its title and count, then (unfolded) why it failed, its rows and Load more. */
-	private group({ kind, title, empty }: GroupSpec<K>): Element {
+	private group({ kind, title, empty }: GroupSpec<K>, cx: Context): Element {
 		const t = colors();
 		const id = this.source.kind;
 		const g = this.groups[kind];
@@ -270,28 +276,34 @@ export class GroupList<K extends string, R extends Row, P extends Page<R>> {
 					.when(page !== undefined && rows.length === 0, (el) =>
 						el.child(div().px(8).pl(22).py(4).text_size(12).text_color(t.dim).child(empty)),
 					)
-					.children(rows.map((row) => this.row(kind, row)))
+					.children(rows.map((row) => this.row(kind, row, cx)))
 					.when(Boolean(page?.more), (el) => el.child(more)),
 			);
 	}
 
 	/** A row's frame: click opens it; the pointer over it swaps its end for Copy and Open in browser. */
-	private row(kind: K, row: R): Element {
+	private row(kind: K, row: R, cx: Context): Element {
 		const t = colors();
 		const id = this.source.kind;
 		const key = `${kind}#${row.number}`;
+		const ready = this.host.ready();
+		const ref: DetailRef | null = ready
+			? { kind: id, repo: `${ready.remote.owner}/${ready.remote.repo}`, number: row.number }
+			: null;
+		const contextKey = ready && ref ? previewKey(ref, ready.on, ready.login) : null;
 		const actions = [
 			button(`${id}-copy-${kind}-${row.number}`, "#", `Copy #${row.number}`, (_e, cx) =>
 				cx.write_to_clipboard(`#${row.number}`),
 			),
 			button(`${id}-open-${kind}-${row.number}`, "↗", "Open in browser", (_e, cx) => cx.open_url(row.url)),
 		];
-		return h_flex()
+		const disclosure = this.source.disclosure?.(row, key);
+		const frame = h_flex()
 			.id(`${id}-${kind}-${row.number}`)
 			.h(28)
 			.px(8)
-			.pl(22)
-			.gap(8)
+			.pl(disclosure ? 14 : 22)
+			.gap(disclosure ? 6 : 8)
 			.items_center()
 			.rounded(6)
 			.cursor_pointer()
@@ -304,8 +316,18 @@ export class GroupList<K extends string, R extends Row, P extends Page<R>> {
 			.on_hover((h, cx) => {
 				if (h) this.hovered = key;
 				else if (this.hovered === key) this.hovered = null;
+				this.previews.hover(cx, `${key}-${contextKey}`, h ? ref : null, ready, () => {
+					const live = this.host.ready();
+					if (!live || !ref || this.hovered !== key || !this.host.asking()) return false;
+					const target = { ...ref, repo: `${live.remote.owner}/${live.remote.repo}` };
+					return previewKey(target, live.on, live.login) === contextKey;
+				});
 				cx.notify();
 			})
+			.children(disclosure ? [disclosure] : [])
 			.children([...this.source.cells(row), ...(this.hovered === key ? actions : this.source.idle(row))]);
+		const card = ready && ref ? this.previews.wrap(`${id}-${key}`, frame, ref, ready) : frame;
+		const expanded = this.source.expandedRow?.(row, key, cx);
+		return expanded ? v_flex().child(card).child(expanded) : card;
 	}
 }

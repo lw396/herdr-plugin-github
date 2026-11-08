@@ -3,7 +3,7 @@ import { type Comment, login, parseComments, parseReactions, type Reaction } fro
 import { type Label, parseLabel } from "./labels.ts";
 import { readerMarkdown } from "./markdown.ts";
 import type { PullCheck, PullTimelineItem } from "./pull-timeline.ts";
-import type { PullState } from "./pulls.ts";
+import { type PullState, pullState } from "./pulls.ts";
 
 export type ReviewState = "requested" | "approved" | "changes_requested" | "commented" | "dismissed";
 export interface Reviewer {
@@ -21,6 +21,7 @@ export interface PullDetail {
 	createdAt: string;
 	url: string;
 	head: string;
+	headSha: string;
 	base: string;
 	labels: Label[];
 	assignees: string[];
@@ -43,7 +44,7 @@ interface RestPull {
 	user: { login: string } | null;
 	created_at: string;
 	html_url: string;
-	head: { label: string; ref: string };
+	head: { label: string; ref: string; sha: string };
 	base: { label: string; ref: string };
 	labels: (string | { name: string; color?: string })[];
 	assignees: { login: string }[];
@@ -86,11 +87,12 @@ export function parsePullDetail(pull: unknown, issue: unknown, comments: unknown
 	return {
 		number: p.number,
 		title: p.title,
-		state: p.merged ? "merged" : p.state === "closed" ? "closed" : p.draft ? "draft" : "open",
+		state: pullState(p.merged ? "merged" : p.state, p.draft),
 		author: login(p.user),
 		createdAt: p.created_at,
 		url: p.html_url,
 		head: crossOwner ? p.head.label || p.head.ref : p.head.ref,
+		headSha: p.head.sha,
 		base: crossOwner ? p.base.label || p.base.ref : p.base.ref,
 		labels: p.labels.map(parseLabel),
 		assignees: p.assignees.map((a) => a.login),

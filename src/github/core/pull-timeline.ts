@@ -33,8 +33,11 @@ interface Inline {
 	reactions?: Record<string, number | string>;
 }
 export interface PullTimelineItem extends Comment {
+	kind: "comment" | "review" | "event";
 	verb: string;
-	discussion: { comment: Comment; path: string; snippet: string }[];
+	/** Commit message after the subject, hidden until explicitly expanded. */
+	details?: { body: string; markdown: string };
+	discussion: { root: number; comment: Comment; path: string; snippet: string }[];
 }
 
 /** Separate endpoints are merged once; pending reviews remain private, not published activity. */
@@ -45,7 +48,12 @@ export function pullTimeline(
 	inline: unknown[],
 	url: string,
 ): PullTimelineItem[] {
-	const result: PullTimelineItem[] = comments.map((c) => ({ ...c, verb: "commented", discussion: [] }));
+	const result: PullTimelineItem[] = comments.map((c) => ({
+		...c,
+		kind: "comment",
+		verb: "commented",
+		discussion: [],
+	}));
 	for (const r of reviews as Review[]) {
 		if (!r.submitted_at || r.state === "PENDING") continue;
 		const all = inline as Inline[];
@@ -53,6 +61,14 @@ export function pullTimeline(
 		const roots = all
 			.filter((c) => !c.in_reply_to_id && c.pull_request_review_id === r.id)
 			.sort((a, b) => a.created_at.localeCompare(b.created_at) || a.id - b.id);
+		// A reply can create a body-less COMMENTED review; its content already belongs to the original conversation.
+		if (
+			r.state === "COMMENTED" &&
+			!r.body?.trim() &&
+			roots.length === 0 &&
+			all.some((c) => c.pull_request_review_id === r.id && c.in_reply_to_id)
+		)
+			continue;
 		const discussion = roots
 			.flatMap((root) => [
 				root,
@@ -60,7 +76,12 @@ export function pullTimeline(
 					.filter((c) => c.in_reply_to_id === root.id)
 					.sort((a, b) => a.created_at.localeCompare(b.created_at) || a.id - b.id),
 			])
-			.map((c) => ({ comment: parseComment(c, url), path: c.path, snippet: c.in_reply_to_id ? "" : c.diff_hunk }));
+			.map((c) => ({
+				root: c.in_reply_to_id ?? c.id,
+				comment: parseComment(c, url),
+				path: c.path,
+				snippet: c.in_reply_to_id ? "" : c.diff_hunk,
+			}));
 		const verbs: Record<string, string> = {
 			APPROVED: "approved these changes",
 			CHANGES_REQUESTED: "requested changes",
@@ -69,6 +90,7 @@ export function pullTimeline(
 		};
 		result.push({
 			...parseComment({ id: r.id, user: r.user, body: r.body, created_at: r.submitted_at }, url),
+			kind: "review",
 			verb: verbs[r.state] ?? "reviewed",
 			discussion,
 		});
@@ -76,13 +98,17 @@ export function pullTimeline(
 	for (const e of events as Event[]) {
 		let verb = "";
 		let body = "";
+		let details: PullTimelineItem["details"];
 		const activity = parseActivity([e])[0];
 		if (activity) {
 			verb = activityText(activity);
 			body = "labels" in activity ? activity.labels.map((l) => l.name).join(", ") : "";
 		} else if (e.event === "committed") {
 			verb = "committed";
-			body = `${e.sha?.slice(0, 7) ?? ""} ${e.message ?? ""}`;
+			const [subject = "", ...lines] = (e.message ?? "").trim().split(/\r?\n/);
+			body = `${e.sha?.slice(0, 7) ?? ""} ${subject}`.trim();
+			const rest = lines.join("\n").trim();
+			if (rest) details = { body: rest, markdown: readerMarkdown(rest, url) };
 		} else if (e.event === "head_ref_force_pushed") {
 			verb = "force-pushed the branch";
 			body = e.commit_id?.slice(0, 7) ?? "";
@@ -99,7 +125,9 @@ export function pullTimeline(
 			body,
 			markdown: readerMarkdown(body, url),
 			reactions: [],
+			kind: "event",
 			verb,
+			...(details ? { details } : {}),
 			discussion: [],
 		});
 	}

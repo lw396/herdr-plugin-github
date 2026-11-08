@@ -30,6 +30,18 @@ describe("Cache", () => {
 		expect(cache.get("k")).toBeNull();
 	});
 
+	test("deleting one entry leaves other cached results intact", () => {
+		const cache = new Cache<string>(2);
+		cache.set("failed", "unavailable", 0);
+		cache.set("kept", "ready", 0);
+		cache.delete("failed");
+		cache.delete("missing");
+		expect(cache.has("failed")).toBe(false);
+		expect(cache.get("failed")).toBeUndefined();
+		expect(cache.fresh("failed", 1000, 0)).toBe(false);
+		expect(cache.get("kept")).toBe("ready");
+	});
+
 	test("over its limit, the least recently used goes", () => {
 		const cache = new Cache<number>(2);
 		cache.set("a", 1, 0);

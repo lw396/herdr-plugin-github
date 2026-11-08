@@ -10,6 +10,9 @@ interface ReaderTab {
 	request: string;
 	ready: string | null;
 }
+/** A file changes the view inside a PR tab, never the tab's identity. */
+type DetailTarget = DetailRef & { file?: string };
+
 interface OpenReader {
 	id: string;
 	reader: ReaderTab;
@@ -36,10 +39,10 @@ export function readyDetail(id: string): void {
 /** Explicit clicks can reuse native tab frames; contents and pending opens are session-only. */
 export class DetailTabs {
 	private opened = new Map<string, string>();
-	private pending = new Map<string, DetailRef>();
+	private pending = new Map<string, DetailTarget>();
 	private creating = new Map<string, Promise<OpenReader>>();
 
-	async open(ref: DetailRef): Promise<void> {
+	async open(ref: DetailRef, file?: string): Promise<void> {
 		const space = focused()?.space,
 			owner = spaces().find((s) => s.id === space);
 		if (!space || !owner)
@@ -74,7 +77,7 @@ export class DetailTabs {
 			}
 			this.opened.set(identity, target.id);
 		}
-		this.pending.set(target.id, ref);
+		this.pending.set(target.id, file && ref.kind === "pr" ? { ...ref, file } : ref);
 		// A fresh handshake prevents persisted readiness from accepting an issue or PR before init.
 		remember(target.id, { ...target.reader, identity, request: `${Date.now()}-${Math.random()}`, ready: null });
 		const tabName = owner.tabs.find((t) => t.id === target.reader.tab)?.name;
@@ -146,8 +149,14 @@ export function detailLocation(id: string): { pane: string; on: string | null; v
 	};
 }
 
+/** Close a reader that received no item, never an unrelated focused pane or a hidden pending tab. */
+export function closeEmptyDetail(id: string): void {
+	const location = detailLocation(id);
+	if (location?.visible) run("pane.close", { pane: location.pane });
+}
+
 /** Mod commands are broadcast: only the intended reader may accept this issue or PR. */
-export function detailCommand(command: string, id: string): DetailRef | null {
+export function detailCommand(command: string, id: string): DetailTarget | null {
 	if (!command.startsWith(COMMAND)) return null;
 	try {
 		const value = JSON.parse(command.slice(COMMAND.length)) as {
@@ -155,6 +164,7 @@ export function detailCommand(command: string, id: string): DetailRef | null {
 			kind?: string;
 			repo?: string;
 			number?: number;
+			file?: unknown;
 		} | null;
 		if (
 			value?.reader !== id ||
@@ -166,7 +176,10 @@ export function detailCommand(command: string, id: string): DetailRef | null {
 			value.number <= 0
 		)
 			return null;
-		return { kind: value.kind, repo: value.repo, number: value.number };
+		if (value.file !== undefined && (value.kind !== "pr" || typeof value.file !== "string" || !value.file)) return null;
+		const ref: DetailTarget = { kind: value.kind, repo: value.repo, number: value.number };
+		if (typeof value.file === "string") ref.file = value.file;
+		return ref;
 	} catch {
 		return null;
 	}

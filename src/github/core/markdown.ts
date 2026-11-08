@@ -52,6 +52,20 @@ export function detailLink(href: string, base: string): DetailRef | null {
 	return Number.isSafeInteger(number) ? { kind: path[2] === "pull" ? "pr" : "issue", repo, number } : null;
 }
 
+/** A compact plain-text hover excerpt: no remote images, markup or template comments. */
+export function markdownSummary(markdown: string): string {
+	function text(node: Nodes): string {
+		if (node.type === "text" || node.type === "inlineCode" || node.type === "code") return node.value;
+		if (node.type === "image" || node.type === "imageReference") return node.alt ?? "";
+		if (!("children" in node)) return "";
+		const separator = node.type === "paragraph" || node.type === "heading" ? "" : " ";
+		return node.children.map(text).join(separator);
+	}
+	const plain = text(fromMarkdown(markdown)).replace(/\s+/g, " ").trim();
+	const characters = [...plain];
+	return characters.length > 350 ? `${characters.slice(0, 350).join("")}…` : plain;
+}
+
 const link = (text: string, url: string): string => `[${text}](<${url.replace(/</g, "%3C").replace(/>/g, "%3E")}>)`;
 
 /**

@@ -52,7 +52,7 @@ export class Panel implements Role {
 		ready: () => this.ready(),
 		run: () => this.latest,
 		asking: () => this.isVisible(),
-		open: (cx, ref) => this.open(cx, ref),
+		open: (cx, ref, file) => this.open(cx, ref, file),
 	};
 	/** Folded groups ask for nothing; which are expanded stays as the place changes. */
 	private issues = issueList(this.host, () => this.poll.invalidate());
@@ -167,6 +167,21 @@ export class Panel implements Role {
 	private receive(cx: Context): void {
 		const notices = this.notices.take();
 		if (notices.some((n) => n.pull)) this.pulls.load(cx, true);
+		const reviews = notices.filter((n) => n.review);
+		for (const notice of reviews) known.pullReviewed(notice.repo, notice.review!.on);
+		const ready = this.ready();
+		if (
+			ready &&
+			this.isVisible() &&
+			this.tab === "prs" &&
+			reviews.some(
+				(n) =>
+					n.review?.on === ready.on &&
+					n.repo.toLowerCase() === `${ready.remote.owner}/${ready.remote.repo}`.toLowerCase(),
+			)
+		) {
+			this.pulls.load(cx, true);
+		}
 		const changes = notices.flatMap((n) => (n.state ? [n.state] : []));
 		if (changes.length === 0) return;
 		changes.forEach(known.issueChanged);
@@ -175,11 +190,11 @@ export class Panel implements Role {
 	}
 
 	/** A click on a row opens (or selects) its reader tab. */
-	private open(cx: Context, ref: DetailRef): void {
+	private open(cx: Context, ref: DetailRef, file?: string): void {
 		this.openFailure = null;
 		cx.spawn(async (cx) => {
 			try {
-				await this.details.open(ref);
+				await this.details.open(ref, file);
 			} catch (e) {
 				this.openFailure = e instanceof Error ? e.message : String(e);
 			}
@@ -214,7 +229,7 @@ export class Panel implements Role {
 				.when(!overlay, (el) => el.rounded(10).border_1().border_color(t.border))
 				.child(this.header(overlay, where.cwd ?? "no folder"))
 				.when(noRemote, (el) => el.child(this.noRemote(where.cwd)))
-				.when(!noRemote, (el) => el.child(this.tabs()).child(this.list()))
+				.when(!noRemote, (el) => el.child(this.tabs()).child(this.list(cx)))
 				// A fixed sibling of the scrolling list: Herdr already shows the branch, so this says who gh is and how fresh.
 				.child(this.statusCard(where.on, where.cwd))
 		);
@@ -354,7 +369,7 @@ export class Panel implements Role {
 	 * The shown tab's groups, or what stands in their place. A missing repository (404), gh or Issues turned off is
 	 * the same for every group: said once, in the list's place. Any other failure stays in its own group.
 	 */
-	private list(): Element {
+	private list(cx: Context): Element {
 		const t = colors();
 		const list = this.tab === "issues" ? this.issues : this.pulls;
 		const notice = listNotice({
@@ -373,7 +388,7 @@ export class Panel implements Role {
 			.gap(4)
 			.when(this.openFailure !== null, (el) => el.child(problem(this.openFailure ?? "")))
 			.when(notice !== null, (el) => el.child(problem(notice ?? "")))
-			.when(!notice && this.ready() !== null, (el) => el.children(list.render()))
+			.when(!notice && this.ready() !== null, (el) => el.children(list.render(cx)))
 			.when(!notice && !this.ready() && this.loading, (el) => el.child(div().p(8).text_color(t.dim).child("…")));
 	}
 }

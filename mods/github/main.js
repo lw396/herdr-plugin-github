@@ -90,8 +90,8 @@ var Pane = class {
 };
 
 // src/github/views/panel.ts
-import { h_flex as h_flex3, v_flex as v_flex2 } from "gpui-base";
-import { div as div6, svg as svg4 } from "gpui-kit";
+import { h_flex as h_flex6, v_flex as v_flex5 } from "gpui-base";
+import { div as div9, svg as svg6 } from "gpui-kit";
 import { closeOverlay, props as props2 } from "herdr";
 
 // src/github/core/gh.ts
@@ -355,7 +355,7 @@ var DetailTabs = class {
   opened = /* @__PURE__ */ new Map();
   pending = /* @__PURE__ */ new Map();
   creating = /* @__PURE__ */ new Map();
-  async open(ref) {
+  async open(ref, file) {
     const space = focused2()?.space, owner = spaces2().find((s) => s.id === space);
     if (!space || !owner)
       throw new Error(`Select a Herdr space before opening ${ref.kind === "pr" ? "a pull request" : "an issue"}.`);
@@ -383,7 +383,7 @@ var DetailTabs = class {
       }
       this.opened.set(identity, target.id);
     }
-    this.pending.set(target.id, ref);
+    this.pending.set(target.id, file && ref.kind === "pr" ? { ...ref, file } : ref);
     remember(target.id, { ...target.reader, identity, request: `${Date.now()}-${Math.random()}`, ready: null });
     const tabName = owner.tabs.find((t) => t.id === target.reader.tab)?.name;
     if (oldName && tabName?.toLowerCase() === oldName && tabName !== detailTabName(ref)) {
@@ -442,13 +442,20 @@ function detailLocation(id) {
     visible: Boolean(space.active && tab.active && !all2.some((p) => p.zoomed && p.pane !== pane.pane))
   };
 }
+function closeEmptyDetail(id) {
+  const location2 = detailLocation(id);
+  if (location2?.visible) run2("pane.close", { pane: location2.pane });
+}
 function detailCommand(command, id) {
   if (!command.startsWith(COMMAND)) return null;
   try {
     const value = JSON.parse(command.slice(COMMAND.length));
     if (value?.reader !== id || value.kind !== "issue" && value.kind !== "pr" || typeof value.repo !== "string" || !/^[\w.-]+\/[\w.-]+$/.test(value.repo) || typeof value.number !== "number" || !Number.isSafeInteger(value.number) || value.number <= 0)
       return null;
-    return { kind: value.kind, repo: value.repo, number: value.number };
+    if (value.file !== void 0 && (value.kind !== "pr" || typeof value.file !== "string" || !value.file)) return null;
+    const ref = { kind: value.kind, repo: value.repo, number: value.number };
+    if (typeof value.file === "string") ref.file = value.file;
+    return ref;
   } catch {
     return null;
   }
@@ -9858,6 +9865,18 @@ function detailLink(href, base) {
   const number = Number(path[3]);
   return Number.isSafeInteger(number) ? { kind: path[2] === "pull" ? "pr" : "issue", repo, number } : null;
 }
+function markdownSummary(markdown) {
+  function text3(node2) {
+    if (node2.type === "text" || node2.type === "inlineCode" || node2.type === "code") return node2.value;
+    if (node2.type === "image" || node2.type === "imageReference") return node2.alt ?? "";
+    if (!("children" in node2)) return "";
+    const separator = node2.type === "paragraph" || node2.type === "heading" ? "" : " ";
+    return node2.children.map(text3).join(separator);
+  }
+  const plain = text3(fromMarkdown(markdown)).replace(/\s+/g, " ").trim();
+  const characters = [...plain];
+  return characters.length > 350 ? `${characters.slice(0, 350).join("")}\u2026` : plain;
+}
 var link2 = (text3, url) => `[${text3}](<${url.replace(/</g, "%3C").replace(/>/g, "%3E")}>)`;
 function readerMarkdown(body, url) {
   return links(body || "_No text._", url);
@@ -10141,6 +10160,9 @@ var Cache = class {
     const entry = this.entries.get(key);
     return entry !== void 0 && now - entry.at < maxAge;
   }
+  delete(key) {
+    this.entries.delete(key);
+  }
   clear() {
     this.entries.clear();
   }
@@ -10152,6 +10174,9 @@ var Cache = class {
 };
 
 // src/github/core/pulls.ts
+function pullState(state, draft) {
+  return state === "open" && draft ? "draft" : state;
+}
 var ROW = "number title url updatedAt isDraft state author { login }";
 var ALL_OPEN_QUERY = `query($owner: String!, $name: String!, $after: String) {
   repository(owner: $owner, name: $name) {
@@ -10203,7 +10228,7 @@ function pullRow(n) {
     number: n.number,
     title: n.title,
     author: n.author?.login ?? null,
-    state: n.state === "MERGED" ? "merged" : n.state === "CLOSED" ? "closed" : n.isDraft ? "draft" : "open",
+    state: pullState(n.state.toLowerCase(), n.isDraft),
     updatedAt: n.updatedAt,
     url: n.url
   };
@@ -10283,6 +10308,57 @@ async function localBranches(remote2, { cwd, on }) {
   return { branches, head: pickRemote(origin) ?? pickRemote(other) ?? remote2 };
 }
 
+// src/github/core/files.ts
+var byPath = (a, b) => a.path < b.path ? -1 : a.path > b.path ? 1 : 0;
+function flatFiles(files, hideViewed = false) {
+  return files.filter((f) => !hideViewed || !f.viewed).map((file) => ({ kind: "file", name: file.path, path: file.path, file })).sort(byPath);
+}
+function fileTree(files, hideViewed = false) {
+  const root = [];
+  for (const file of files) {
+    if (hideViewed && file.viewed) continue;
+    const parts = file.path.split("/");
+    let children = root;
+    let path = "";
+    for (const name of parts.slice(0, -1)) {
+      path = path ? `${path}/${name}` : name;
+      let folder2 = children.find((n) => n.kind === "directory" && n.path === path);
+      if (!folder2) {
+        folder2 = { kind: "directory", name, path, children: [] };
+        children.push(folder2);
+      }
+      children = folder2.children;
+    }
+    children.push({ kind: "file", name: parts.at(-1) ?? file.path, path: file.path, file });
+  }
+  return compact(root);
+}
+function compact(nodes) {
+  return nodes.map((node2) => {
+    if (node2.kind === "file") return node2;
+    let name = node2.name;
+    let folder2 = node2;
+    while (folder2.children.length === 1 && folder2.children[0]?.kind === "directory") {
+      folder2 = folder2.children[0];
+      name += `/${folder2.name}`;
+    }
+    return { ...folder2, name, children: compact(folder2.children) };
+  }).sort((a, b) => a.kind === b.kind ? byPath(a, b) : a.kind === "directory" ? -1 : 1);
+}
+function parseFiles(data) {
+  if (!Array.isArray(data)) throw new Error("GitHub returned an unreadable changed-files list.");
+  return data.map((f) => ({
+    path: f.filename,
+    previousPath: f.previous_filename ?? null,
+    status: f.status,
+    additions: f.additions,
+    deletions: f.deletions,
+    patch: f.patch ?? null,
+    url: f.blob_url,
+    viewed: false
+  }));
+}
+
 // src/github/core/merge.ts
 function mergeInfo(p, r) {
   const methods = ["merge", "squash", "rebase"].filter((m) => r[`allow_${m}_merge`] === true);
@@ -10329,11 +10405,12 @@ function parsePullDetail(pull, issue, comments, reviews) {
   return {
     number: p.number,
     title: p.title,
-    state: p.merged ? "merged" : p.state === "closed" ? "closed" : p.draft ? "draft" : "open",
+    state: pullState(p.merged ? "merged" : p.state, p.draft),
     author: login(p.user),
     createdAt: p.created_at,
     url: p.html_url,
     head: crossOwner ? p.head.label || p.head.ref : p.head.ref,
+    headSha: p.head.sha,
     base: crossOwner ? p.base.label || p.base.ref : p.base.ref,
     labels: p.labels.map(parseLabel),
     assignees: p.assignees.map((a) => a.login),
@@ -10348,15 +10425,27 @@ function parsePullDetail(pull, issue, comments, reviews) {
 
 // src/github/core/pull-timeline.ts
 function pullTimeline(comments, events, reviews, inline, url) {
-  const result = comments.map((c) => ({ ...c, verb: "commented", discussion: [] }));
+  const result = comments.map((c) => ({
+    ...c,
+    kind: "comment",
+    verb: "commented",
+    discussion: []
+  }));
   for (const r of reviews) {
     if (!r.submitted_at || r.state === "PENDING") continue;
     const all2 = inline;
     const roots = all2.filter((c) => !c.in_reply_to_id && c.pull_request_review_id === r.id).sort((a, b) => a.created_at.localeCompare(b.created_at) || a.id - b.id);
+    if (r.state === "COMMENTED" && !r.body?.trim() && roots.length === 0 && all2.some((c) => c.pull_request_review_id === r.id && c.in_reply_to_id))
+      continue;
     const discussion = roots.flatMap((root) => [
       root,
       ...all2.filter((c) => c.in_reply_to_id === root.id).sort((a, b) => a.created_at.localeCompare(b.created_at) || a.id - b.id)
-    ]).map((c) => ({ comment: parseComment(c, url), path: c.path, snippet: c.in_reply_to_id ? "" : c.diff_hunk }));
+    ]).map((c) => ({
+      root: c.in_reply_to_id ?? c.id,
+      comment: parseComment(c, url),
+      path: c.path,
+      snippet: c.in_reply_to_id ? "" : c.diff_hunk
+    }));
     const verbs = {
       APPROVED: "approved these changes",
       CHANGES_REQUESTED: "requested changes",
@@ -10365,6 +10454,7 @@ function pullTimeline(comments, events, reviews, inline, url) {
     };
     result.push({
       ...parseComment({ id: r.id, user: r.user, body: r.body, created_at: r.submitted_at }, url),
+      kind: "review",
       verb: verbs[r.state] ?? "reviewed",
       discussion
     });
@@ -10372,13 +10462,17 @@ function pullTimeline(comments, events, reviews, inline, url) {
   for (const e of events) {
     let verb = "";
     let body = "";
+    let details;
     const activity = parseActivity([e])[0];
     if (activity) {
       verb = activityText(activity);
       body = "labels" in activity ? activity.labels.map((l) => l.name).join(", ") : "";
     } else if (e.event === "committed") {
       verb = "committed";
-      body = `${e.sha?.slice(0, 7) ?? ""} ${e.message ?? ""}`;
+      const [subject = "", ...lines] = (e.message ?? "").trim().split(/\r?\n/);
+      body = `${e.sha?.slice(0, 7) ?? ""} ${subject}`.trim();
+      const rest = lines.join("\n").trim();
+      if (rest) details = { body: rest, markdown: readerMarkdown(rest, url) };
     } else if (e.event === "head_ref_force_pushed") {
       verb = "force-pushed the branch";
       body = e.commit_id?.slice(0, 7) ?? "";
@@ -10395,7 +10489,9 @@ function pullTimeline(comments, events, reviews, inline, url) {
       body,
       markdown: readerMarkdown(body, url),
       reactions: [],
+      kind: "event",
       verb,
+      ...details ? { details } : {},
       discussion: []
     });
   }
@@ -10419,6 +10515,54 @@ function parseChecks(pages, statuses) {
     checks.push({ id: `status-${s.id}`, name: s.context, status: s.state, duration: "\u2014", url: s.target_url ?? "" });
   }
   return checks;
+}
+
+// src/github/core/review-threads.ts
+function parseThreads(nodes, comments, url, drafts = []) {
+  const pending = drafts;
+  const draftIds = new Set(pending.map((c) => c.id));
+  const all2 = [
+    ...comments.filter((c) => !draftIds.has(c.id)),
+    ...pending
+  ];
+  return nodes.map((n) => {
+    const root = n.comments.nodes[0]?.databaseId;
+    if (!root) throw new Error("GitHub did not return the discussion's first comment.");
+    return {
+      id: n.id,
+      root,
+      path: n.path,
+      side: n.diffSide,
+      line: n.line,
+      outdated: n.isOutdated,
+      resolved: n.isResolved,
+      canResolve: n.viewerCanResolve,
+      canUnresolve: n.viewerCanUnresolve,
+      comments: parseComments(
+        all2.filter((c) => c.id === root || c.in_reply_to_id === root),
+        url
+      ).map((c) => draftIds.has(c.id) ? { ...c, draft: true } : c)
+    };
+  });
+}
+function mergeDraftThreads(remote2, drafts) {
+  const result = [...remote2];
+  for (const draft of drafts) {
+    const index2 = result.findIndex((t) => t.root === draft.root);
+    const thread = result[index2];
+    if (!thread) result.push(draft);
+    else
+      result[index2] = {
+        ...thread,
+        comments: [...thread.comments, ...draft.comments.filter((c) => !thread.comments.some((r) => r.id === c.id))]
+      };
+  }
+  return result;
+}
+function threadRow(rows, thread) {
+  if (thread.outdated || thread.line === null) return null;
+  const index2 = rows.findIndex((r) => (thread.side === "LEFT" ? r.oldLine : r.newLine) === thread.line);
+  return index2 < 0 ? null : index2;
 }
 
 // src/github/io/pulls.ts
@@ -10477,6 +10621,131 @@ async function deletePullBranch(info, on) {
     on,
     method: "DELETE"
   });
+}
+async function readPullFiles(repo, number, on) {
+  const files = parseFiles(await api(`repos/${repo}/pulls/${number}/files?per_page=100`, { on, paginate: true }));
+  const { viewed } = await readPullViewed(repo, number, on);
+  const paths = new Set(viewed);
+  return files.map((file) => ({ ...file, viewed: paths.has(file.path) }));
+}
+async function readPullViewed(repo, number, on) {
+  const [owner, name] = repo.split("/");
+  const viewed = [];
+  let after = null;
+  let id = "";
+  for (; ; ) {
+    const data = await graphql(
+      {
+        query: "query($owner:String!,$repo:String!,$number:Int!,$after:String){repository(owner:$owner,name:$repo){pullRequest(number:$number){id files(first:100,after:$after){nodes{path viewerViewedState} pageInfo{hasNextPage endCursor}}}}}",
+        variables: { owner: owner ?? "", repo: name ?? "", number, after }
+      },
+      on
+    );
+    const pull = data?.repository?.pullRequest;
+    if (!pull) throw new Error("GitHub did not return the pull request's viewed-file states.");
+    id = pull.id;
+    viewed.push(...pull.files.nodes.filter((f) => f.viewerViewedState === "VIEWED").map((f) => f.path));
+    if (!pull.files.pageInfo.hasNextPage) return { id, viewed };
+    const next = pull.files.pageInfo.endCursor;
+    if (!next || next === after) throw new Error("GitHub did not return the next viewed-files page.");
+    after = next;
+  }
+}
+async function setPullFileViewed(repo, number, path, viewed, on) {
+  const [owner, name] = repo.split("/");
+  const data = await graphql(
+    {
+      query: "query($owner:String!,$repo:String!,$number:Int!){repository(owner:$owner,name:$repo){pullRequest(number:$number){id}}}",
+      variables: { owner, repo: name, number }
+    },
+    on
+  );
+  const id = data?.repository?.pullRequest?.id;
+  if (!id) throw new Error("GitHub did not return the pull request's ID.");
+  const operation = viewed ? "markFileAsViewed" : "unmarkFileAsViewed";
+  try {
+    await graphql(
+      {
+        query: `mutation($id:ID!,$path:String!){${operation}(input:{pullRequestId:$id,path:$path}){pullRequest{id}}}`,
+        variables: { id, path }
+      },
+      on
+    );
+  } catch (e) {
+    if (e instanceof GhError && e.transient) announce({ repo, number, files: { on } });
+    throw e;
+  }
+  announce({ repo, number, files: { on } });
+}
+async function addPullComment(repo, number, target, body, on) {
+  let raw;
+  try {
+    raw = await api(`repos/${repo}/pulls/${number}/comments`, {
+      on,
+      method: "POST",
+      fields: { line: target.line },
+      rawFields: { body, commit_id: target.commit, path: target.path, side: target.side }
+    });
+  } catch (e) {
+    if (e instanceof GhError && e.transient) announce({ repo, number, threads: { on } });
+    throw e;
+  }
+  const comment = parseComment(raw, `https://github.com/${repo}/pull/${number}`);
+  announce({ repo, number, threads: { on } });
+  return comment;
+}
+async function replyPullThread(repo, number, root, body, on) {
+  const raw = await api(`repos/${repo}/pulls/${number}/comments/${root}/replies`, {
+    on,
+    method: "POST",
+    rawFields: { body }
+  });
+  const comment = parseComment(raw, `https://github.com/${repo}/pull/${number}`);
+  announce({ repo, number, threads: { on } });
+  return comment;
+}
+async function resolvePullThread(repo, number, id, resolved, on) {
+  const op = resolved ? "resolveReviewThread" : "unresolveReviewThread";
+  const data = await graphql(
+    {
+      query: `mutation($id:ID!){${op}(input:{threadId:$id}){thread{id isResolved viewerCanResolve viewerCanUnresolve}}}`,
+      variables: { id }
+    },
+    on
+  );
+  const thread = data?.[op]?.thread;
+  if (!thread || thread.id !== id) throw new Error("GitHub did not return the updated discussion.");
+  announce({ repo, number, threads: { on } });
+  return { resolved: thread.isResolved, canResolve: thread.viewerCanResolve, canUnresolve: thread.viewerCanUnresolve };
+}
+async function readPullThreads(repo, number, on, pending = null) {
+  const drafts = pending === null ? [] : await api(`repos/${repo}/pulls/${number}/reviews/${pending}/comments?per_page=100`, { on, paginate: true });
+  const comments = await api(`repos/${repo}/pulls/${number}/comments?per_page=100`, { on, paginate: true });
+  const [owner, name] = repo.split("/");
+  const nodes = [];
+  let after = null;
+  for (; ; ) {
+    const data = await graphql(
+      {
+        query: "query($owner:String!,$repo:String!,$number:Int!,$after:String){repository(owner:$owner,name:$repo){pullRequest(number:$number){reviewThreads(first:100,after:$after){nodes{id path diffSide line isOutdated isResolved viewerCanResolve viewerCanUnresolve comments(first:1){nodes{databaseId}}} pageInfo{hasNextPage endCursor}}}}}",
+        variables: { owner: owner ?? "", repo: name ?? "", number, after }
+      },
+      on
+    );
+    const page = data?.repository?.pullRequest?.reviewThreads;
+    if (!page) throw new Error("GitHub did not return the pull request's discussions.");
+    nodes.push(...page.nodes);
+    if (!page.pageInfo.hasNextPage)
+      return parseThreads(
+        nodes,
+        comments,
+        `https://github.com/${repo}/pull/${number}`,
+        drafts
+      );
+    const next = page.pageInfo.endCursor;
+    if (!next || next === after) throw new Error("GitHub did not return the next discussions page.");
+    after = next;
+  }
 }
 async function localPulls(remote2, { branches, head }, on) {
   if (branches.length === 0) return [];
@@ -10582,6 +10851,16 @@ async function localGroup(r, force) {
   });
   return localShown.get(rows) ?? showLocal(rows, PAGE);
 }
+function pullReviewed(repo, on) {
+  const matches = (key) => {
+    const parts = JSON.parse(key);
+    return parts[1] === on && groupOf(key).repo === `github.com/${repo}`.toLowerCase();
+  };
+  pullGroups.kept.patch((key, group) => matches(key) ? group : void 0);
+  localMatches.patch(
+    (key, value) => matches(JSON.parse(key)[0] ?? "") ? { ...value, signature: "" } : void 0
+  );
+}
 var pullGroup = (kind, r, force = false) => kind === "local" ? localGroup(r, force) : pullGroups.look(kind, r, force);
 function peekPullGroup(kind, r) {
   if (kind !== "local") return pullGroups.peek(kind, r);
@@ -10595,7 +10874,7 @@ async function morePulls(kind, r, loaded) {
 }
 
 // src/github/views/issues.ts
-import { div as div4 } from "gpui-kit";
+import { div as div6 } from "gpui-kit";
 
 // src/github/core/time.ts
 var MINUTE = 6e4;
@@ -10612,14 +10891,281 @@ function relativeTime(iso, now) {
 }
 
 // src/github/views/groups.ts
-import { h_flex as h_flex2, v_flex } from "gpui-base";
-import { div as div3 } from "gpui-kit";
+import { h_flex as h_flex4, v_flex as v_flex3 } from "gpui-base";
+import { div as div5 } from "gpui-kit";
+
+// src/github/core/preview.ts
+var PREVIEW_DWELL_MS = 200;
+var PREVIEW_OPEN_MS = 500;
+var PREVIEW_CLOSE_MS = 200;
+function previewKey(ref, on, login2) {
+  return JSON.stringify([on, login2, detailKey(ref)]);
+}
+var PreviewIntent = class {
+  active = null;
+  enter(row) {
+    this.active = { row };
+    return this.active;
+  }
+  leave(row) {
+    if (this.active?.row !== row) return false;
+    this.active = null;
+    return true;
+  }
+  current(ticket) {
+    return this.active === ticket;
+  }
+};
+function parsePreview(data, kind) {
+  const item = data;
+  const state = kind === "pr" ? pullState(item.merged_at ? "merged" : item.state, item.draft ?? false) : item.state;
+  return {
+    title: item.title,
+    author: item.user?.login ?? null,
+    createdAt: item.created_at,
+    state,
+    summary: markdownSummary(item.body ?? ""),
+    labels: item.labels.map(parseLabel)
+  };
+}
+
+// src/github/views/preview.ts
+import { HoverCard, h_flex as h_flex3, v_flex as v_flex2 } from "gpui-base";
+import { div as div4, svg as svg4 } from "gpui-kit";
+
+// src/github/io/preview.ts
+var Previews = class {
+  cache = new Cache(100);
+  pending = /* @__PURE__ */ new Map();
+  peek(ref, on, login2) {
+    return this.cache.get(previewKey(ref, on, login2));
+  }
+  load(ref, on, login2) {
+    const key = previewKey(ref, on, login2);
+    if (this.cache.fresh(key, 6e4, Date.now())) return Promise.resolve(this.cache.get(key));
+    const pending = this.pending.get(key);
+    if (pending) return pending;
+    const path = `repos/${ref.repo}/${ref.kind === "pr" ? "pulls" : "issues"}/${ref.number}`;
+    const request = api(path, { on }).then((data) => {
+      const preview = parsePreview(data, ref.kind);
+      this.cache.set(key, preview, Date.now());
+      return preview;
+    }).finally(() => this.pending.delete(key));
+    this.pending.set(key, request);
+    return request;
+  }
+};
+
+// src/github/views/detail.ts
+import { h_flex as h_flex2, TextView, v_flex } from "gpui-base";
+import { div as div3, svg as svg3 } from "gpui-kit";
+var NOUN = { issue: "issue", pr: "pull request" };
+var Noun = (kind) => NOUN[kind].charAt(0).toUpperCase() + NOUN[kind].slice(1);
+function openLink(cx, host, url, page) {
+  const ref = detailLink(url, page);
+  if (ref) host.follow(cx, ref);
+  else {
+    const external = browserUrl(url, page);
+    if (external) cx.open_url(external);
+  }
+}
+function detailEmpty(_kind) {
+  return div3().flex_1();
+}
+function detailHeader(host, ref, shown, refresh) {
+  const t = colors();
+  const url = shown.url ?? detailUrl(ref);
+  const previous3 = host.previous();
+  const number = link(`${ref.kind}-browser`, url, `#${ref.number}`).px(2).rounded(4).text_color(t.accent).hover((s) => s.bg(t.hover)).tooltip(`Open ${ref.repo} #${ref.number} in browser`).accessibility_label(`Open #${ref.number} in browser`);
+  const copy = button(
+    `${ref.kind}-copy`,
+    svg3("mods/github/assets/copy.svg").size(16),
+    `Copy ${NOUN[ref.kind]} link`,
+    (_e, cx) => cx.write_to_clipboard(url)
+  );
+  return h_flex2().flex_none().px(24).pt(18).pb(12).gap(12).items_start().when(
+    previous3 !== null,
+    (el) => el.child(
+      square(button(`${ref.kind}-back`, "\u2190", `Back to #${previous3?.number}`, (_e, cx) => host.back(cx))).text_size(
+        22
+      )
+    )
+  ).child(
+    h_flex2().flex_1().min_w(0).gap(8).items_center().flex_wrap().text_size(22).child(
+      div3().min_w(0).font_semibold().child(shown.title ?? `${Noun(ref.kind)} details`)
+    ).child(h_flex2().gap(2).items_center().flex_none().child(number).child(copy))
+  ).child(
+    shown.loading ? square(div3()).child(spinner(18)) : square(
+      button(`${ref.kind}-refresh`, "\u21BB", `Refresh ${NOUN[ref.kind]}`, (_e, cx) => {
+        refresh(cx);
+        cx.notify();
+      })
+    ).text_size(22)
+  );
+}
+function detailBody(ref, loading, failure, document3) {
+  const t = colors();
+  return v_flex().id(`${ref.kind}-scroll-${detailKey(ref)}`).flex_1().min_h(0).overflow_y_scroll().px(24).pb(18).gap(12).when(loading, (el) => el.child(div3().text_size(12).text_color(t.dim).child(`Loading ${NOUN[ref.kind]}\u2026`))).when(
+    failure !== void 0,
+    (el) => el.child(
+      div3().text_color(t.blocked).child(failure ?? "")
+    )
+  ).when(document3 !== null, (el) => el.child(document3 ?? div3()));
+}
+var DetailMetadata = class {
+  expanded = false;
+  render(layout2, sections) {
+    const t = colors();
+    const wide = layout2 === "wide";
+    const fields = () => sections.map(
+      ([title, value]) => v_flex().min_w(0).gap(10).py(16).border_b(1).border_color(t.border).when(layout2 === "narrow", (el) => el.w(180).min_w(140).flex_grow(1)).when(layout2 === "compact", (el) => el.w_full().flex_none()).child(div3().text_size(13).font_semibold().child(title)).child(value)
+    );
+    if (wide) return v_flex().w(220).flex_none().children(fields());
+    const labels2 = sections.find(([title]) => title === "Labels");
+    const summary = () => h_flex2().min_w(0).gap(10).py(16).items_center().flex_wrap().child(div3().text_size(13).font_semibold().child("Labels")).child(layout2 === "compact" ? quiet(String(labels2?.[2] ?? 0)) : labels2?.[1] ?? quiet("None yet"));
+    let content3;
+    if (!this.expanded) content3 = summary();
+    else if (layout2 === "compact") content3 = v_flex().children(fields());
+    else content3 = h_flex2().gap(20).items_start().flex_wrap().children(fields());
+    const label = this.expanded ? "See less" : "See more";
+    return v_flex().min_w(0).gap(12).pb(16).border_b(1).border_color(t.border).child(content3).child(
+      h_flex2().child(
+        button("detail-metadata-toggle", label, label, (_e, cx) => {
+          this.expanded = !this.expanded;
+          cx.notify();
+        }).text_color(t.accent)
+      )
+    );
+  }
+};
+function detailDocument(layout2, heading, timeline, sections, metadata) {
+  const wide = layout2 === "wide";
+  const posts = v_flex().min_w(0).gap(20).when(wide, (el) => el.flex_1()).when(!wide, (el) => el.w_full().flex_none()).children(timeline);
+  const side = metadata.render(layout2, sections);
+  return v_flex().gap(18).child(h_flex2().gap(10).pb(4).items_center().flex_wrap().children(heading)).child(wide ? h_flex2().gap(24).items_start().child(posts).child(side) : v_flex().gap(20).child(side).child(posts));
+}
+function stateBadge(label, color, icon2) {
+  return h_flex2().gap(6).items_center().px(10).py(4).rounded(14).bg(`${color}26`).text_size(13).font_semibold().text_color(color).when(icon2 !== void 0, (el) => el.child(svg3(icon2 ?? "").size(14))).child(label);
+}
+function postCard(id, post, verb, onLink, options = {}) {
+  const t = colors();
+  const reactions = post.reactions ?? [];
+  const heading = h_flex2().px(16).pt(10).pb(options.embedded ? 4 : 10).gap(8).items_center().flex_wrap().when(!options.embedded, (el) => el.bg(t.raised).border_b(1).border_color(t.border)).text_size(12).child(div3().font_semibold().child(post.author)).child(div3().text_color(t.dim).child(verb)).child(div3().flex_1()).child(div3().text_color(t.dim).tooltip(post.createdAt).child(relativeTime(post.createdAt, Date.now())));
+  const text3 = TextView.markdown(id, post.markdown).selectable(true).scrollable(false).on_link_click(onLink);
+  return v_flex().id(`${id}-card`).min_w(0).w_full().overflow_hidden().when(!options.embedded, (el) => el.rounded(8).border_1().border_color(t.border).bg(t.background)).child(heading).when(
+    !options.headingOnly,
+    (el) => el.child(
+      v_flex().min_w(0).px(16).pt(options.embedded ? 4 : 16).pb(options.embedded ? 12 : 16).gap(12).child(text3).when(
+        reactions.length > 0,
+        (el2) => el2.child(
+          h_flex2().gap(6).flex_wrap().children(reactions.map((r) => chip(`${r.emoji} ${r.count}`, t.border, t.raised)))
+        )
+      )
+    )
+  );
+}
+var quiet = (text3) => div3().text_size(12).text_color(colors().dim).child(text3);
+function people(logins, none) {
+  if (logins.length === 0) return quiet(none);
+  return v_flex().gap(8).children(logins.map((login2) => div3().text_size(13).font_medium().child(login2)));
+}
+function labelChip(label) {
+  const t = colors();
+  return chip(label.name, label.color ?? t.input, label.color ? `${label.color}26` : t.raised).text_color(t.foreground);
+}
+function labels(list2) {
+  if (list2.length === 0) return quiet("None yet");
+  return h_flex2().gap(6).flex_wrap().children(list2.map(labelChip));
+}
+var milestone = (title) => title ? div3().text_size(13).child(title) : quiet("No milestone");
+function projects(list2, loading) {
+  const t = colors();
+  if (!list2) return quiet(loading ? "Loading Projects\u2026" : "Projects not loaded.");
+  if (!list2.ok) return quiet("None yet").tooltip(list2.message);
+  if (list2.projects.length === 0) return quiet("None yet");
+  return v_flex().gap(8).children(
+    list2.projects.map(
+      (project) => link(`project-${project.url}`, project.url, project.title).text_size(13).text_color(t.accent).tooltip(project.url)
+    )
+  );
+}
+
+// src/github/views/preview.ts
+function previewCard(ref, preview, failure) {
+  const t = colors();
+  const state = preview ? PULL_STATES[preview.state] : null;
+  const icon2 = state && (ref.kind === "pr" ? svg4(state.icon).size(14).text_color(state.color(t)) : div4().text_color(state.color(t)).child(preview?.state === "closed" ? "\u2299" : "\u25CB"));
+  return v_flex2().w(480).p(14).gap(10).rounded(8).border_1().border_color(t.border).bg(t.surface).text_color(t.foreground).text_size(13).on_mouse_down("left", stop).child(
+    h_flex3().gap(8).items_center().child(div4().min_w(0).flex_1().truncate().text_color(t.accent).child(ref.repo)).when(
+      Boolean(preview),
+      (el) => el.child(
+        div4().flex_none().text_color(t.dim).child(preview?.createdAt.slice(0, 10) ?? "")
+      )
+    )
+  ).when(
+    Boolean(preview),
+    (el) => el.child(
+      h_flex3().gap(8).items_start().child(
+        div4().flex_none().accessibility_label(state?.label ?? "").children(icon2 ? [icon2] : [])
+      ).child(
+        div4().flex_1().min_w(0).max_h(64).overflow_hidden().font_semibold().child(`${preview?.title} #${ref.number}`)
+      )
+    ).child(
+      div4().text_size(12).text_color(t.dim).child(`${state?.label} \xB7 ${preview?.author ? `@${preview.author}` : "ghost"}`)
+    ).child(
+      div4().max_h(120).overflow_hidden().child(preview?.summary || "No description provided.")
+    ).when(
+      Boolean(preview?.labels.length),
+      (el2) => el2.child(div4().max_h(64).overflow_hidden().child(labels(preview.labels)))
+    )
+  ).when(
+    !preview,
+    (el) => el.child(
+      failure ? div4().text_color(t.blocked).child(`Preview unavailable: ${failure}`) : h_flex3().gap(8).items_center().child(spinner()).child("Loading preview\u2026")
+    )
+  );
+}
+var RowPreviews = class {
+  previews = new Previews();
+  timer = null;
+  failures = new Cache(100);
+  intent = new PreviewIntent();
+  hover(cx, row, ref, r, current) {
+    if (!ref && !this.intent.leave(row)) return;
+    this.timer?.cancel();
+    this.timer = null;
+    if (!ref || !r) return;
+    const ticket = this.intent.enter(row);
+    const key = previewKey(ref, r.on, r.login);
+    this.failures.delete(key);
+    this.timer = cx.timer.after(PREVIEW_DWELL_MS, (cx2) => {
+      if (!this.intent.current(ticket) || !current()) return;
+      cx2.spawn(async (cx3) => {
+        try {
+          await this.previews.load(ref, r.on, r.login);
+        } catch (e) {
+          this.failures.set(key, failureOf(e).message, Date.now());
+        }
+        cx3.notify();
+      });
+    });
+  }
+  wrap(id, trigger, ref, r) {
+    const preview = this.previews.peek(ref, r.on, r.login);
+    const key = previewKey(ref, r.on, r.login);
+    const failure = this.failures.get(key);
+    return HoverCard.new(`preview-${id}-${key}`).w_full().open_delay(PREVIEW_OPEN_MS).close_delay(PREVIEW_CLOSE_MS).trigger(trigger).content(previewCard(ref, preview, failure));
+  }
+};
+
+// src/github/views/groups.ts
 var GroupList = class {
   /** The row under the pointer ("<kind>#<number>"): it shows its actions. */
   hovered = null;
   groups;
   host;
   source;
+  previews = new RowPreviews();
   constructor(host, source) {
     this.host = host;
     this.source = source;
@@ -10717,61 +11263,74 @@ var GroupList = class {
       }
     });
   }
-  render() {
-    return this.source.groups.map((spec) => this.group(spec));
+  render(cx) {
+    return this.source.groups.map((spec) => this.group(spec, cx));
   }
   /** A foldable group: its title and count, then (unfolded) why it failed, its rows and Load more. */
-  group({ kind, title, empty }) {
+  group({ kind, title, empty }, cx) {
     const t = colors();
     const id = this.source.kind;
     const g = this.groups[kind];
     const page = g.page;
     const rows = page?.rows ?? [];
-    const heading = h_flex2().id(`${id}-group-${kind}`).h(26).px(8).gap(6).items_center().rounded(6).text_size(12).text_color(t.dim).cursor_pointer().hover((s) => s.bg(t.hover)).on_mouse_down("left", stop).on_click((_e, cx) => this.toggle(cx, kind)).accessibility_label(`${g.expanded ? "Fold" : "Unfold"} ${title}`).child(
-      div3().w(10).flex_none().child(g.expanded ? "\u25BE" : "\u25B8")
-    ).child(div3().font_medium().child(title)).child(div3().child(page ? String(page.total) : "")).when(g.expanded && g.loading, (el) => el.child(spinner()));
-    const failure = h_flex2().px(8).pl(22).py(2).gap(6).items_center().text_size(12).child(div3().flex_none().size(6).rounded(3).bg(t.blocked)).child(
-      div3().flex_1().min_w(0).text_color(t.dim).child(g.failure?.message ?? "")
+    const heading = h_flex4().id(`${id}-group-${kind}`).h(26).px(8).gap(6).items_center().rounded(6).text_size(12).text_color(t.dim).cursor_pointer().hover((s) => s.bg(t.hover)).on_mouse_down("left", stop).on_click((_e, cx2) => this.toggle(cx2, kind)).accessibility_label(`${g.expanded ? "Fold" : "Unfold"} ${title}`).child(
+      div5().w(10).flex_none().child(g.expanded ? "\u25BE" : "\u25B8")
+    ).child(div5().font_medium().child(title)).child(div5().child(page ? String(page.total) : "")).when(g.expanded && g.loading, (el) => el.child(spinner()));
+    const failure = h_flex4().px(8).pl(22).py(2).gap(6).items_center().text_size(12).child(div5().flex_none().size(6).rounded(3).bg(t.blocked)).child(
+      div5().flex_1().min_w(0).text_color(t.dim).child(g.failure?.message ?? "")
     ).when(
       !g.loading,
       (el) => el.child(
-        button(`${id}-retry-${kind}`, "Retry", `Load ${title} again`, (_e, cx) => {
-          this.loadGroup(cx, kind, true);
-          cx.notify();
+        button(`${id}-retry-${kind}`, "Retry", `Load ${title} again`, (_e, cx2) => {
+          this.loadGroup(cx2, kind, true);
+          cx2.notify();
         })
       )
     );
-    const more = h_flex2().id(`${id}-more-${kind}`).h(26).px(8).pl(22).gap(6).items_center().rounded(6).text_size(12).text_color(t.dim).cursor_pointer().hover((s) => s.bg(t.hover).text_color(t.foreground)).on_mouse_down("left", stop).on_click((_e, cx) => this.more(cx, kind)).child(g.loadingMore ? "Loading\u2026" : `Load more (${(page?.total ?? 0) - rows.length} left)`).when(g.loadingMore, (el) => el.child(spinner()));
-    return v_flex().gap(1).child(heading).when(
+    const more = h_flex4().id(`${id}-more-${kind}`).h(26).px(8).pl(22).gap(6).items_center().rounded(6).text_size(12).text_color(t.dim).cursor_pointer().hover((s) => s.bg(t.hover).text_color(t.foreground)).on_mouse_down("left", stop).on_click((_e, cx2) => this.more(cx2, kind)).child(g.loadingMore ? "Loading\u2026" : `Load more (${(page?.total ?? 0) - rows.length} left)`).when(g.loadingMore, (el) => el.child(spinner()));
+    return v_flex3().gap(1).child(heading).when(
       g.expanded,
       (el) => el.when(g.failure !== void 0 && !g.failure.notFound, (el2) => el2.child(failure)).when(
         page !== void 0 && rows.length === 0,
-        (el2) => el2.child(div3().px(8).pl(22).py(4).text_size(12).text_color(t.dim).child(empty))
-      ).children(rows.map((row) => this.row(kind, row))).when(Boolean(page?.more), (el2) => el2.child(more))
+        (el2) => el2.child(div5().px(8).pl(22).py(4).text_size(12).text_color(t.dim).child(empty))
+      ).children(rows.map((row) => this.row(kind, row, cx))).when(Boolean(page?.more), (el2) => el2.child(more))
     );
   }
   /** A row's frame: click opens it; the pointer over it swaps its end for Copy and Open in browser. */
-  row(kind, row) {
+  row(kind, row, cx) {
     const t = colors();
     const id = this.source.kind;
     const key = `${kind}#${row.number}`;
+    const ready = this.host.ready();
+    const ref = ready ? { kind: id, repo: `${ready.remote.owner}/${ready.remote.repo}`, number: row.number } : null;
+    const contextKey = ready && ref ? previewKey(ref, ready.on, ready.login) : null;
     const actions = [
       button(
         `${id}-copy-${kind}-${row.number}`,
         "#",
         `Copy #${row.number}`,
-        (_e, cx) => cx.write_to_clipboard(`#${row.number}`)
+        (_e, cx2) => cx2.write_to_clipboard(`#${row.number}`)
       ),
-      button(`${id}-open-${kind}-${row.number}`, "\u2197", "Open in browser", (_e, cx) => cx.open_url(row.url))
+      button(`${id}-open-${kind}-${row.number}`, "\u2197", "Open in browser", (_e, cx2) => cx2.open_url(row.url))
     ];
-    return h_flex2().id(`${id}-${kind}-${row.number}`).h(28).px(8).pl(22).gap(8).items_center().rounded(6).cursor_pointer().hover((s) => s.bg(t.hover)).on_mouse_down("left", stop).on_click((_e, cx) => {
+    const disclosure = this.source.disclosure?.(row, key);
+    const frame = h_flex4().id(`${id}-${kind}-${row.number}`).h(28).px(8).pl(disclosure ? 14 : 22).gap(disclosure ? 6 : 8).items_center().rounded(6).cursor_pointer().hover((s) => s.bg(t.hover)).on_mouse_down("left", stop).on_click((_e, cx2) => {
       const r = this.host.ready();
-      if (r) this.host.open(cx, { kind: id, repo: `${r.remote.owner}/${r.remote.repo}`, number: row.number });
-    }).on_hover((h, cx) => {
+      if (r) this.host.open(cx2, { kind: id, repo: `${r.remote.owner}/${r.remote.repo}`, number: row.number });
+    }).on_hover((h, cx2) => {
       if (h) this.hovered = key;
       else if (this.hovered === key) this.hovered = null;
-      cx.notify();
-    }).children([...this.source.cells(row), ...this.hovered === key ? actions : this.source.idle(row)]);
+      this.previews.hover(cx2, `${key}-${contextKey}`, h ? ref : null, ready, () => {
+        const live = this.host.ready();
+        if (!live || !ref || this.hovered !== key || !this.host.asking()) return false;
+        const target = { ...ref, repo: `${live.remote.owner}/${live.remote.repo}` };
+        return previewKey(target, live.on, live.login) === contextKey;
+      });
+      cx2.notify();
+    }).children(disclosure ? [disclosure] : []).children([...this.source.cells(row), ...this.hovered === key ? actions : this.source.idle(row)]);
+    const card = ready && ref ? this.previews.wrap(`${id}-${key}`, frame, ref, ready) : frame;
+    const expanded = this.source.expandedRow?.(row, key, cx);
+    return expanded ? v_flex3().child(card).child(expanded) : card;
   }
 };
 
@@ -10791,23 +11350,207 @@ function issueList(host, failed) {
     more: moreIssues,
     failed,
     cells: (issue) => [
-      div4().flex_none().text_color(colors().dim).child(`#${issue.number}`),
-      div4().flex_1().min_w(0).truncate().child(issue.title)
+      div6().flex_none().text_color(colors().dim).child(`#${issue.number}`),
+      div6().flex_1().min_w(0).truncate().child(issue.title)
     ],
     idle: (issue) => {
       const t = colors();
       return [
-        div4().flex_none().max_w(90).truncate().text_size(12).text_color(t.dim).child(issue.assignees.join(", ")),
-        div4().flex_none().w(28).text_right().text_size(12).text_color(t.dim).child(relativeTime(issue.updatedAt, Date.now()))
+        div6().flex_none().max_w(90).truncate().text_size(12).text_color(t.dim).child(issue.assignees.join(", ")),
+        div6().flex_none().w(28).text_right().text_size(12).text_color(t.dim).child(relativeTime(issue.updatedAt, Date.now()))
       ];
     }
   });
 }
 
 // src/github/views/pulls.ts
-import { div as div5, svg as svg3 } from "gpui-kit";
+import { div as div8, svg as svg5 } from "gpui-kit";
+
+// src/github/views/files.ts
+import { h_flex as h_flex5, v_flex as v_flex4 } from "gpui-base";
+import { div as div7 } from "gpui-kit";
+var STATUS = {
+  added: { mark: "A", label: "Added", color: "done" },
+  removed: { mark: "D", label: "Deleted", color: "blocked" },
+  modified: { mark: "M", label: "Modified", color: "working" },
+  renamed: { mark: "R", label: "Renamed", color: "accent" },
+  copied: { mark: "C", label: "Copied", color: "accent" },
+  changed: { mark: "M", label: "Changed", color: "working" },
+  unchanged: { mark: "U", label: "Unchanged", color: "dim" }
+};
+var ChangedFiles = class {
+  files = null;
+  loading = false;
+  failure = null;
+  flat = false;
+  hideViewed = false;
+  filtered = false;
+  notices = new Notices();
+  writing = /* @__PURE__ */ new Set();
+  folded = /* @__PURE__ */ new Set();
+  latest = 0;
+  source = null;
+  tree = [];
+  list = [];
+  id;
+  ref;
+  on;
+  open;
+  constructor(id, ref, on, open) {
+    this.id = id;
+    this.ref = ref;
+    this.on = on;
+    this.open = open;
+  }
+  load(cx, force = false) {
+    if (!force && (this.files !== null || this.loading)) return;
+    const request = ++this.latest;
+    this.loading = true;
+    this.failure = null;
+    cx.spawn(async (cx2) => {
+      try {
+        const files = await readPullFiles(this.ref.repo, this.ref.number, this.on);
+        if (request === this.latest) this.files = files;
+      } catch (e) {
+        if (request === this.latest) this.failure = failureOf(e).message;
+      } finally {
+        if (request === this.latest) {
+          this.loading = false;
+          cx2.notify();
+        }
+      }
+    });
+  }
+  /** Shared write notices carry no account-specific data: each view reads using its own gh. */
+  sync(cx) {
+    if (this.notices.take().some((n) => n.repo === this.ref.repo && n.number === this.ref.number && n.files?.on === this.on)) {
+      this.load(cx, true);
+    }
+  }
+  viewedButton(file) {
+    const pending = this.writing.has(file.path);
+    const label = file.viewed ? "Mark File As Not Viewed" : "Mark File As Viewed";
+    return button(`${this.id}-viewed-${file.path}`, pending ? "Saving\u2026" : file.viewed ? "\u2713" : "\u25CB", label, (_e, cx) => {
+      if (this.writing.has(file.path) || this.loading) return;
+      this.writing.add(file.path);
+      this.failure = null;
+      cx.notify();
+      cx.spawn(async (cx2) => {
+        try {
+          await setPullFileViewed(this.ref.repo, this.ref.number, file.path, !file.viewed, this.on);
+          this.sync(cx2);
+        } catch (e) {
+          this.sync(cx2);
+          this.failure = failureOf(e).message;
+        } finally {
+          this.writing.delete(file.path);
+          cx2.notify();
+        }
+      });
+    }).text_color(file.viewed ? colors().done : colors().dim);
+  }
+  render(cx, selected = null) {
+    this.sync(cx);
+    const t = colors();
+    if (this.source !== this.files || this.filtered !== this.hideViewed) {
+      this.source = this.files;
+      this.filtered = this.hideViewed;
+      this.tree = fileTree(this.files ?? [], this.hideViewed);
+      this.list = flatFiles(this.files ?? [], this.hideViewed);
+    }
+    return v_flex4().min_w(0).gap(2).child(
+      h_flex5().gap(6).items_center().child(
+        div7().flex_1().text_size(12).text_color(t.dim).child(`Files changed${this.files ? ` (${this.files.length})` : ""}`)
+      ).child(
+        button(
+          `${this.id}-mode`,
+          this.flat ? "Tree" : "List",
+          this.flat ? "View as Tree" : "View as List",
+          (_e, cx2) => {
+            this.flat = !this.flat;
+            cx2.notify();
+          }
+        )
+      ).child(
+        button(
+          `${this.id}-hide-viewed`,
+          this.hideViewed ? "Show" : "Hide",
+          "Toggle Hide Viewed Files",
+          (_e, cx2) => {
+            this.hideViewed = !this.hideViewed;
+            cx2.notify();
+          }
+        )
+      ).child(
+        button(`${this.id}-refresh`, "\u21BB", "Refresh changed files", (_e, cx2) => {
+          this.load(cx2, true);
+          cx2.notify();
+        })
+      )
+    ).when(this.loading, (el) => el.child(h_flex5().gap(6).child(spinner()).child("Loading changed files\u2026"))).when(
+      this.failure !== null,
+      (el) => el.child(
+        v_flex4().gap(4).child(
+          div7().text_size(12).text_color(t.blocked).child(this.failure ?? "")
+        ).child(
+          button(`${this.id}-retry`, "Retry", "Load changed files again", (_e, cx2) => {
+            this.load(cx2, true);
+            cx2.notify();
+          })
+        )
+      )
+    ).when(this.files?.length === 0, (el) => el.child(div7().text_color(t.dim).child("No changed files"))).when(
+      Boolean(this.files?.length) && this.hideViewed && this.list.length === 0,
+      (el) => el.child(div7().text_color(t.dim).child("All files viewed"))
+    ).children(this.nodes(this.flat ? this.list : this.tree, selected, 0));
+  }
+  nodes(nodes, selected, depth) {
+    const t = colors();
+    return nodes.map((node2) => {
+      const folder2 = node2.kind === "directory";
+      const folded = this.folded.has(node2.path);
+      const status2 = node2.kind === "file" ? STATUS[node2.file.status] ?? STATUS.changed : null;
+      const tip = node2.kind === "file" ? `${node2.path}${node2.file.previousPath ? ` \u2190 ${node2.file.previousPath}` : ""} \xB7 ${status2?.label} \xB7 +${node2.file.additions} \u2212${node2.file.deletions}` : node2.path;
+      const row = h_flex5().id(`${this.id}-${node2.kind}-${node2.path}`).h(26).min_w(0).pl(4 + depth * 8).pr(6).gap(4).items_center().cursor_pointer().hover((s) => s.bg(t.hover)).when(!folder2 && selected === node2.path, (el) => el.bg(t.selected)).tooltip(tip).accessibility_label(tip).on_mouse_down("left", stop).on_click((_e, cx) => {
+        cx.stop_propagation();
+        if (folder2) {
+          if (folded) this.folded.delete(node2.path);
+          else this.folded.add(node2.path);
+          cx.notify();
+        } else this.open(cx, node2.path);
+      }).child(
+        div7().w(12).flex_none().text_color(t.dim).child(folder2 ? folded ? "\u25B8" : "\u25BE" : "")
+      ).child(div7().flex_1().min_w(0).truncate().text_size(12).child(node2.name)).children(node2.kind === "file" ? [this.viewedButton(node2.file)] : []).when(
+        status2 !== null,
+        (el) => el.child(
+          div7().flex_none().text_size(12).text_color(t[status2?.color ?? "dim"]).child(status2?.mark ?? "")
+        )
+      );
+      return node2.kind === "directory" && !folded ? v_flex4().child(row).children(this.nodes(node2.children, selected, depth + 1)) : row;
+    });
+  }
+};
+
+// src/github/views/pulls.ts
 var EMPTY = "0 pull requests in this category";
 function pullList(host) {
+  const disclosures = /* @__PURE__ */ new Map();
+  const disclosure = (pull, row) => {
+    const r = host.ready();
+    if (!r) return null;
+    const repo = `${r.remote.owner}/${r.remote.repo}`;
+    const key = JSON.stringify([r.on, repo, r.login, row]);
+    let state = disclosures.get(key);
+    if (!state) {
+      const ref = { kind: "pr", repo, number: pull.number };
+      state = {
+        expanded: false,
+        files: new ChangedFiles(`sidebar-${row}`, ref, r.on, (cx, path) => host.open(cx, ref, path))
+      };
+      disclosures.set(key, state);
+    }
+    return state;
+  };
   return new GroupList(host, {
     kind: "pr",
     groups: [
@@ -10821,15 +11564,33 @@ function pullList(host) {
     peek: peekPullGroup,
     ask: pullGroup,
     more: morePulls,
+    disclosure: (pull, key) => {
+      const state = disclosure(pull, key);
+      return button(
+        `pr-files-${key}`,
+        state?.expanded ? "\u25BE" : "\u25B8",
+        `${state?.expanded ? "Collapse" : "Expand"} changed files`,
+        (_e, cx) => {
+          if (!state) return;
+          state.expanded = !state.expanded;
+          if (state.expanded) state.files.load(cx);
+          cx.notify();
+        }
+      ).px(2).flex_none();
+    },
+    expandedRow: (pull, key, cx) => {
+      const state = disclosure(pull, key);
+      return state?.expanded ? div8().pl(16).child(state.files.render(cx)) : null;
+    },
     cells: (pull) => {
       const state = PULL_STATES[pull.state];
       return [
-        svg3(state.icon).size(14).flex_none().text_color(state.color(colors())).accessibility_label(state.label),
-        div5().flex_1().min_w(0).truncate().child(`#${pull.number} ${pull.title}`).when(pull.state === "draft", (el) => el.italic())
+        svg5(state.icon).size(14).flex_none().text_color(state.color(colors())).accessibility_label(state.label),
+        div8().flex_1().min_w(0).truncate().child(`#${pull.number} ${pull.title}`).when(pull.state === "draft", (el) => el.italic())
       ];
     },
     idle: (pull) => [
-      div5().flex_none().max_w(110).truncate().text_size(12).text_color(colors().dim).child(pull.author ? `by @${pull.author}` : "by ghost")
+      div8().flex_none().max_w(110).truncate().text_size(12).text_color(colors().dim).child(pull.author ? `by @${pull.author}` : "by ghost")
     ]
   });
 }
@@ -10861,7 +11622,7 @@ var Panel = class {
     ready: () => this.ready(),
     run: () => this.latest,
     asking: () => this.isVisible(),
-    open: (cx, ref) => this.open(cx, ref)
+    open: (cx, ref, file) => this.open(cx, ref, file)
   };
   /** Folded groups ask for nothing; which are expanded stays as the place changes. */
   issues = issueList(this.host, () => this.poll.invalidate());
@@ -10955,6 +11716,14 @@ var Panel = class {
   receive(cx) {
     const notices = this.notices.take();
     if (notices.some((n) => n.pull)) this.pulls.load(cx, true);
+    const reviews = notices.filter((n) => n.review);
+    for (const notice of reviews) pullReviewed(notice.repo, notice.review.on);
+    const ready = this.ready();
+    if (ready && this.isVisible() && this.tab === "prs" && reviews.some(
+      (n) => n.review?.on === ready.on && n.repo.toLowerCase() === `${ready.remote.owner}/${ready.remote.repo}`.toLowerCase()
+    )) {
+      this.pulls.load(cx, true);
+    }
     const changes2 = notices.flatMap((n) => n.state ? [n.state] : []);
     if (changes2.length === 0) return;
     changes2.forEach(issueChanged);
@@ -10962,11 +11731,11 @@ var Panel = class {
     this.issues.load(cx);
   }
   /** A click on a row opens (or selects) its reader tab. */
-  open(cx, ref) {
+  open(cx, ref, file) {
     this.openFailure = null;
     cx.spawn(async (cx2) => {
       try {
-        await this.details.open(ref);
+        await this.details.open(ref, file);
       } catch (e) {
         this.openFailure = e instanceof Error ? e.message : String(e);
       }
@@ -10984,7 +11753,7 @@ var Panel = class {
     const t = colors();
     const overlay = props2()?.overlay;
     const noRemote = this.remote === null && !(this.account && !this.account.status.ok);
-    return v_flex2().id("github").size_full().min_h(0).overflow_hidden().bg(t.background).text_color(t.foreground).text_size(13).when(!overlay, (el) => el.rounded(10).border_1().border_color(t.border)).child(this.header(overlay, where.cwd ?? "no folder")).when(noRemote, (el) => el.child(this.noRemote(where.cwd))).when(!noRemote, (el) => el.child(this.tabs()).child(this.list())).child(this.statusCard(where.on, where.cwd));
+    return v_flex5().id("github").size_full().min_h(0).overflow_hidden().bg(t.background).text_color(t.foreground).text_size(13).when(!overlay, (el) => el.rounded(10).border_1().border_color(t.border)).child(this.header(overlay, where.cwd ?? "no folder")).when(noRemote, (el) => el.child(this.noRemote(where.cwd))).when(!noRemote, (el) => el.child(this.tabs()).child(this.list(cx))).child(this.statusCard(where.on, where.cwd));
   }
   /** The repository, then ↻ (Herdr's own spinner while anything loads, as its tab bar shows a working agent). */
   header(overlay, context) {
@@ -10995,7 +11764,7 @@ var Panel = class {
       cx.notify();
     });
     const repo = this.remote ? `${this.remote.owner}/${this.remote.repo}` : "";
-    return h_flex3().h(42).flex_none().px(14).gap(8).items_center().border_b(1).border_color(t.border).child(div6().font_semibold().tooltip(context).child("GitHub")).child(div6().flex_1().min_w(0).truncate().text_right().text_size(12).text_color(t.dim).child(repo)).child(busy ? div6().size(24).flex_none().flex().items_center().justify_center().child(spinner()) : refresh).when(overlay !== void 0, (el) => el.child(button("gh-close", "\xD7", "Close", () => closeOverlay(overlay))));
+    return h_flex6().h(42).flex_none().px(14).gap(8).items_center().border_b(1).border_color(t.border).child(div9().font_semibold().tooltip(context).child("GitHub")).child(div9().flex_1().min_w(0).truncate().text_right().text_size(12).text_color(t.dim).child(repo)).child(busy ? div9().size(24).flex_none().flex().items_center().justify_center().child(spinner()) : refresh).when(overlay !== void 0, (el) => el.child(button("gh-close", "\xD7", "Close", () => closeOverlay(overlay))));
   }
   /** The gh account on the folder's machine, then how fresh the lists are. What to do about a problem is said in the list. */
   statusCard(on, cwd) {
@@ -11011,13 +11780,13 @@ var Panel = class {
       Date.now()
     );
     const tip = `${this.account ? describeAccount(this.account).text : "checking gh\u2026"} \xB7 ${cwd ?? "no folder"}`;
-    const dot = s.tone === "pending" ? spinner(10) : div6().size(8).rounded(4).bg(s.tone === "ok" ? t.done : t.blocked);
-    return v_flex2().id("gh-status").flex_none().px(14).py(8).gap(2).border_t(1).border_color(t.border).bg(t.surface).text_size(12).tooltip(tip).accessibility_label(`${s.account} on ${s.machine}${s.sync ? `. ${s.sync}` : ""}`).child(
-      h_flex3().gap(8).items_center().child(div6().w(10).flex_none().flex().items_center().justify_center().child(dot)).child(div6().flex_none().max_w(160).truncate().font_medium().child(s.account)).child(div6().flex_none().text_color(t.dim).child("\xB7")).child(div6().flex_1().min_w(0).truncate().text_color(t.dim).child(s.machine))
+    const dot = s.tone === "pending" ? spinner(10) : div9().size(8).rounded(4).bg(s.tone === "ok" ? t.done : t.blocked);
+    return v_flex5().id("gh-status").flex_none().px(14).py(8).gap(2).border_t(1).border_color(t.border).bg(t.surface).text_size(12).tooltip(tip).accessibility_label(`${s.account} on ${s.machine}${s.sync ? `. ${s.sync}` : ""}`).child(
+      h_flex6().gap(8).items_center().child(div9().w(10).flex_none().flex().items_center().justify_center().child(dot)).child(div9().flex_none().max_w(160).truncate().font_medium().child(s.account)).child(div9().flex_none().text_color(t.dim).child("\xB7")).child(div9().flex_1().min_w(0).truncate().text_color(t.dim).child(s.machine))
     ).when(
       s.sync !== null,
       (el) => el.child(
-        div6().pl(18).truncate().text_color(s.tone === "problem" ? t.blocked : t.dim).child(s.sync ?? "")
+        div9().pl(18).truncate().text_color(s.tone === "problem" ? t.blocked : t.dim).child(s.sync ?? "")
       )
     );
   }
@@ -11025,14 +11794,14 @@ var Panel = class {
   noRemote(cwd) {
     const t = colors();
     const empty = noRepository(cwd);
-    return v_flex2().flex_1().min_h(0).px(28).gap(8).items_center().justify_center().child(svg4("mods/github/assets/github.svg").size(28).text_color(t.dim)).child(div6().pt(4).font_medium().text_color(t.muted).child(empty.title)).child(div6().text_size(12).text_center().text_color(t.dim).child(empty.detail));
+    return v_flex5().flex_1().min_h(0).px(28).gap(8).items_center().justify_center().child(svg6("mods/github/assets/github.svg").size(28).text_color(t.dim)).child(div9().pt(4).font_medium().text_color(t.muted).child(empty.title)).child(div9().text_size(12).text_center().text_color(t.dim).child(empty.detail));
   }
   /** Issues and Pull Requests; Actions and notifications join them later. */
   tabs() {
     const t = colors();
-    return h_flex3().h(34).flex_none().px(10).gap(4).items_center().border_b(1).border_color(t.border).children(
+    return h_flex6().h(34).flex_none().px(10).gap(4).items_center().border_b(1).border_color(t.border).children(
       TABS.map(
-        ({ id, label }) => div6().id(`gh-tab-${id}`).px(8).py(3).rounded(6).text_size(12).font_medium().cursor_pointer().text_color(this.tab === id ? t.foreground : t.muted).when(this.tab === id, (el) => el.bg(t.hover)).when(this.tab !== id, (el) => el.hover((s) => s.bg(t.hover))).accessibility_label(label).on_mouse_down("left", stop).on_click((_e, cx) => {
+        ({ id, label }) => div9().id(`gh-tab-${id}`).px(8).py(3).rounded(6).text_size(12).font_medium().cursor_pointer().text_color(this.tab === id ? t.foreground : t.muted).when(this.tab === id, (el) => el.bg(t.hover)).when(this.tab !== id, (el) => el.hover((s) => s.bg(t.hover))).accessibility_label(label).on_mouse_down("left", stop).on_click((_e, cx) => {
           this.tab = id;
           this.openFailure = null;
           if (id === "prs") this.pulls.load(cx);
@@ -11045,7 +11814,7 @@ var Panel = class {
    * The shown tab's groups, or what stands in their place. A missing repository (404), gh or Issues turned off is
    * the same for every group: said once, in the list's place. Any other failure stays in its own group.
    */
-  list() {
+  list(cx) {
     const t = colors();
     const list2 = this.tab === "issues" ? this.issues : this.pulls;
     const notice = listNotice({
@@ -11054,18 +11823,18 @@ var Panel = class {
       issuesEnabled: this.tab === "issues" ? this.issues.anyPage?.issuesEnabled : void 0,
       failure: this.failure ?? list2.notFound
     });
-    const problem = (text3) => div6().p(8).text_size(12).text_color(t.blocked).child(text3);
-    return v_flex2().id(`gh-list-${this.tab}`).flex_1().min_h(0).overflow_y_scroll().p(6).gap(4).when(this.openFailure !== null, (el) => el.child(problem(this.openFailure ?? ""))).when(notice !== null, (el) => el.child(problem(notice ?? ""))).when(!notice && this.ready() !== null, (el) => el.children(list2.render())).when(!notice && !this.ready() && this.loading, (el) => el.child(div6().p(8).text_color(t.dim).child("\u2026")));
+    const problem = (text3) => div9().p(8).text_size(12).text_color(t.blocked).child(text3);
+    return v_flex5().id(`gh-list-${this.tab}`).flex_1().min_h(0).overflow_y_scroll().p(6).gap(4).when(this.openFailure !== null, (el) => el.child(problem(this.openFailure ?? ""))).when(notice !== null, (el) => el.child(problem(notice ?? ""))).when(!notice && this.ready() !== null, (el) => el.children(list2.render(cx))).when(!notice && !this.ready() && this.loading, (el) => el.child(div9().p(8).text_color(t.dim).child("\u2026")));
   }
 };
 
 // src/github/views/reader.ts
-import { v_flex as v_flex6 } from "gpui-base";
+import { v_flex as v_flex12 } from "gpui-base";
 import { nextCommand, props as props3 } from "herdr";
 
 // src/github/views/issue.ts
-import { h_flex as h_flex5, Textarea, TextareaState, v_flex as v_flex4 } from "gpui-base";
-import { div as div8 } from "gpui-kit";
+import { h_flex as h_flex7, Textarea, TextareaState, v_flex as v_flex6 } from "gpui-base";
+import { div as div10 } from "gpui-kit";
 
 // src/github/core/projects.ts
 var FIELD = { issue: "issue", pr: "pullRequest" };
@@ -11120,118 +11889,6 @@ async function readProjects(ref, on) {
   }
 }
 
-// src/github/views/detail.ts
-import { h_flex as h_flex4, TextView, v_flex as v_flex3 } from "gpui-base";
-import { div as div7, svg as svg5 } from "gpui-kit";
-var NOUN = { issue: "issue", pr: "pull request" };
-var Noun = (kind) => NOUN[kind].charAt(0).toUpperCase() + NOUN[kind].slice(1);
-function openLink(cx, host, url, page) {
-  const ref = detailLink(url, page);
-  if (ref) host.follow(cx, ref);
-  else {
-    const external = browserUrl(url, page);
-    if (external) cx.open_url(external);
-  }
-}
-function detailEmpty(kind) {
-  const t = colors();
-  const hint = `Choose ${kind === "pr" ? "a" : "an"} ${NOUN[kind]} in the GitHub sidebar. ${Noun(kind)} details are not restored after restarting Herdr.`;
-  return v_flex3().flex_1().gap(8).items_center().justify_center().p(24).child(
-    div7().font_semibold().child(`${Noun(kind)} details`)
-  ).child(div7().text_size(13).text_color(t.dim).text_center().child(hint));
-}
-function detailHeader(host, ref, shown, refresh) {
-  const t = colors();
-  const url = shown.url ?? detailUrl(ref);
-  const previous3 = host.previous();
-  const number = link(`${ref.kind}-browser`, url, `#${ref.number}`).px(2).rounded(4).text_color(t.accent).hover((s) => s.bg(t.hover)).tooltip(`Open ${ref.repo} #${ref.number} in browser`).accessibility_label(`Open #${ref.number} in browser`);
-  const copy = button(
-    `${ref.kind}-copy`,
-    svg5("mods/github/assets/copy.svg").size(16),
-    `Copy ${NOUN[ref.kind]} link`,
-    (_e, cx) => cx.write_to_clipboard(url)
-  );
-  return h_flex4().flex_none().px(24).pt(18).pb(12).gap(12).items_start().when(
-    previous3 !== null,
-    (el) => el.child(
-      square(button(`${ref.kind}-back`, "\u2190", `Back to #${previous3?.number}`, (_e, cx) => host.back(cx))).text_size(
-        22
-      )
-    )
-  ).child(
-    h_flex4().flex_1().min_w(0).gap(8).items_center().flex_wrap().text_size(22).child(
-      div7().min_w(0).font_semibold().child(shown.title ?? `${Noun(ref.kind)} details`)
-    ).child(h_flex4().gap(2).items_center().flex_none().child(number).child(copy))
-  ).child(
-    shown.loading ? square(div7()).child(spinner(18)) : square(
-      button(`${ref.kind}-refresh`, "\u21BB", `Refresh ${NOUN[ref.kind]}`, (_e, cx) => {
-        refresh(cx);
-        cx.notify();
-      })
-    ).text_size(22)
-  );
-}
-function detailBody(ref, loading, failure, document3) {
-  const t = colors();
-  return v_flex3().id(`${ref.kind}-scroll-${detailKey(ref)}`).flex_1().min_h(0).overflow_y_scroll().px(24).pb(18).gap(12).when(loading, (el) => el.child(div7().text_size(12).text_color(t.dim).child(`Loading ${NOUN[ref.kind]}\u2026`))).when(
-    failure !== void 0,
-    (el) => el.child(
-      div7().text_color(t.blocked).child(failure ?? "")
-    )
-  ).when(document3 !== null, (el) => el.child(document3 ?? div7()));
-}
-function detailDocument(wide, heading, timeline, sections) {
-  const t = colors();
-  const posts = v_flex3().min_w(0).gap(20).when(wide, (el) => el.flex_1()).when(!wide, (el) => el.w_full().flex_none()).children(timeline);
-  const metadata = sections.map(
-    ([title, value]) => v_flex3().gap(10).py(16).border_b(1).border_color(t.border).when(!wide, (el) => el.w(180).min_w(140).flex_1()).child(div7().text_size(13).font_semibold().child(title)).child(value)
-  );
-  const side = wide ? v_flex3().w(220).flex_none().children(metadata) : h_flex4().gap(20).flex_wrap().children(metadata);
-  return v_flex3().gap(18).child(h_flex4().gap(10).pb(4).items_center().flex_wrap().children(heading)).child(wide ? h_flex4().gap(24).items_start().child(posts).child(side) : v_flex3().gap(20).child(side).child(posts));
-}
-function stateBadge(label, color, icon2) {
-  return h_flex4().gap(6).items_center().px(10).py(4).rounded(14).bg(`${color}26`).text_size(13).font_semibold().text_color(color).when(icon2 !== void 0, (el) => el.child(svg5(icon2 ?? "").size(14))).child(label);
-}
-function postCard(id, post, verb, onLink) {
-  const t = colors();
-  const reactions = post.reactions ?? [];
-  const heading = h_flex4().px(16).py(10).gap(8).items_center().flex_wrap().bg(t.raised).border_b(1).border_color(t.border).text_size(12).child(div7().font_semibold().child(post.author)).child(div7().text_color(t.dim).child(verb)).child(div7().flex_1()).child(div7().text_color(t.dim).tooltip(post.createdAt).child(relativeTime(post.createdAt, Date.now())));
-  const text3 = TextView.markdown(id, post.markdown).selectable(true).scrollable(false).on_link_click(onLink);
-  return v_flex3().id(`${id}-card`).min_w(0).w_full().overflow_hidden().rounded(8).border_1().border_color(t.border).bg(t.background).child(heading).child(
-    v_flex3().min_w(0).px(16).py(16).gap(12).child(text3).when(
-      reactions.length > 0,
-      (el) => el.child(
-        h_flex4().gap(6).flex_wrap().children(reactions.map((r) => chip(`${r.emoji} ${r.count}`, t.border, t.raised)))
-      )
-    )
-  );
-}
-var quiet = (text3) => div7().text_size(12).text_color(colors().dim).child(text3);
-function people(logins, none) {
-  if (logins.length === 0) return quiet(none);
-  return v_flex3().gap(8).children(logins.map((login2) => div7().text_size(13).font_medium().child(login2)));
-}
-function labelChip(label) {
-  const t = colors();
-  return chip(label.name, label.color ?? t.input, label.color ? `${label.color}26` : t.raised).text_color(t.foreground);
-}
-function labels(list2) {
-  if (list2.length === 0) return quiet("None yet");
-  return h_flex4().gap(6).flex_wrap().children(list2.map(labelChip));
-}
-var milestone = (title) => title ? div7().text_size(13).child(title) : quiet("No milestone");
-function projects(list2, loading) {
-  const t = colors();
-  if (!list2) return quiet(loading ? "Loading Projects\u2026" : "Projects not loaded.");
-  if (!list2.ok) return quiet("None yet").tooltip(list2.message);
-  if (list2.projects.length === 0) return quiet("None yet");
-  return v_flex3().gap(8).children(
-    list2.projects.map(
-      (project) => link(`project-${project.url}`, project.url, project.title).text_size(13).text_color(t.accent).tooltip(project.url)
-    )
-  );
-}
-
 // src/github/views/issue.ts
 var POLL_MS = 1e4;
 var Issue = class {
@@ -11240,6 +11897,7 @@ var Issue = class {
   /** The new comment being written; kept when posting fails, and through refreshes. */
   draft = "";
   host;
+  metadata = new DetailMetadata();
   notices = new Notices();
   box = null;
   /** Unsent comments of the issues Back can return to. */
@@ -11271,6 +11929,7 @@ var Issue = class {
     this.draft = this.drafts.get(detailKey(ref)) ?? "";
     this.drafts.delete(detailKey(ref));
     this.box?.set_value(this.draft);
+    this.metadata.expanded = false;
     this.ref = ref;
     this.writeFailure = null;
     this.load(cx);
@@ -11397,7 +12056,7 @@ ${detailKey(this.ref)}` : null;
     if (comment && !issue.comments.some((c) => c.id === comment.id)) issue.comments = [...issue.comments, comment];
     if (notice.state) issue.state = notice.state.state;
   }
-  render(cx, wide) {
+  render(cx, layout2) {
     for (const notice of this.notices.take()) this.apply(notice);
     if (this.syncPolling()) this.load(cx);
     const ref = this.ref;
@@ -11411,18 +12070,18 @@ ${detailKey(this.ref)}` : null;
         { title: issue?.title, url: issue?.url, loading: Boolean(entry?.loading) },
         (cx2) => this.load(cx2)
       ),
-      detailBody(ref, Boolean(entry?.loading), entry?.failure, issue ? this.document(issue, wide) : null)
+      detailBody(ref, Boolean(entry?.loading), entry?.failure, issue ? this.document(issue, layout2) : null)
     ];
   }
-  document(issue, wide) {
+  document(issue, layout2) {
     const t = colors();
     const open = issue.state === "open";
     const onLink = (url, cx) => openLink(cx, this.host, url, issue.url);
     return detailDocument(
-      wide,
+      layout2,
       [
         stateBadge(open ? "\u25CB Open" : "\u25CF Closed", open ? t.done : t.accent),
-        div8().text_size(13).font_medium().child(issue.author)
+        div10().text_size(13).font_medium().child(issue.author)
       ],
       [
         postCard("issue-body", issue, "opened this issue", onLink),
@@ -11433,23 +12092,24 @@ ${detailKey(this.ref)}` : null;
       ],
       [
         ["Assignees", people(issue.assignees, "No assignees")],
-        ["Labels", labels(issue.labels)],
+        ["Labels", labels(issue.labels), issue.labels.length],
         ["Project", projects(this.entry?.projects, Boolean(this.entry?.projectsLoading))],
         ["Milestone", milestone(issue.milestone)]
-      ]
+      ],
+      this.metadata
     );
   }
   /** A label or assignment change between the comments. */
   activity(activity) {
     const t = colors();
-    const avatar = div8().size(22).flex_none().rounded(11).bg(t.raised).text_color(t.muted).font_semibold().flex().items_center().justify_center().child(activity.actor.slice(0, 1).toUpperCase());
+    const avatar = div10().size(22).flex_none().rounded(11).bg(t.raised).text_color(t.muted).font_semibold().flex().items_center().justify_center().child(activity.actor.slice(0, 1).toUpperCase());
     const changed = "labels" in activity ? activity.labels : null;
-    return h_flex5().id(`activity-${activity.id}`).px(16).py(4).gap(8).items_center().flex_wrap().text_size(12).child(avatar).child(div8().font_semibold().child(activity.actor)).child(div8().text_color(t.dim).child(activityText(activity))).when(
+    return h_flex7().id(`activity-${activity.id}`).px(16).py(4).gap(8).items_center().flex_wrap().text_size(12).child(avatar).child(div10().font_semibold().child(activity.actor)).child(div10().text_color(t.dim).child(activityText(activity))).when(
       changed !== null,
       (el) => el.children((changed ?? []).map(labelChip)).child(
-        div8().text_color(t.dim).child(changed?.length === 1 ? "label" : "labels")
+        div10().text_color(t.dim).child(changed?.length === 1 ? "label" : "labels")
       )
-    ).child(div8().flex_1()).child(div8().text_color(t.dim).tooltip(activity.createdAt).child(relativeTime(activity.createdAt, Date.now())));
+    ).child(div10().flex_1()).child(div10().text_color(t.dim).tooltip(activity.createdAt).child(relativeTime(activity.createdAt, Date.now())));
   }
   /** A new comment, and close / reopen: GitHub's own order of the two buttons. */
   composer(issue) {
@@ -11471,23 +12131,23 @@ ${detailKey(this.ref)}` : null;
       enabled: !busy && this.draft.trim() !== "",
       primary: true
     };
-    return v_flex4().id("issue-composer").min_w(0).w_full().gap(10).pt(4).when(
+    return v_flex6().id("issue-composer").min_w(0).w_full().gap(10).pt(4).when(
       box !== null,
       (el) => el.child(
-        div8().min_w(0).rounded(8).border_1().border_color(t.border).bg(t.background).p(8).on_mouse_down("left", stop).child(Textarea.new(box).w_full().text_size(13).text_color(t.foreground))
+        div10().min_w(0).rounded(8).border_1().border_color(t.border).bg(t.background).p(8).on_mouse_down("left", stop).child(Textarea.new(box).w_full().text_size(13).text_color(t.foreground))
       )
     ).when(
       this.writeFailure !== null,
       (el) => el.child(
-        div8().text_size(12).text_color(t.blocked).child(this.writeFailure ?? "")
+        div10().text_size(12).text_color(t.blocked).child(this.writeFailure ?? "")
       )
     ).child(
-      h_flex5().gap(8).items_center().justify_end().when(busy, (el) => el.child(spinner(14))).child(this.action(close, (cx) => this.setState(cx, open ? "closed" : "open"))).child(this.action(send, (cx) => this.comment(cx)))
+      h_flex7().gap(8).items_center().justify_end().when(busy, (el) => el.child(spinner(14))).child(this.action(close, (cx) => this.setState(cx, open ? "closed" : "open"))).child(this.action(send, (cx) => this.comment(cx)))
     );
   }
   action({ id, label, tip, enabled, primary }, act) {
     const t = colors();
-    return h_flex5().id(id).h(32).px(14).gap(6).items_center().rounded(6).border_1().text_size(13).font_medium().border_color(primary ? t.accent : t.border).bg(primary ? t.accent : t.raised).text_color(primary ? t.background : t.foreground).when(
+    return h_flex7().id(id).h(32).px(14).gap(6).items_center().rounded(6).border_1().text_size(13).font_medium().border_color(primary ? t.accent : t.border).bg(primary ? t.accent : t.raised).text_color(primary ? t.background : t.foreground).when(
       enabled,
       (el) => el.cursor_pointer().hover((s) => s.opacity(0.85)).on_click((_e, cx) => {
         cx.stop_propagation();
@@ -11498,8 +12158,968 @@ ${detailKey(this.ref)}` : null;
 };
 
 // src/github/views/pull.ts
-import { h_flex as h_flex6, v_flex as v_flex5 } from "gpui-base";
-import { div as div9 } from "gpui-kit";
+import { h_flex as h_flex12, v_flex as v_flex11 } from "gpui-base";
+import { div as div15 } from "gpui-kit";
+
+// src/github/views/diff.ts
+import { h_flex as h_flex10, v_flex as v_flex9 } from "gpui-base";
+import { div as div13 } from "gpui-kit";
+
+// src/github/core/diff.ts
+function commentTarget(row, side) {
+  if (!row.comment) return null;
+  const line = side === "LEFT" ? row.oldLine : row.newLine;
+  return line === null ? null : { side, line };
+}
+function parsePatch(patch) {
+  const rows = [];
+  let oldLine = 0, newLine = 0, oldLeft = 0, newLeft = 0;
+  for (const raw of patch.split("\n")) {
+    const text3 = raw.endsWith("\r") ? raw.slice(0, -1) : raw;
+    const hunk = /^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/.exec(text3);
+    if (hunk) {
+      oldLine = Number(hunk[1]);
+      oldLeft = Number(hunk[2] ?? 1);
+      newLine = Number(hunk[3]);
+      newLeft = Number(hunk[4] ?? 1);
+      rows.push({ kind: "hunk", text: text3, oldLine: null, newLine: null, comment: null });
+      continue;
+    }
+    if (text3 === "\\ No newline at end of file") {
+      rows.push({ kind: "notice", text: text3, oldLine: null, newLine: null, comment: null });
+      continue;
+    }
+    const prefix = text3[0];
+    if (prefix === "+" && newLeft > 0) {
+      rows.push({
+        kind: "add",
+        text: text3.slice(1),
+        oldLine: null,
+        newLine,
+        comment: { side: "RIGHT", line: newLine }
+      });
+      newLine++;
+      newLeft--;
+    } else if (prefix === "-" && oldLeft > 0) {
+      rows.push({
+        kind: "delete",
+        text: text3.slice(1),
+        oldLine,
+        newLine: null,
+        comment: { side: "LEFT", line: oldLine }
+      });
+      oldLine++;
+      oldLeft--;
+    } else if (prefix === " " && oldLeft > 0 && newLeft > 0) {
+      rows.push({ kind: "context", text: text3.slice(1), oldLine, newLine, comment: { side: "RIGHT", line: newLine } });
+      oldLine++;
+      newLine++;
+      oldLeft--;
+      newLeft--;
+    }
+  }
+  return rows;
+}
+
+// src/github/core/viewport.ts
+function itemWindow(sizes, requested, height) {
+  const total = sizes.reduce((sum, size) => sum + size, 0);
+  const offset = Math.max(0, Math.min(requested, Math.max(0, total - height)));
+  const from = Math.max(0, offset - 44);
+  const to = offset + height + 44;
+  let start = 0, top = 0;
+  while (start < sizes.length && top + sizes[start] <= from) top += sizes[start++];
+  let end = start, bottom = top;
+  while (end < sizes.length && bottom < to) bottom += sizes[end++];
+  return { start, end, top, offset, total };
+}
+
+// src/github/views/diff-lines.ts
+import { h_flex as h_flex8, v_flex as v_flex7 } from "gpui-base";
+import { div as div11 } from "gpui-kit";
+var ROW_HEIGHT = 22;
+function diffSnippet(id, patch) {
+  return v_flex7().id(id).min_w(0).w_full().overflow_x_scrollbar().children(parsePatch(patch).map((row) => diffRow(row)));
+}
+function diffRow(row, gutters) {
+  const t = colors();
+  const added = row.kind === "add", deleted = row.kind === "delete";
+  return h_flex8().h(ROW_HEIGHT).w_full().flex_none().items_center().font_family("monospace").text_size(13).when(added, (el) => el.bg(`${t.done}20`)).when(deleted, (el) => el.bg(`${t.blocked}20`)).when(row.kind === "hunk", (el) => el.bg(`${t.accent}18`).text_color(t.accent)).when(row.kind === "notice", (el) => el.text_color(t.dim)).child(
+    div11().w(54).flex_none().pr(8).text_right().text_color(t.dim).child(gutters?.left ?? row.oldLine ?? "")
+  ).child(
+    div11().w(54).flex_none().pr(8).text_right().text_color(t.dim).child(gutters?.right ?? row.newLine ?? "")
+  ).child(
+    div11().w(20).flex_none().text_color(added ? t.done : deleted ? t.blocked : t.dim).child(added ? "+" : deleted ? "\u2212" : "")
+  ).child(div11().flex_none().whitespace_nowrap().child(row.text));
+}
+
+// src/github/views/review-threads.ts
+import { h_flex as h_flex9, Textarea as Textarea2, TextareaState as TextareaState2, v_flex as v_flex8 } from "gpui-base";
+import { div as div12 } from "gpui-kit";
+
+// src/github/core/published-comments.ts
+var PublishedComments = class {
+  pendingThreads = /* @__PURE__ */ new Map();
+  pendingTimeline = /* @__PURE__ */ new Map();
+  activities = /* @__PURE__ */ new Map();
+  /** Promote only this review's drafts; replies stay with their original timeline conversation. */
+  submitted(item, threads) {
+    const pending = threads.filter((t) => t.comments.some((c) => c.draft));
+    const newRoots = new Set(
+      pending.filter((t) => t.comments.some((c) => c.id === t.root && c.draft)).map((t) => t.root)
+    );
+    const promoted = pending.map((t) => ({
+      ...t,
+      comments: t.comments.map((c) => {
+        const { draft: _draft, ...published } = c;
+        return published;
+      })
+    }));
+    const discussion = promoted.filter((t) => newRoots.has(t.root)).flatMap((t) => t.comments.map((comment) => ({ root: t.root, comment, path: t.path, snippet: "" })));
+    const replyOnly = item.kind === "review" && item.verb === "reviewed" && !item.body.trim() && !discussion.length && pending.length > 0;
+    this.activity(replyOnly ? null : { ...item, discussion }, promoted);
+    return threads.map((t) => promoted.find((p) => p.id === t.id) ?? t);
+  }
+  /** Keep an acknowledged submission visible while the review and diff endpoints catch up separately. */
+  activity(item, threads = []) {
+    if (item) this.activities.set(`${item.kind}-${item.id}`, item);
+    for (const thread of threads) {
+      this.pendingThreads.set(thread.root, thread);
+      for (const comment of thread.comments) this.pendingTimeline.delete(comment.id);
+    }
+  }
+  add(comment, target) {
+    const thread = {
+      ...target,
+      id: `comment-${comment.id}`,
+      root: comment.id,
+      resolved: false,
+      canResolve: false,
+      canUnresolve: false,
+      comments: [comment]
+    };
+    this.pendingThreads.set(comment.id, thread);
+    this.pendingTimeline.set(comment.id, {
+      ...comment,
+      // Negative IDs keep local review placeholders distinct from GitHub's positive review IDs.
+      id: -comment.id,
+      body: "",
+      markdown: "",
+      kind: "review",
+      verb: "reviewed",
+      discussion: [{ root: comment.id, comment, path: target.path, snippet: "" }]
+    });
+    return thread;
+  }
+  /** Each endpoint releases only the writes it has actually observed. */
+  timeline(remote2) {
+    for (const item of remote2) for (const d of item.discussion) this.pendingTimeline.delete(d.comment.id);
+    const merged = remote2.map((item) => {
+      const key = `${item.kind}-${item.id}`;
+      const local = this.activities.get(key);
+      if (!local) return item;
+      const missing = local.discussion.filter((d) => !item.discussion.some((r) => r.comment.id === d.comment.id));
+      if (!missing.length) this.activities.delete(key);
+      return missing.length ? { ...item, discussion: [...item.discussion, ...missing] } : item;
+    });
+    const unseen = [...this.activities.values()].filter(
+      (item) => !remote2.some((r) => r.kind === item.kind && r.id === item.id)
+    );
+    return [...merged, ...this.pendingTimeline.values(), ...unseen].sort(
+      (a, b) => a.createdAt.localeCompare(b.createdAt) || a.id - b.id
+    );
+  }
+  threads(remote2) {
+    const seen = new Set(remote2.flatMap((t) => t.comments.filter((c) => !c.draft).map((c) => c.id)));
+    for (const [root, thread] of this.pendingThreads) {
+      if (thread.comments.every((c) => seen.has(c.id))) this.pendingThreads.delete(root);
+    }
+    const result = remote2.map((thread) => {
+      const local = this.pendingThreads.get(thread.root);
+      return local ? {
+        ...thread,
+        comments: [...local.comments, ...thread.comments.filter((c) => !local.comments.some((l) => l.id === c.id))]
+      } : thread;
+    });
+    for (const local of this.pendingThreads.values())
+      if (!remote2.some((t) => t.root === local.root)) result.push(local);
+    return result;
+  }
+};
+
+// src/github/io/pull-reviews.ts
+async function addPullReviewComment(repo, number, target, body, on) {
+  const pending = await startPullReview(repo, number, target.commit, on);
+  try {
+    const data = await graphql(
+      {
+        query: "mutation($review:ID!,$path:String!,$side:DiffSide!,$line:Int!,$body:String!){addPullRequestReviewThread(input:{pullRequestReviewId:$review,path:$path,side:$side,line:$line,body:$body}){thread{id path diffSide line isOutdated isResolved viewerCanResolve viewerCanUnresolve comments(first:1){nodes{databaseId body createdAt author{login}}}}}}",
+        variables: { review: pending.id, path: target.path, side: target.side, line: target.line, body }
+      },
+      on
+    );
+    const node2 = data?.addPullRequestReviewThread?.thread;
+    const first = node2?.comments.nodes[0];
+    if (!node2?.id || !first) throw new Error("GitHub did not return the draft discussion.");
+    const thread = {
+      id: node2.id,
+      root: first.databaseId,
+      path: node2.path,
+      side: node2.diffSide,
+      line: node2.line,
+      outdated: node2.isOutdated,
+      resolved: node2.isResolved,
+      canResolve: node2.viewerCanResolve,
+      canUnresolve: node2.viewerCanUnresolve,
+      comments: node2.comments.nodes.map((c) => ({
+        ...parseComment(
+          { id: c.databaseId, body: c.body, created_at: c.createdAt, user: c.author },
+          `https://github.com/${repo}/pull/${number}`
+        ),
+        draft: true
+      }))
+    };
+    announce({ repo, number, threads: { on } });
+    return { pending, thread };
+  } catch (e) {
+    if (e instanceof GhError && e.transient) announce({ repo, number, threads: { on } });
+    throw e;
+  }
+}
+async function replyPullReviewThread(repo, number, thread, root, body, on) {
+  const state = await readPullReview(repo, number, on);
+  if (!state.pending) return replyPullThread(repo, number, root, body, on);
+  try {
+    const data = await graphql(
+      {
+        query: "mutation($review:ID!,$thread:ID!,$body:String!){addPullRequestReviewThreadReply(input:{pullRequestReviewId:$review,pullRequestReviewThreadId:$thread,body:$body}){comment{databaseId body createdAt author{login}}}}",
+        variables: { review: state.pending.id, thread, body }
+      },
+      on
+    );
+    const c = data?.addPullRequestReviewThreadReply?.comment;
+    if (!c?.databaseId) throw new Error("GitHub did not return the draft reply.");
+    announce({ repo, number, threads: { on } });
+    return {
+      ...parseComment(
+        { id: c.databaseId, body: c.body, created_at: c.createdAt, user: c.author },
+        `https://github.com/${repo}/pull/${number}`
+      ),
+      draft: true
+    };
+  } catch (e) {
+    if (e instanceof GhError && e.transient) announce({ repo, number, threads: { on } });
+    throw e;
+  }
+}
+async function submitPullReview(repo, number, commit, event, body, on) {
+  if (event === "REQUEST_CHANGES" && !body.trim()) throw new Error("Request Changes requires a summary.");
+  const state = await readPullReview(repo, number, on);
+  const url = `https://github.com/${repo}/pull/${number}`;
+  try {
+    let item;
+    if (!state.pending && event === "COMMENT") {
+      if (!body.trim()) throw new Error("Write a comment first.");
+      const raw = await api(`repos/${repo}/issues/${number}/comments`, { on, method: "POST", rawFields: { body } });
+      item = { ...parseComment(raw, url), kind: "comment", verb: "commented", discussion: [] };
+    } else {
+      let raw;
+      if (state.pending) {
+        const data = await graphql(
+          {
+            query: "mutation($id:ID!,$event:PullRequestReviewEvent!,$body:String!){submitPullRequestReview(input:{pullRequestReviewId:$id,event:$event,body:$body}){pullRequestReview{id databaseId state body submittedAt author{login}}}}",
+            variables: { id: state.pending.id, event, body }
+          },
+          on
+        );
+        const review = data?.submitPullRequestReview?.pullRequestReview;
+        if (!review?.submittedAt) throw new Error("GitHub did not return the submitted review.");
+        raw = {
+          id: review.databaseId,
+          body: review.body,
+          state: review.state,
+          submitted_at: review.submittedAt,
+          user: review.author
+        };
+      } else {
+        raw = await api(`repos/${repo}/pulls/${number}/reviews`, {
+          on,
+          method: "POST",
+          rawFields: { body, event, commit_id: commit }
+        });
+      }
+      const parsed = pullTimeline([], [], [raw], [], url)[0];
+      if (!parsed) throw new Error("GitHub did not return the submitted review.");
+      item = parsed;
+    }
+    announce({ repo, number, threads: { on }, review: { on } });
+    return item;
+  } catch (e) {
+    if (e instanceof GhError && e.transient) announce({ repo, number, threads: { on }, review: { on } });
+    throw e;
+  }
+}
+async function readPullReview(repo, number, on) {
+  const [owner, name] = repo.split("/");
+  let after = null;
+  for (; ; ) {
+    const data = await graphql(
+      {
+        query: "query($owner:String!,$repo:String!,$number:Int!,$after:String){repository(owner:$owner,name:$repo){pullRequest(number:$number){id reviews(first:100,states:PENDING,after:$after){nodes{id databaseId viewerDidAuthor body} pageInfo{hasNextPage endCursor}}}}}",
+        variables: { owner, repo: name, number, after }
+      },
+      on
+    );
+    const pull = data?.repository?.pullRequest;
+    if (!pull) throw new Error("GitHub did not return the pull request's pending review.");
+    const pending = pull.reviews.nodes.find((r) => r.viewerDidAuthor);
+    if (pending)
+      return {
+        id: pull.id,
+        pending: {
+          id: pending.id,
+          databaseId: pending.databaseId,
+          ...pending.body === void 0 ? {} : { body: pending.body }
+        }
+      };
+    if (!pull.reviews.pageInfo.hasNextPage) return { id: pull.id, pending: null };
+    const next = pull.reviews.pageInfo.endCursor;
+    if (!next || next === after) throw new Error("GitHub did not return the next reviews page.");
+    after = next;
+  }
+}
+async function startPullReview(repo, number, commit, on) {
+  const state = await readPullReview(repo, number, on);
+  if (state.pending) return state.pending;
+  try {
+    const data = await graphql(
+      {
+        query: "mutation($id:ID!,$commit:GitObjectID!){addPullRequestReview(input:{pullRequestId:$id,commitOID:$commit}){pullRequestReview{id databaseId state}}}",
+        variables: { id: state.id, commit }
+      },
+      on
+    );
+    const review = data?.addPullRequestReview?.pullRequestReview;
+    if (!review?.id || review.state !== "PENDING") throw new Error("GitHub did not return the pending review.");
+    announce({ repo, number, threads: { on } });
+    return { id: review.id, databaseId: review.databaseId };
+  } catch (e) {
+    if (e instanceof GhError && e.transient) announce({ repo, number, threads: { on } });
+    throw e;
+  }
+}
+
+// src/github/views/review-threads.ts
+var THREAD_ESTIMATE = 160;
+var COMPOSER_HEIGHT = 220;
+function commentEditor(state, height) {
+  const t = colors();
+  return div12().h(height).flex_none().min_w(0).rounded(6).border_1().border_color(t.input).bg(t.background).p(8).on_mouse_down("left", stop).child(Textarea2.new(state).size_full().text_size(13).text_color(t.foreground));
+}
+var ReviewThreads = class {
+  threads = [];
+  published = new PublishedComments();
+  loading = false;
+  failure = null;
+  latest = 0;
+  pending = null;
+  // Keyed by acknowledged comment ID (roots and replies), so each expires only when observed.
+  localDrafts = /* @__PURE__ */ new Map();
+  summaryBox = null;
+  summaryTouched = false;
+  notices = new Notices();
+  writing = /* @__PURE__ */ new Set();
+  failures = /* @__PURE__ */ new Map();
+  boxes = /* @__PURE__ */ new Map();
+  dirty = false;
+  hiddenSnippets = /* @__PURE__ */ new Set();
+  drafts = /* @__PURE__ */ new Map();
+  constructor(ref, on, host) {
+    this.ref = ref;
+    this.on = on;
+    this.host = host;
+  }
+  ref;
+  on;
+  host;
+  /** Native input state must be created in init or an event/async callback, never during render. */
+  init() {
+    if (this.summaryBox) return;
+    const box = TextareaState2.new({ placeholder: "Leave a comment" });
+    box.set_value(this.pending?.body ?? "");
+    box.on("change", (_e, cx) => {
+      this.summaryTouched = true;
+      cx.notify();
+    });
+    this.summaryBox = box;
+  }
+  load(cx) {
+    if (this.writing.size) {
+      this.dirty = true;
+      return;
+    }
+    const request = ++this.latest;
+    this.loading = true;
+    this.failure = null;
+    cx.spawn(async (cx2) => {
+      try {
+        this.init();
+        const state = await readPullReview(this.ref.repo, this.ref.number, this.on);
+        const threads = await readPullThreads(
+          this.ref.repo,
+          this.ref.number,
+          this.on,
+          state.pending?.databaseId ?? null
+        );
+        if (request === this.latest) {
+          this.pending = state.pending;
+          if (this.summaryBox && !this.summaryTouched) this.summaryBox.set_value(state.pending?.body ?? "");
+          if (!state.pending) this.localDrafts.clear();
+          const seen = new Set(threads.flatMap((t) => t.comments.map((c) => c.id)));
+          for (const id of seen) this.localDrafts.delete(id);
+          this.threads = this.published.threads(mergeDraftThreads(threads, [...this.localDrafts.values()]));
+        }
+      } catch (e) {
+        if (request === this.latest) this.failure = failureOf(e).message;
+      } finally {
+        if (request === this.latest) {
+          this.loading = false;
+          cx2.notify();
+        }
+      }
+    });
+  }
+  sync(cx) {
+    if (this.notices.take().some((n) => n.repo === this.ref.repo && n.number === this.ref.number && n.threads?.on === this.on))
+      this.dirty = true;
+    if (this.dirty && !this.writing.size) {
+      this.dirty = false;
+      this.load(cx);
+    }
+  }
+  status() {
+    return div12().text_size(12).text_color(this.failure ? colors().blocked : colors().dim).child(this.failure ?? (this.loading ? "Loading discussions\u2026" : ""));
+  }
+  /** Count drafts without creating native elements; the viewport measures before describing visible rows. */
+  inlineDraftCount(path, row) {
+    let count = 0;
+    for (const side of ["LEFT", "RIGHT"]) {
+      const anchor = commentTarget(row, side);
+      if (anchor && this.drafts.has(JSON.stringify([path, side, anchor.line]))) count++;
+    }
+    return count;
+  }
+  /** Called only for visible rows, in the ordinary render snapshot (not a native list callback). */
+  inlineComposer(path, commit, row, width) {
+    const gutters = {};
+    const editors = [];
+    for (const side of ["LEFT", "RIGHT"]) {
+      const anchor = commentTarget(row, side);
+      if (!anchor) continue;
+      const key = JSON.stringify([path, side, anchor.line]);
+      const draft = this.drafts.get(key);
+      const busy = this.writing.size > 0;
+      gutters[side === "LEFT" ? "left" : "right"] = button(
+        `add-inline-${key}`,
+        `${anchor.line} +`,
+        `Add Comment on ${side} line ${anchor.line}`,
+        (_e, cx) => {
+          if (!this.drafts.has(key)) {
+            const box = TextareaState2.new({ placeholder: "Leave a comment" });
+            box.on("change", (_e2, cx2) => cx2.notify());
+            this.drafts.set(key, { target: { path, commit, ...anchor }, box });
+          }
+          cx.notify();
+        }
+      ).p(0).text_size(12);
+      if (!draft) continue;
+      const t = colors();
+      editors.push(
+        v_flex8().w(width).h(COMPOSER_HEIGHT).p(12).gap(8).bg(t.surface).border_1().border_color(t.border).child(div12().text_size(12).text_color(t.dim).child(`${side} ${anchor.line}`)).child(commentEditor(draft.box, 90)).child(
+          div12().text_size(12).text_color(t.blocked).child(this.failures.get(key) ?? "")
+        ).child(
+          h_flex9().gap(8).child(
+            button(`post-inline-${key}`, busy ? "Saving\u2026" : "Add Comment", "Add Comment", (_e, cx) => {
+              this.postInline(cx, key, false, commit);
+            })
+          ).when(
+            !this.pending,
+            (el) => el.child(
+              button(
+                `start-review-${key}`,
+                busy ? "Saving\u2026" : "Start Review",
+                "Start Review",
+                (_e, cx) => this.postInline(cx, key, true, commit)
+              )
+            )
+          ).child(
+            button(`cancel-inline-${key}`, "Cancel", "Cancel", (_e, cx) => {
+              if (this.writing.has(key)) return;
+              this.drafts.delete(key);
+              this.failures.delete(key);
+              cx.notify();
+            })
+          )
+        )
+      );
+    }
+    return { gutters, editors };
+  }
+  postInline(cx, key, start, commit) {
+    const draft = this.drafts.get(key);
+    if (!draft?.box.value().trim()) return;
+    const body = draft.box.value();
+    this.write(cx, key, async () => {
+      const state = await readPullReview(this.ref.repo, this.ref.number, this.on);
+      this.pending = state.pending;
+      if (start || state.pending) {
+        const result = await addPullReviewComment(this.ref.repo, this.ref.number, draft.target, body, this.on);
+        this.pending = result.pending;
+        this.localDrafts.set(result.thread.root, result.thread);
+        this.threads.push(result.thread);
+      } else {
+        const comment = await addPullComment(this.ref.repo, this.ref.number, draft.target, body, this.on);
+        this.threads.push(
+          this.published.add(comment, {
+            path: draft.target.path,
+            side: draft.target.side,
+            line: draft.target.line,
+            outdated: draft.target.commit !== commit
+          })
+        );
+      }
+      if (draft.box.value() === body) this.drafts.delete(key);
+    });
+  }
+  /** The PR summary and inline drafts share one write lock and one GitHub pending review. */
+  summary(commit) {
+    const box = this.summaryBox;
+    if (!box) return div12().text_size(12).text_color(colors().dim).child("Loading review\u2026");
+    const busy = this.writing.size > 0;
+    return v_flex8().gap(8).child(
+      div12().font_semibold().child(this.pending ? "Pending review" : "Review")
+    ).child(commentEditor(box, 120)).child(
+      div12().text_size(12).text_color(colors().blocked).child(this.failures.get("summary") ?? "")
+    ).child(
+      h_flex9().gap(8).children(
+        [
+          ["COMMENT", "Comment"],
+          ["APPROVE", "Approve"],
+          ["REQUEST_CHANGES", "Request Changes"]
+        ].map(
+          ([event, label]) => button(`submit-review-${event}`, busy ? "Saving\u2026" : label, label, (_e, cx) => {
+            if (busy || event === "REQUEST_CHANGES" && !box.value().trim() || event === "COMMENT" && !this.pending && !box.value().trim())
+              return;
+            this.submit(cx, commit, event, box);
+          }).opacity(busy ? 0.5 : 1)
+        )
+      )
+    );
+  }
+  submit(cx, commit, event, box) {
+    const body = box.value();
+    this.write(cx, "summary", async () => {
+      const item = await submitPullReview(this.ref.repo, this.ref.number, commit, event, body, this.on);
+      this.threads = this.published.submitted(item, this.threads);
+      this.pending = null;
+      this.localDrafts.clear();
+      if (box.value() === body) {
+        box.set_value("");
+        this.summaryTouched = false;
+      }
+    });
+  }
+  /** Natural height is measured after layout, so short discussions do not reserve a large empty card. */
+  card(thread, unavailable, width, onHeight) {
+    return this.conversation(thread, unavailable, true).id(`diff-thread-${thread.id}`).w(width).when(Boolean(onHeight), (el) => el.on_size_change((size, cx) => onHeight?.(size.height, cx)));
+  }
+  /** Code and its conversation stay together in the review, without navigating away. */
+  timeline(thread, snippet, open) {
+    const hidden = this.hiddenSnippets.has(thread.id);
+    const t = colors();
+    return v_flex8().min_w(0).w_full().border_1().border_color(t.border).rounded(6).overflow_hidden().child(
+      h_flex9().gap(8).items_center().px(12).py(6).border_b(1).border_color(t.border).child(
+        button(`timeline-file-${thread.id}`, thread.path, "Open File Diff", (_e, cx) => open(cx)).text_color(
+          t.accent
+        )
+      ).child(div12().flex_1()).when(
+        Boolean(snippet),
+        (el) => el.child(
+          button(
+            `snippet-toggle-${thread.id}`,
+            hidden ? "Show" : "Hide",
+            hidden ? "Show Diff" : "Hide Diff",
+            (_e, cx) => {
+              if (this.hiddenSnippets.has(thread.id)) this.hiddenSnippets.delete(thread.id);
+              else this.hiddenSnippets.add(thread.id);
+              cx.notify();
+            }
+          ).border_1().border_color(t.border).px(10).py(4)
+        )
+      )
+    ).when(!hidden && Boolean(snippet), (el) => el.child(diffSnippet(`timeline-snippet-${thread.id}`, snippet))).child(this.conversation(thread, thread.outdated, false));
+  }
+  conversation(thread, unavailable, virtual) {
+    const t = colors();
+    const scope = virtual ? "diff" : "timeline";
+    const box = this.boxes.get(thread.id);
+    const busy = this.writing.size > 0;
+    const url = `https://github.com/${this.ref.repo}/pull/${this.ref.number}#discussion_r${thread.root}`;
+    return v_flex8().flex_none().min_w(0).p(12).gap(8).when(virtual, (el) => el.border_1().border_color(t.border).bg(t.surface)).when(
+      virtual,
+      (el) => el.child(
+        h_flex9().gap(10).items_center().child(
+          div12().font_medium().child(thread.resolved ? "Resolved" : "Discussion")
+        ).child(
+          div12().text_size(12).text_color(t.dim).child(`${thread.side} ${thread.line ?? ""}`)
+        ).child(link(`thread-browser-${thread.id}`, url, "Open on GitHub").text_size(12).text_color(t.accent))
+      )
+    ).when(!virtual && thread.resolved, (el) => el.child(div12().text_size(12).text_color(t.done).child("Resolved"))).when(
+      unavailable,
+      (el) => el.child(
+        div12().text_size(12).text_color(t.dim).child(
+          thread.outdated ? "Outdated \u2014 this discussion is no longer in the current diff." : "This discussion is not attached to a line in the available diff."
+        )
+      )
+    ).child(
+      v_flex8().id(`${scope}-thread-comments-${thread.id}`).when(virtual, (el) => el.flex_none().max_h(240).overflow_y_scrollbar()).children(
+        thread.comments.map(
+          (c, index2) => postCard(
+            `${scope}-comment-${c.id}`,
+            c,
+            c.draft ? "Pending" : "commented",
+            (url2, cx) => openLink(cx, this.host, url2, `https://github.com/${this.ref.repo}/pull/${this.ref.number}`),
+            { embedded: true }
+          ).when(index2 > 0, (el) => el.border_t(1).border_color(t.border))
+        )
+      )
+    ).when(
+      Boolean(box),
+      (el) => el.child(
+        v_flex8().flex_none().min_w(0).border_t(1).border_color(t.border).pt(12).child(commentEditor(box, 80))
+      )
+    ).when(
+      this.failures.has(thread.id),
+      (el) => el.child(
+        div12().text_size(12).text_color(t.blocked).child(this.failures.get(thread.id) ?? "")
+      )
+    ).child(
+      h_flex9().gap(8).child(
+        button(
+          `${scope}-reply-${thread.id}`,
+          busy ? "Saving\u2026" : box ? "Comment" : "Reply",
+          "Reply to discussion",
+          (_e, cx) => {
+            if (busy) return;
+            if (!box) {
+              const input = TextareaState2.new({ placeholder: "Reply\u2026" });
+              input.on("change", (_e2, cx2) => cx2.notify());
+              this.boxes.set(thread.id, input);
+              cx.notify();
+              return;
+            }
+            const body = box.value();
+            if (!body.trim()) return;
+            this.write(cx, thread.id, async () => {
+              const comment = await replyPullReviewThread(
+                this.ref.repo,
+                this.ref.number,
+                thread.id,
+                thread.root,
+                body,
+                this.on
+              );
+              if (comment.draft) this.localDrafts.set(comment.id, { ...thread, comments: [comment] });
+              if (!thread.comments.some((c) => c.id === comment.id)) thread.comments.push(comment);
+              if (box.value() === body) box.set_value("");
+            });
+          }
+        )
+      ).when(
+        Boolean(box),
+        (el) => el.child(
+          button(`${scope}-cancel-reply-${thread.id}`, "Cancel", "Cancel reply", (_e, cx) => {
+            if (this.writing.size) return;
+            this.boxes.delete(thread.id);
+            this.failures.delete(thread.id);
+            cx.notify();
+          }).opacity(busy ? 0.5 : 1)
+        )
+      ).when(
+        thread.resolved ? thread.canUnresolve : thread.canResolve,
+        (el) => el.child(
+          button(
+            `${scope}-resolve-${thread.id}`,
+            busy ? "Saving\u2026" : thread.resolved ? "Unresolve Conversation" : "Resolve Conversation",
+            "Change discussion resolution",
+            (_e, cx) => {
+              this.write(
+                cx,
+                thread.id,
+                async () => Object.assign(
+                  thread,
+                  await resolvePullThread(this.ref.repo, this.ref.number, thread.id, !thread.resolved, this.on)
+                )
+              );
+            }
+          )
+        )
+      )
+    );
+  }
+  write(cx, key, act) {
+    if (this.writing.size) {
+      this.failures.set(key, "Another update is in progress.");
+      cx.notify();
+      return;
+    }
+    this.latest++;
+    this.loading = false;
+    this.writing.add(key);
+    this.failures.delete(key);
+    cx.notify();
+    cx.spawn(async (cx2) => {
+      try {
+        await act();
+      } catch (e) {
+        this.failures.set(key, failureOf(e).message);
+      } finally {
+        this.writing.delete(key);
+        this.dirty = true;
+        cx2.notify();
+      }
+    });
+  }
+};
+
+// src/github/views/diff.ts
+var FileDiff = class {
+  file = null;
+  rows = [];
+  width = 0;
+  offset = 0;
+  target = null;
+  viewportWidth = 320;
+  viewportHeight = 400;
+  totalHeight = 0;
+  threadHeights = /* @__PURE__ */ new Map();
+  drag = null;
+  init() {
+    this.offset = 0;
+  }
+  jump(comment) {
+    this.target = comment;
+    this.offset = 0;
+  }
+  scrollTo(next, cx) {
+    const offset = Math.max(0, Math.min(next, this.totalHeight - this.viewportHeight));
+    if (offset === this.offset) return;
+    this.offset = offset;
+    cx.notify();
+  }
+  render(file, discussions, commit) {
+    const t = colors();
+    if (this.file !== file) {
+      this.file = file;
+      this.rows = parsePatch(file.patch ?? "");
+      this.width = this.rows.reduce((width, row) => Math.max(width, row.text.length * 16 + 152), 240);
+    }
+    const rows = this.rows;
+    const cardWidth = Math.max(240, this.viewportWidth - 12);
+    const items = [];
+    const threads = (discussions?.threads ?? []).filter((thread) => thread.path === file.path);
+    const anchors = /* @__PURE__ */ new Map();
+    for (const thread of threads) {
+      const row = threadRow(rows, thread);
+      const group = anchors.get(row) ?? [];
+      group.push(thread);
+      anchors.set(row, group);
+    }
+    const appendThreads = (row) => {
+      for (const thread of anchors.get(row) ?? []) {
+        items.push({
+          key: thread.id,
+          height: this.threadHeights.get(thread.id) ?? THREAD_ESTIMATE,
+          render: () => discussions.card(thread, row === null, cardWidth, (height, cx) => {
+            const measured = Math.ceil(height);
+            if (measured <= 0 || this.threadHeights.get(thread.id) === measured) return;
+            this.threadHeights.set(thread.id, measured);
+            cx.notify();
+          }),
+          commentIds: thread.comments.map((c) => c.id)
+        });
+      }
+    };
+    rows.forEach((row, index2) => {
+      const count = commit ? discussions?.inlineDraftCount(file.path, row) ?? 0 : 0;
+      const height = ROW_HEIGHT + count * COMPOSER_HEIGHT;
+      items.push({
+        key: `line-${index2}`,
+        height,
+        render: () => {
+          const comment = commit ? discussions?.inlineComposer(file.path, commit, row, cardWidth) : void 0;
+          return v_flex9().h(height).flex_none().child(diffRow(row, comment?.gutters)).children(comment?.editors ?? []);
+        }
+      });
+      appendThreads(index2);
+    });
+    appendThreads(null);
+    const sizes = items.map((item) => item.height);
+    if (this.target !== null) {
+      const index2 = items.findIndex((item) => item.commentIds?.includes(this.target));
+      if (index2 >= 0) {
+        const top = sizes.slice(0, index2).reduce((sum, height) => sum + height, 0);
+        this.offset = top - Math.max(0, (this.viewportHeight - sizes[index2]) / 2);
+        this.target = null;
+      }
+    }
+    const visible = itemWindow(sizes, this.offset, this.viewportHeight);
+    this.offset = visible.offset;
+    this.totalHeight = visible.total;
+    const maxOffset = Math.max(0, visible.total - this.viewportHeight);
+    const thumbHeight = Math.min(
+      this.viewportHeight,
+      Math.max(28, this.viewportHeight ** 2 / Math.max(1, visible.total))
+    );
+    const travel = this.viewportHeight - thumbHeight;
+    const thumbTop = maxOffset > 0 ? this.offset / maxOffset * travel : 0;
+    const id = `pull-diff-${file.path}`;
+    const header = v_flex9().flex_none().px(16).py(8).gap(6).border_b(1).border_color(t.border).child(
+      h_flex10().gap(10).items_center().flex_wrap().child(div13().min_w(0).font_medium().child(file.path)).child(div13().text_color(t.done).child(`+${file.additions}`)).child(div13().text_color(t.blocked).child(`\u2212${file.deletions}`)).child(link(`${id}-browser`, file.url, "Open File on GitHub").text_size(12).text_color(t.accent))
+    ).when(
+      file.previousPath !== null,
+      (el) => el.child(div13().text_size(12).text_color(t.dim).child(`Renamed from ${file.previousPath}`))
+    );
+    const body = items.length > 0 ? div13().id(`${id}-body`).flex_1().min_h(0).min_w(0).relative().overflow_hidden().on_size_change((size, cx) => {
+      if (size.width > 0 && size.height > 0 && (size.width !== this.viewportWidth || size.height !== this.viewportHeight)) {
+        this.viewportWidth = size.width;
+        this.viewportHeight = size.height;
+        cx.notify();
+      }
+    }).on_scroll_wheel((event, cx) => {
+      if (event.delta.y && Math.abs(event.delta.y) >= Math.abs(event.delta.x)) {
+        this.scrollTo(this.offset - event.delta.y, cx);
+        cx.stop_propagation();
+      }
+    }).on_mouse_move((event, cx) => {
+      if (this.drag && travel > 0)
+        this.scrollTo(this.drag.offset + (event.position.y - this.drag.y) * maxOffset / travel, cx);
+    }).on_mouse_up("left", () => {
+      this.drag = null;
+    }).on_hover((hovered) => {
+      if (!hovered) this.drag = null;
+    }).child(
+      div13().id(`${id}-horizontal`).absolute().top_0().bottom_0().left_0().right(12).overflow_x_scrollbar().child(
+        div13().relative().h_full().w(Math.max(this.width, cardWidth)).overflow_hidden().child(
+          v_flex9().absolute().top(visible.top - visible.offset).left_0().w_full().children(
+            items.slice(visible.start, visible.end).map(
+              (item) => div13().id(`${id}-${item.key}`).h(item.height).flex_none().child(item.render())
+            )
+          )
+        )
+      )
+    ).when(
+      maxOffset > 0,
+      (el) => el.child(
+        div13().id(`${id}-scrollbar`).absolute().top_0().bottom_0().right_0().w(12).cursor_pointer().accessibility_label("Diff vertical scrollbar").on_mouse_down("left", (event, cx) => {
+          cx.stop_propagation();
+          const y = event.local_position?.y;
+          if (y === void 0 || travel <= 0) return;
+          if (y < thumbTop || y > thumbTop + thumbHeight)
+            this.scrollTo((y - thumbHeight / 2) / travel * maxOffset, cx);
+          this.drag = { y: event.position.y, offset: this.offset };
+        }).child(div13().absolute().top(thumbTop).right(2).w(8).h(thumbHeight).rounded(4).bg(t.dim))
+      )
+    ) : div13().p(20).text_color(t.dim).child(
+      file.additions === 0 && file.deletions === 0 ? "No textual changes in this file. Open it on GitHub to view the full file." : "GitHub did not provide a patch for this file (it may be binary or too large). Open it on GitHub to view the changes."
+    );
+    return v_flex9().id(`${id}-viewport`).flex_1().min_h(0).min_w(0).overflow_hidden().child(header).when(Boolean(discussions), (el) => el.child(discussions.status())).when(
+      Boolean(discussions) && !commit,
+      (el) => el.child(
+        div13().px(16).text_size(12).text_color(t.dim).child("Inline comments are unavailable until pull request details finish loading.")
+      )
+    ).when(
+      !file.patch && file.status !== "unchanged" && items.length > 0,
+      (el) => el.child(
+        div13().p(12).text_color(t.dim).child("GitHub did not provide a patch for this file. Discussions are shown below.")
+      )
+    ).child(body);
+  }
+};
+
+// src/github/views/pull-timeline.ts
+import { h_flex as h_flex11, TextView as TextView2, v_flex as v_flex10 } from "gpui-base";
+import { div as div14 } from "gpui-kit";
+function timelineItem(item, discussions, onLink, open, activity) {
+  const t = colors();
+  if (item.kind === "event") {
+    return v_flex10().id(`pull-activity-${item.id}`).min_w(0).gap(6).px(16).py(8).text_size(12).child(
+      h_flex11().min_w(0).gap(8).items_center().child(div14().flex_none().text_color(t.dim).child("\u25C7")).child(div14().min_w(0).truncate().font_semibold().tooltip(item.author).child(item.author)).child(div14().flex_none().text_color(t.dim).child(item.verb)).child(div14().flex_1()).child(
+        div14().flex_none().text_color(t.dim).tooltip(item.createdAt).child(relativeTime(item.createdAt, Date.now()))
+      )
+    ).when(
+      Boolean(item.body.trim()) || Boolean(item.details),
+      (el) => el.child(
+        v_flex10().min_w(0).pl(20).gap(6).when(
+          Boolean(item.body.trim()),
+          (el2) => el2.child(
+            TextView2.markdown(`pull-activity-body-${item.id}`, item.markdown).selectable(true).scrollable(false).on_link_click(onLink)
+          )
+        ).when(
+          Boolean(item.details && activity),
+          (el2) => el2.child(
+            button(
+              `pull-activity-toggle-${item.id}`,
+              activity?.expanded ? "Hide" : "Show",
+              activity?.expanded ? "Hide Commit Details" : "Show Commit Details",
+              (_e, cx) => activity?.toggle(cx)
+            ).self_start().text_color(t.accent)
+          )
+        ).when(
+          Boolean(item.details && activity?.expanded),
+          (el2) => el2.child(
+            TextView2.markdown(`pull-activity-details-${item.id}`, item.details.markdown).selectable(true).scrollable(false).on_link_click(onLink)
+          )
+        )
+      )
+    );
+  }
+  if (item.kind === "comment") return postCard(`pull-comment-${item.id}`, item, item.verb, onLink);
+  const roots = item.discussion.filter((d) => d.root === d.comment.id);
+  return v_flex10().id(`pull-review-${item.id}`).min_w(0).w_full().border_1().border_color(t.border).rounded(8).overflow_hidden().child(
+    postCard(`pull-review-header-${item.id}`, item, item.verb, onLink, {
+      embedded: true,
+      headingOnly: !item.body.trim()
+    })
+  ).when(
+    roots.length > 0,
+    (el) => el.child(
+      v_flex10().min_w(0).p(12).gap(12).children(
+        roots.map((d) => {
+          const thread = discussions?.threads.find((thread2) => thread2.root === d.root);
+          if (thread && discussions)
+            return discussions.timeline(thread, d.snippet, (cx) => open(cx, d.path, d.root));
+          return v_flex10().min_w(0).border_1().border_color(t.border).rounded(6).overflow_hidden().child(
+            button(
+              `inline-jump-${d.root}`,
+              d.path,
+              "Open File Diff",
+              (_e, cx) => open(cx, d.path, d.root)
+            ).text_color(t.accent)
+          ).when(Boolean(d.snippet), (el2) => el2.child(diffSnippet(`inline-snippet-${d.root}`, d.snippet))).children(
+            item.discussion.filter((reply) => reply.root === d.root).map(
+              (reply, index2) => postCard(`inline-${reply.comment.id}`, reply.comment, "commented", onLink, {
+                embedded: true
+              }).when(index2 > 0, (el2) => el2.border_t(1).border_color(t.border))
+            )
+          );
+        })
+      )
+    )
+  );
+}
+
+// src/github/views/pull.ts
 var REVIEWS = {
   requested: { label: "Awaiting requested review", icon: "\u25CB", color: "dim" },
   approved: { label: "Approved these changes", icon: "\u2713", color: "done" },
@@ -11514,7 +13134,18 @@ var Pull = class {
   writeFailure = "";
   ref = null;
   entry = null;
+  files = null;
+  selected = null;
+  diff = new FileDiff();
+  discussions = null;
+  notices = new Notices();
+  missingFile = null;
+  expandedActivity = /* @__PURE__ */ new Set();
+  init() {
+    this.diff.init();
+  }
   host;
+  metadata = new DetailMetadata();
   constructor(host) {
     this.host = host;
   }
@@ -11522,14 +13153,32 @@ var Pull = class {
     this.method = null;
     this.confirming = false;
     this.writeFailure = "";
+    this.metadata.expanded = false;
     this.ref = ref;
     this.entry = null;
+    this.files = null;
+    this.discussions = null;
+    this.missingFile = null;
+    this.expandedActivity.clear();
+    this.diff.jump(null);
+    this.selected = null;
     this.load(cx);
   }
-  load(cx) {
+  /** A sidebar file command changes this view even when the PR identity did not change. */
+  select(cx, path, comment = null) {
+    this.selected = path;
+    this.diff.jump(comment);
+    if (path !== null) this.files?.load(cx);
+    cx.notify();
+  }
+  load(cx, refreshRelated = true) {
     const ref = this.ref;
     const place = detailLocation(this.host.reader);
     if (!ref || !place || !this.host.active("pr")) return;
+    this.discussions ??= new ReviewThreads(ref, place.on, this.host);
+    if (refreshRelated) this.discussions.load(cx);
+    this.files ??= new ChangedFiles(`reader-${this.host.reader}`, ref, place.on, (cx2, path) => this.select(cx2, path));
+    if (refreshRelated && this.selected !== null) this.files.load(cx, true);
     const entry = { pull: this.entry?.pull, loading: true, projectsLoading: false };
     this.entry = entry;
     cx.spawn(async (cx2) => {
@@ -11561,7 +13210,12 @@ var Pull = class {
       }
     });
   }
-  render(wide) {
+  render(cx, layout2) {
+    const on = detailLocation(this.host.reader)?.on;
+    if (this.notices.take().some((n) => n.repo === this.ref?.repo && n.number === this.ref.number && n.threads?.on === on && n.threads))
+      this.load(cx, false);
+    this.files?.sync(cx);
+    this.discussions?.sync(cx);
     const ref = this.ref;
     const entry = this.entry;
     if (!ref) return [detailEmpty("pr")];
@@ -11571,50 +13225,109 @@ var Pull = class {
         this.host,
         ref,
         { title: pull?.title, url: pull?.url, loading: Boolean(entry?.loading) },
-        (cx) => this.load(cx)
+        (cx2) => this.load(cx2)
       ),
-      detailBody(ref, Boolean(entry?.loading), entry?.failure, pull ? this.document(pull, wide) : null)
+      ...this.selected !== null ? [
+        h_flex12().flex_none().px(24).pb(8).child(
+          button(
+            "pull-description",
+            "Description",
+            "Show pull request description",
+            (_e, cx2) => this.select(cx2, null)
+          ).text_color(colors().accent)
+        )
+      ] : [],
+      this.selected !== null ? this.fileView() : detailBody(ref, Boolean(entry?.loading), entry?.failure, pull ? this.document(pull, layout2) : null)
     ];
   }
-  document(pull, wide) {
+  fileView() {
+    const file = this.files?.files?.find((f) => f.path === this.selected);
+    if (file)
+      return v_flex11().flex_1().min_h(0).child(
+        h_flex12().px(16).gap(8).items_center().child(this.files.viewedButton(file)).child(
+          div15().text_size(12).child(file.viewed ? "Viewed" : "Not viewed")
+        ).when(
+          Boolean(this.files?.failure),
+          (el) => el.child(
+            div15().text_color(colors().blocked).child(this.files?.failure ?? "")
+          )
+        )
+      ).child(this.diff.render(file, this.discussions ?? void 0, this.entry?.pull?.headSha));
+    if (this.selected && this.files?.files && this.discussions?.threads.some((thread) => thread.path === this.selected)) {
+      if (this.missingFile?.path !== this.selected)
+        this.missingFile = {
+          path: this.selected,
+          previousPath: null,
+          status: "unchanged",
+          additions: 0,
+          deletions: 0,
+          patch: null,
+          viewed: false,
+          url: this.entry?.pull?.url ?? `https://github.com/${this.ref?.repo}/pull/${this.ref?.number}`
+        };
+      return v_flex11().flex_1().min_h(0).child(quiet("This file is no longer in the changed-files list. Its discussions are shown below.")).child(this.diff.render(this.missingFile, this.discussions));
+    }
+    const failure = this.files?.failure ?? this.discussions?.failure;
+    const message = failure ?? (this.files?.loading ? "Loading changed files\u2026" : "This file is not in the changed-files list. Choose another file in the GitHub sidebar or refresh.");
+    return v_flex11().flex_1().min_h(0).p(24).gap(8).child(
+      div15().text_color(failure ? colors().blocked : colors().dim).child(message)
+    ).when(
+      !this.files?.loading,
+      (el) => el.child(
+        button("pull-files-retry", failure ? "Retry" : "Refresh", "Load changed files again", (_e, cx) => {
+          this.files?.load(cx, true);
+          cx.notify();
+        })
+      )
+    );
+  }
+  document(pull, layout2) {
     const t = colors();
     const state = PULL_STATES[pull.state];
     const onLink = (url, cx) => openLink(cx, this.host, url, pull.url);
     const merged = pull.state === "merged" ? "merged changes" : "wants to merge changes";
     return detailDocument(
-      wide,
+      layout2,
       [
         stateBadge(state.label, state.color(t), state.icon),
-        div9().text_size(13).child(`${pull.author} ${merged} into ${pull.base} from ${pull.head}`)
+        div15().text_size(13).child(`${pull.author} ${merged} into ${pull.base} from ${pull.head}`)
       ],
       [
         postCard("pull-body", pull, "opened this pull request", onLink),
         this.mergeArea(pull),
-        ...(pull.timeline ?? []).map(
-          (item, index2) => v_flex5().gap(8).child(postCard(`pull-event-${index2}`, item, item.verb, onLink)).children(
-            item.discussion.map(
-              (d) => v_flex5().gap(6).child(div9().text_size(12).child(d.path)).when(Boolean(d.snippet), (el) => el.child(div9().text_size(12).child(d.snippet))).child(postCard(`inline-${d.comment.id}`, d.comment, "commented", onLink))
-            )
-          )
-        ),
-        v_flex5().gap(10).child(div9().font_semibold().child("Checks")).children(
+        // Discussion metadata is fetched once per PR; report its progress/failure once, not per thread.
+        ...this.discussions?.loading || this.discussions?.failure ? [this.discussions.status()] : [],
+        ...(this.discussions?.published.timeline(pull.timeline ?? []) ?? pull.timeline ?? []).map((item) => {
+          const key = JSON.stringify([item.author, item.createdAt, item.body]);
+          return timelineItem(item, this.discussions, onLink, (cx, path, comment) => this.select(cx, path, comment), {
+            expanded: this.expandedActivity.has(key),
+            toggle: (cx) => {
+              if (this.expandedActivity.has(key)) this.expandedActivity.delete(key);
+              else this.expandedActivity.add(key);
+              cx.notify();
+            }
+          });
+        }),
+        v_flex11().gap(10).child(div15().font_semibold().child("Checks")).when(!pull.checks?.length, (el) => el.child(quiet("No checks reported"))).children(
           (pull.checks ?? []).map(
             (c) => c.url ? link(c.id, c.url, `${c.name} \xB7 ${c.status} \xB7 ${c.duration}`).text_color(t.accent) : quiet(`${c.name} \xB7 ${c.status} \xB7 ${c.duration}`)
           )
-        )
+        ),
+        ...this.discussions ? [this.discussions.summary(pull.headSha)] : []
       ],
       [
         ["Reviewers", this.reviewers(pull)],
         ["Assignees", people(pull.assignees, "None yet")],
-        ["Labels", labels(pull.labels)],
+        ["Labels", labels(pull.labels), pull.labels.length],
         ["Project", projects(this.entry?.projects, Boolean(this.entry?.projectsLoading))],
         ["Milestone", milestone(pull.milestone)]
-      ]
+      ],
+      this.metadata
     );
   }
   mergeArea(pull) {
     const info = pull.merge;
-    const area = v_flex5().gap(10).child(div9().font_semibold().child("Merge"));
+    const area = v_flex11().gap(10).child(div15().font_semibold().child("Merge"));
     if (!info) return area;
     area.child(quiet(info.reason ?? "This branch has no conflicts with the base branch"));
     if (this.writeFailure) area.child(quiet(this.writeFailure));
@@ -11686,12 +13399,12 @@ var Pull = class {
   reviewers(pull) {
     const t = colors();
     if (pull.reviewers.length === 0) return quiet("None yet");
-    return v_flex5().gap(8).children(
+    return v_flex11().gap(8).children(
       pull.reviewers.map((r) => {
         const state = REVIEWS[r.state];
-        return h_flex6().gap(8).items_center().tooltip(state.label).accessibility_label(`${r.name}: ${state.label}`).child(
-          div9().flex_1().min_w(0).text_size(13).child(`${r.name}${r.team ? " (team)" : ""}`)
-        ).child(div9().text_color(t[state.color]).child(state.icon));
+        return h_flex12().gap(8).items_center().tooltip(state.label).accessibility_label(`${r.name}: ${state.label}`).child(
+          div15().flex_1().min_w(0).text_size(13).child(`${r.name}${r.team ? " (team)" : ""}`)
+        ).child(div15().text_color(t[state.color]).child(state.icon));
       })
     );
   }
@@ -11699,12 +13412,14 @@ var Pull = class {
 
 // src/github/views/reader.ts
 var WIDE = 820;
+var COMPACT = 480;
 var Reader = class {
   navigation = new DetailNavigation();
   issue;
   pull;
-  wide = false;
+  layout = "compact";
   reader;
+  checkingEmpty = false;
   constructor() {
     this.reader = typeof props3()?.reader === "string" ? props3().reader : "";
     const navigation = this.navigation;
@@ -11729,10 +13444,14 @@ var Reader = class {
   }
   init(cx) {
     this.issue.init(cx);
+    this.pull.init();
     cx.spawn(async (cx2) => {
       for (; ; ) {
         const ref = detailCommand(await nextCommand(), this.reader);
-        if (ref && this.navigation.open(ref)) this.show(cx2, ref);
+        if (ref) {
+          if (this.navigation.open(ref)) this.show(cx2, ref);
+          if (ref.kind === "pr") this.pull.select(cx2, ref.file ?? null);
+        }
       }
     });
   }
@@ -11745,15 +13464,22 @@ var Reader = class {
   }
   render(cx) {
     if (this.reader) readyDetail(this.reader);
+    if (!this.navigation.ref && !this.checkingEmpty && detailLocation(this.reader)?.visible) {
+      this.checkingEmpty = true;
+      cx.timer.after(1e3, () => {
+        this.checkingEmpty = false;
+        if (!this.navigation.ref) closeEmptyDetail(this.reader);
+      });
+    }
     const t = colors();
     const kind = this.navigation.ref?.kind ?? this.initial();
-    return v_flex6().id("reader").size_full().min_h(0).overflow_hidden().bg(t.background).text_color(t.foreground).text_size(14).on_size_change((size, cx2) => {
-      const wide = size.width >= WIDE;
-      if (wide !== this.wide) {
-        this.wide = wide;
+    return v_flex12().id("reader").size_full().min_h(0).overflow_hidden().bg(t.background).text_color(t.foreground).text_size(14).on_size_change((size, cx2) => {
+      const layout2 = size.width >= WIDE ? "wide" : size.width >= COMPACT ? "narrow" : "compact";
+      if (layout2 !== this.layout) {
+        this.layout = layout2;
         cx2.notify();
       }
-    }).children(kind === "pr" ? this.pull.render(this.wide) : this.issue.render(cx, this.wide));
+    }).children(kind === "pr" ? this.pull.render(cx, this.layout) : this.issue.render(cx, this.layout));
   }
 };
 

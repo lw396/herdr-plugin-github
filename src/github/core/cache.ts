@@ -32,6 +32,10 @@ export class Cache<T> {
 		return entry !== undefined && now - entry.at < maxAge;
 	}
 
+	delete(key: string): void {
+		this.entries.delete(key);
+	}
+
 	clear(): void {
 		this.entries.clear();
 	}

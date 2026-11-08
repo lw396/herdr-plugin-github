@@ -33,22 +33,9 @@ export function openLink(cx: Context, host: DetailHost, url: string, page: strin
 	}
 }
 
-/** Nothing to show yet: the tab was restored after a restart, or its item hasn't arrived. */
-export function detailEmpty(kind: DetailKind): Element {
-	const t = colors();
-	const hint = `Choose ${kind === "pr" ? "a" : "an"} ${NOUN[kind]} in the GitHub sidebar. ${Noun(kind)} details are not restored after restarting Herdr.`;
-	return v_flex()
-		.flex_1()
-		.gap(8)
-		.items_center()
-		.justify_center()
-		.p(24)
-		.child(
-			div()
-				.font_semibold()
-				.child(`${Noun(kind)} details`),
-		)
-		.child(div().text_size(13).text_color(t.dim).text_center().child(hint));
+/** Leave the reader blank during its handshake; readers without an item close automatically. */
+export function detailEmpty(_kind: DetailKind): Element {
+	return div().flex_1();
 }
 
 /** Back, the title with its number (opens the browser) and copy, and refresh. */
@@ -143,31 +130,80 @@ export function detailBody(
 		.when(document !== null, (el) => el.child(document ?? div()));
 }
 
+export type DetailLayout = "wide" | "narrow" | "compact";
+
+type MetadataSection = [title: string, value: Element, count?: number];
+
+/** Session-only disclosure state; resizing or refreshing does not discard the person's choice. */
+export class DetailMetadata {
+	expanded = false;
+
+	render(layout: DetailLayout, sections: MetadataSection[]): Element {
+		const t = colors();
+		const wide = layout === "wide";
+		const fields = () =>
+			sections.map(([title, value]) =>
+				v_flex()
+					.min_w(0)
+					.gap(10)
+					.py(16)
+					.border_b(1)
+					.border_color(t.border)
+					.when(layout === "narrow", (el) => el.w(180).min_w(140).flex_grow(1))
+					.when(layout === "compact", (el) => el.w_full().flex_none())
+					.child(div().text_size(13).font_semibold().child(title))
+					.child(value),
+			);
+		if (wide) return v_flex().w(220).flex_none().children(fields());
+		const labels = sections.find(([title]) => title === "Labels");
+		const summary = () =>
+			h_flex()
+				.min_w(0)
+				.gap(10)
+				.py(16)
+				.items_center()
+				.flex_wrap()
+				.child(div().text_size(13).font_semibold().child("Labels"))
+				.child(layout === "compact" ? quiet(String(labels?.[2] ?? 0)) : (labels?.[1] ?? quiet("None yet")));
+		let content: Element;
+		if (!this.expanded) content = summary();
+		else if (layout === "compact") content = v_flex().children(fields());
+		else content = h_flex().gap(20).items_start().flex_wrap().children(fields());
+		const label = this.expanded ? "See less" : "See more";
+		return v_flex()
+			.min_w(0)
+			.gap(12)
+			.pb(16)
+			.border_b(1)
+			.border_color(t.border)
+			.child(content)
+			.child(
+				h_flex().child(
+					button("detail-metadata-toggle", label, label, (_e, cx) => {
+						this.expanded = !this.expanded;
+						cx.notify();
+					}).text_color(t.accent),
+				),
+			);
+	}
+}
+
 /** The state badge and the line beside it, then the timeline beside (wide) or below (narrow) the metadata. */
 export function detailDocument(
-	wide: boolean,
+	layout: DetailLayout,
 	heading: Element[],
 	timeline: Element[],
-	sections: [string, Element][],
+	sections: MetadataSection[],
+	metadata: DetailMetadata,
 ): Element {
-	const t = colors();
+	const wide = layout === "wide";
 	const posts = v_flex()
 		.min_w(0)
 		.gap(20)
 		.when(wide, (el) => el.flex_1())
 		.when(!wide, (el) => el.w_full().flex_none())
 		.children(timeline);
-	const metadata = sections.map(([title, value]) =>
-		v_flex()
-			.gap(10)
-			.py(16)
-			.border_b(1)
-			.border_color(t.border)
-			.when(!wide, (el) => el.w(180).min_w(140).flex_1())
-			.child(div().text_size(13).font_semibold().child(title))
-			.child(value),
-	);
-	const side = wide ? v_flex().w(220).flex_none().children(metadata) : h_flex().gap(20).flex_wrap().children(metadata);
+	const side = metadata.render(layout, sections);
 	return v_flex()
 		.gap(18)
 		.child(h_flex().gap(10).pb(4).items_center().flex_wrap().children(heading))
@@ -192,18 +228,24 @@ export function stateBadge(label: string, color: Color, icon?: string): Element 
 
 export type Post = Pick<Comment, "author" | "createdAt" | "markdown"> & { reactions?: Comment["reactions"] };
 
-export function postCard(id: string, post: Post, verb: string, onLink: (url: string, cx: Context) => void): Element {
+/** Embedded posts keep their heading and body together; the caller separates neighboring posts. */
+export function postCard(
+	id: string,
+	post: Post,
+	verb: string,
+	onLink: (url: string, cx: Context) => void,
+	options: { embedded?: boolean; headingOnly?: boolean } = {},
+): Element {
 	const t = colors();
 	const reactions = post.reactions ?? [];
 	const heading = h_flex()
 		.px(16)
-		.py(10)
+		.pt(10)
+		.pb(options.embedded ? 4 : 10)
 		.gap(8)
 		.items_center()
 		.flex_wrap()
-		.bg(t.raised)
-		.border_b(1)
-		.border_color(t.border)
+		.when(!options.embedded, (el) => el.bg(t.raised).border_b(1).border_color(t.border))
 		.text_size(12)
 		.child(div().font_semibold().child(post.author))
 		.child(div().text_color(t.dim).child(verb))
@@ -215,26 +257,26 @@ export function postCard(id: string, post: Post, verb: string, onLink: (url: str
 		.min_w(0)
 		.w_full()
 		.overflow_hidden()
-		.rounded(8)
-		.border_1()
-		.border_color(t.border)
-		.bg(t.background)
+		.when(!options.embedded, (el) => el.rounded(8).border_1().border_color(t.border).bg(t.background))
 		.child(heading)
-		.child(
-			v_flex()
-				.min_w(0)
-				.px(16)
-				.py(16)
-				.gap(12)
-				.child(text)
-				.when(reactions.length > 0, (el) =>
-					el.child(
-						h_flex()
-							.gap(6)
-							.flex_wrap()
-							.children(reactions.map((r) => chip(`${r.emoji} ${r.count}`, t.border, t.raised))),
+		.when(!options.headingOnly, (el) =>
+			el.child(
+				v_flex()
+					.min_w(0)
+					.px(16)
+					.pt(options.embedded ? 4 : 16)
+					.pb(options.embedded ? 12 : 16)
+					.gap(12)
+					.child(text)
+					.when(reactions.length > 0, (el) =>
+						el.child(
+							h_flex()
+								.gap(6)
+								.flex_wrap()
+								.children(reactions.map((r) => chip(`${r.emoji} ${r.count}`, t.border, t.raised))),
+						),
 					),
-				),
+			),
 		);
 }
 

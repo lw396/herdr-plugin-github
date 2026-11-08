@@ -1,17 +1,20 @@
-// The PR description page: published timeline and checks. Writes, files and polling follow.
+// A PR reader switches between its published discussion and a changed file's read-only unified diff.
 import { h_flex, v_flex } from "gpui-base";
 import { type Context, div, type Element } from "gpui-kit";
 import { type DetailRef, notVisible } from "../core/detail.ts";
+import type { ChangedFile } from "../core/files.ts";
 import type { MergeMethod } from "../core/merge.ts";
 import type { Projects } from "../core/projects.ts";
 import type { PullDetail, ReviewState } from "../core/pull-detail.ts";
-import { announce } from "../io/changes.ts";
+import { announce, Notices } from "../io/changes.ts";
 import { detailLocation } from "../io/detail-tabs.ts";
 import * as gh from "../io/gh.ts";
 import { readProjects } from "../io/projects.ts";
 import { deletePullBranch, mergePull, readPull } from "../io/pulls.ts";
 import {
 	type DetailHost,
+	type DetailLayout,
+	DetailMetadata,
 	detailBody,
 	detailDocument,
 	detailEmpty,
@@ -25,6 +28,10 @@ import {
 	quiet,
 	stateBadge,
 } from "./detail.ts";
+import { FileDiff } from "./diff.ts";
+import { ChangedFiles } from "./files.ts";
+import { timelineItem } from "./pull-timeline.ts";
+import { ReviewThreads } from "./review-threads.ts";
 import { button, colors, link, PULL_STATES } from "./ui.ts";
 
 interface Loaded {
@@ -50,7 +57,19 @@ export class Pull {
 	private writeFailure = "";
 	ref: DetailRef | null = null;
 	entry: Loaded | null = null;
+	files: ChangedFiles | null = null;
+	private selected: string | null = null;
+	private diff = new FileDiff();
+	private discussions: ReviewThreads | null = null;
+	private notices = new Notices();
+	private missingFile: ChangedFile | null = null;
+	private expandedActivity = new Set<string>();
+
+	init(): void {
+		this.diff.init();
+	}
 	private readonly host: DetailHost;
+	private metadata = new DetailMetadata();
 
 	constructor(host: DetailHost) {
 		this.host = host;
@@ -60,15 +79,34 @@ export class Pull {
 		this.method = null;
 		this.confirming = false;
 		this.writeFailure = "";
+		this.metadata.expanded = false;
 		this.ref = ref;
 		this.entry = null;
+		this.files = null;
+		this.discussions = null;
+		this.missingFile = null;
+		this.expandedActivity.clear();
+		this.diff.jump(null);
+		this.selected = null;
 		this.load(cx);
 	}
 
-	private load(cx: Context): void {
+	/** A sidebar file command changes this view even when the PR identity did not change. */
+	select(cx: Context, path: string | null, comment: number | null = null): void {
+		this.selected = path;
+		this.diff.jump(comment);
+		if (path !== null) this.files?.load(cx);
+		cx.notify();
+	}
+
+	private load(cx: Context, refreshRelated = true): void {
 		const ref = this.ref;
 		const place = detailLocation(this.host.reader);
 		if (!ref || !place || !this.host.active("pr")) return;
+		this.discussions ??= new ReviewThreads(ref, place.on, this.host);
+		if (refreshRelated) this.discussions.load(cx);
+		this.files ??= new ChangedFiles(`reader-${this.host.reader}`, ref, place.on, (cx, path) => this.select(cx, path));
+		if (refreshRelated && this.selected !== null) this.files.load(cx, true);
 		const entry: Loaded = { pull: this.entry?.pull, loading: true, projectsLoading: false };
 		this.entry = entry;
 		cx.spawn(async (cx) => {
@@ -101,7 +139,16 @@ export class Pull {
 		});
 	}
 
-	render(wide: boolean): Element[] {
+	render(cx: Context, layout: DetailLayout): Element[] {
+		const on = detailLocation(this.host.reader)?.on;
+		if (
+			this.notices
+				.take()
+				.some((n) => n.repo === this.ref?.repo && n.number === this.ref.number && n.threads?.on === on && n.threads)
+		)
+			this.load(cx, false);
+		this.files?.sync(cx);
+		this.discussions?.sync(cx);
 		const ref = this.ref;
 		const entry = this.entry;
 		if (!ref) return [detailEmpty("pr")];
@@ -110,17 +157,106 @@ export class Pull {
 			detailHeader(this.host, ref, { title: pull?.title, url: pull?.url, loading: Boolean(entry?.loading) }, (cx) =>
 				this.load(cx),
 			),
-			detailBody(ref, Boolean(entry?.loading), entry?.failure, pull ? this.document(pull, wide) : null),
+			...(this.selected !== null
+				? [
+						h_flex()
+							.flex_none()
+							.px(24)
+							.pb(8)
+							.child(
+								button("pull-description", "Description", "Show pull request description", (_e, cx) =>
+									this.select(cx, null),
+								).text_color(colors().accent),
+							),
+					]
+				: []),
+			this.selected !== null
+				? this.fileView()
+				: detailBody(ref, Boolean(entry?.loading), entry?.failure, pull ? this.document(pull, layout) : null),
 		];
 	}
 
-	private document(pull: PullDetail, wide: boolean): Element {
+	private fileView(): Element {
+		const file = this.files?.files?.find((f) => f.path === this.selected);
+		if (file)
+			return v_flex()
+				.flex_1()
+				.min_h(0)
+				.child(
+					h_flex()
+						.px(16)
+						.gap(8)
+						.items_center()
+						.child(this.files!.viewedButton(file))
+						.child(
+							div()
+								.text_size(12)
+								.child(file.viewed ? "Viewed" : "Not viewed"),
+						)
+						.when(Boolean(this.files?.failure), (el) =>
+							el.child(
+								div()
+									.text_color(colors().blocked)
+									.child(this.files?.failure ?? ""),
+							),
+						),
+				)
+				.child(this.diff.render(file, this.discussions ?? undefined, this.entry?.pull?.headSha));
+		if (
+			this.selected &&
+			this.files?.files &&
+			this.discussions?.threads.some((thread) => thread.path === this.selected)
+		) {
+			if (this.missingFile?.path !== this.selected)
+				this.missingFile = {
+					path: this.selected,
+					previousPath: null,
+					status: "unchanged",
+					additions: 0,
+					deletions: 0,
+					patch: null,
+					viewed: false,
+					url: this.entry?.pull?.url ?? `https://github.com/${this.ref?.repo}/pull/${this.ref?.number}`,
+				};
+			return v_flex()
+				.flex_1()
+				.min_h(0)
+				.child(quiet("This file is no longer in the changed-files list. Its discussions are shown below."))
+				.child(this.diff.render(this.missingFile, this.discussions));
+		}
+		const failure = this.files?.failure ?? this.discussions?.failure;
+		const message =
+			failure ??
+			(this.files?.loading
+				? "Loading changed files…"
+				: "This file is not in the changed-files list. Choose another file in the GitHub sidebar or refresh.");
+		return v_flex()
+			.flex_1()
+			.min_h(0)
+			.p(24)
+			.gap(8)
+			.child(
+				div()
+					.text_color(failure ? colors().blocked : colors().dim)
+					.child(message),
+			)
+			.when(!this.files?.loading, (el) =>
+				el.child(
+					button("pull-files-retry", failure ? "Retry" : "Refresh", "Load changed files again", (_e, cx) => {
+						this.files?.load(cx, true);
+						cx.notify();
+					}),
+				),
+			);
+	}
+
+	private document(pull: PullDetail, layout: DetailLayout): Element {
 		const t = colors();
 		const state = PULL_STATES[pull.state];
 		const onLink = (url: string, cx: Context) => openLink(cx, this.host, url, pull.url);
 		const merged = pull.state === "merged" ? "merged changes" : "wants to merge changes";
 		return detailDocument(
-			wide,
+			layout,
 			[
 				stateBadge(state.label, state.color(t), state.icon),
 				div().text_size(13).child(`${pull.author} ${merged} into ${pull.base} from ${pull.head}`),
@@ -128,23 +264,24 @@ export class Pull {
 			[
 				postCard("pull-body", pull, "opened this pull request", onLink),
 				this.mergeArea(pull),
-				...(pull.timeline ?? []).map((item, index) =>
-					v_flex()
-						.gap(8)
-						.child(postCard(`pull-event-${index}`, item, item.verb, onLink))
-						.children(
-							item.discussion.map((d) =>
-								v_flex()
-									.gap(6)
-									.child(div().text_size(12).child(d.path))
-									.when(Boolean(d.snippet), (el) => el.child(div().text_size(12).child(d.snippet)))
-									.child(postCard(`inline-${d.comment.id}`, d.comment, "commented", onLink)),
-							),
-						),
-				),
+				// Discussion metadata is fetched once per PR; report its progress/failure once, not per thread.
+				...(this.discussions?.loading || this.discussions?.failure ? [this.discussions.status()] : []),
+				...(this.discussions?.published.timeline(pull.timeline ?? []) ?? pull.timeline ?? []).map((item) => {
+					// Commit timeline events have no REST id; their fallback index can move during refresh.
+					const key = JSON.stringify([item.author, item.createdAt, item.body]);
+					return timelineItem(item, this.discussions, onLink, (cx, path, comment) => this.select(cx, path, comment), {
+						expanded: this.expandedActivity.has(key),
+						toggle: (cx) => {
+							if (this.expandedActivity.has(key)) this.expandedActivity.delete(key);
+							else this.expandedActivity.add(key);
+							cx.notify();
+						},
+					});
+				}),
 				v_flex()
 					.gap(10)
 					.child(div().font_semibold().child("Checks"))
+					.when(!pull.checks?.length, (el) => el.child(quiet("No checks reported")))
 					.children(
 						(pull.checks ?? []).map((c) =>
 							c.url
@@ -152,14 +289,16 @@ export class Pull {
 								: quiet(`${c.name} · ${c.status} · ${c.duration}`),
 						),
 					),
+				...(this.discussions ? [this.discussions.summary(pull.headSha)] : []),
 			],
 			[
 				["Reviewers", this.reviewers(pull)],
 				["Assignees", people(pull.assignees, "None yet")],
-				["Labels", labels(pull.labels)],
+				["Labels", labels(pull.labels), pull.labels.length],
 				["Project", projects(this.entry?.projects, Boolean(this.entry?.projectsLoading))],
 				["Milestone", milestone(pull.milestone)],
 			],
+			this.metadata,
 		);
 	}
 
