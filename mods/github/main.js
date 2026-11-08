@@ -10232,6 +10232,17 @@ function pullState(state, draft2) {
 var PREVIEW_DWELL_MS = 200;
 var PREVIEW_OPEN_MS = 500;
 var PREVIEW_CLOSE_MS = 200;
+var SCROLL_QUIET_MS = 400;
+var ScrollQuiet = class {
+  until = 0;
+  scrolled(now) {
+    this.until = now + SCROLL_QUIET_MS;
+  }
+  /** Milliseconds until cards may open again; 0 once scrolling has settled. */
+  remaining(now) {
+    return Math.max(0, this.until - now);
+  }
+};
 function previewKey(ref, on, login2) {
   return JSON.stringify([on, login2, detailKey(ref)]);
 }
@@ -10488,6 +10499,24 @@ var RowPreviews = class {
   timer = null;
   failures = new Cache(100);
   intent = new PreviewIntent();
+  quiet = new ScrollQuiet();
+  settle = null;
+  /** Called for every wheel event over the list; cards come back once it has been still for a moment. */
+  scrolled(cx) {
+    const was = this.quiet.remaining(Date.now()) > 0;
+    this.quiet.scrolled(Date.now());
+    this.settle?.cancel();
+    const wait = (cx2) => {
+      const left = this.quiet.remaining(Date.now());
+      if (left > 0) this.settle = cx2.timer.after(left, wait);
+      else {
+        this.settle = null;
+        cx2.notify();
+      }
+    };
+    this.settle = cx.timer.after(this.quiet.remaining(Date.now()), wait);
+    if (!was) cx.notify();
+  }
   hover(cx, row, ref, r, current) {
     if (!ref && !this.intent.leave(row)) return;
     this.timer?.cancel();
@@ -10497,7 +10526,7 @@ var RowPreviews = class {
     const key = previewKey(ref, r.on, r.login);
     this.failures.delete(key);
     this.timer = cx.timer.after(PREVIEW_DWELL_MS, (cx2) => {
-      if (!this.intent.current(ticket) || !current()) return;
+      if (!this.intent.current(ticket) || !current() || this.quiet.remaining(Date.now()) > 0) return;
       cx2.spawn(async (cx3) => {
         try {
           await this.previews.load(ref, r.on, r.login);
@@ -10509,10 +10538,11 @@ var RowPreviews = class {
     });
   }
   wrap(id, trigger, ref, r) {
+    if (this.quiet.remaining(Date.now()) > 0) return trigger;
     const preview = this.previews.peek(ref, r.on, r.login);
     const key = previewKey(ref, r.on, r.login);
     const failure = this.failures.get(key);
-    return HoverCard.new(`preview-${id}-${key}`).w_full().open_delay(PREVIEW_OPEN_MS).close_delay(PREVIEW_CLOSE_MS).trigger(trigger).content(previewCard(ref, preview, failure));
+    return HoverCard.new(`preview-${id}-${key}`).w_full().open_delay(PREVIEW_OPEN_MS).close_delay(PREVIEW_CLOSE_MS).trigger(trigger).content(previewCard(ref, preview, failure).on_scroll_wheel((_e, cx) => this.scrolled(cx)));
   }
 };
 
@@ -10523,6 +10553,10 @@ var GroupList = class {
   host;
   source;
   previews = new RowPreviews();
+  /** The list is scrolling under the pointer: keep hover cards out of the way. */
+  scrolled(cx) {
+    this.previews.scrolled(cx);
+  }
   constructor(host, source) {
     this.host = host;
     this.source = source;
@@ -12042,7 +12076,7 @@ var Panel = class {
       failure: this.failure ?? list2.notFound
     });
     const problem = (text3) => div9().p(8).text_size(12).text_color(t.blocked).child(text3);
-    return v_flex5().id(`gh-list-${this.tab}`).flex_1().min_h(0).overflow_y_scroll().p(6).gap(4).when(this.openFailure !== null, (el) => el.child(problem(this.openFailure ?? ""))).when(notice !== null, (el) => el.child(problem(notice ?? ""))).when(!notice && this.ready() !== null, (el) => el.children(list2.render(cx))).when(!notice && !this.ready() && this.loading, (el) => el.child(div9().p(8).text_color(t.dim).child("\u2026")));
+    return v_flex5().id(`gh-list-${this.tab}`).flex_1().min_h(0).overflow_y_scroll().on_scroll_wheel((_e, cx2) => list2.scrolled(cx2)).p(6).gap(4).when(this.openFailure !== null, (el) => el.child(problem(this.openFailure ?? ""))).when(notice !== null, (el) => el.child(problem(notice ?? ""))).when(!notice && this.ready() !== null, (el) => el.children(list2.render(cx))).when(!notice && !this.ready() && this.loading, (el) => el.child(div9().p(8).text_color(t.dim).child("\u2026")));
   }
 };
 

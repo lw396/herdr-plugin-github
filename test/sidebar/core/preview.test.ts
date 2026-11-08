@@ -1,6 +1,21 @@
 import { expect, test } from "bun:test";
 import { markdownSummary } from "../../../src/github/detail/core/markdown.ts";
-import { PreviewIntent, parsePreview, previewKey } from "../../../src/github/sidebar/core/preview.ts";
+import {
+	PreviewIntent,
+	parsePreview,
+	previewKey,
+	SCROLL_QUIET_MS,
+	ScrollQuiet,
+} from "../../../src/github/sidebar/core/preview.ts";
+
+test("hover cards stay away while the list scrolls, until the wheel has been still for a moment", () => {
+	const quiet = new ScrollQuiet();
+	expect(quiet.remaining(1000)).toBe(0);
+	quiet.scrolled(1000);
+	quiet.scrolled(1100);
+	expect(quiet.remaining(1100 + SCROLL_QUIET_MS - 1)).toBe(1);
+	expect(quiet.remaining(1100 + SCROLL_QUIET_MS)).toBe(0);
+});
 
 test("late row exits cannot discard another row's preview request", () => {
 	const hover = new PreviewIntent();

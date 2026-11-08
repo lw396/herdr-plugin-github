@@ -8,6 +8,26 @@ export const PREVIEW_DWELL_MS = 200;
 export const PREVIEW_OPEN_MS = 500;
 export const PREVIEW_CLOSE_MS = 200;
 
+/** How long after the last wheel event hover cards stay away. */
+export const SCROLL_QUIET_MS = 400;
+
+/**
+ * Hover cards are closed while the list scrolls and for a moment after: rows pass under a resting pointer, and an
+ * open card would cover the list and take the wheel events meant for it.
+ */
+export class ScrollQuiet {
+	private until = 0;
+
+	scrolled(now: number): void {
+		this.until = now + SCROLL_QUIET_MS;
+	}
+
+	/** Milliseconds until cards may open again; 0 once scrolling has settled. */
+	remaining(now: number): number {
+		return Math.max(0, this.until - now);
+	}
+}
+
 /** The same identity scopes cached data, errors and native card state. */
 export function previewKey(ref: DetailRef, on: string | null, login: string): string {
 	return JSON.stringify([on, login, detailKey(ref)]);

@@ -387,6 +387,7 @@ export class Panel implements Role {
 			.flex_1()
 			.min_h(0)
 			.overflow_y_scroll()
+			.on_scroll_wheel((_e, cx) => list.scrolled(cx))
 			.p(6)
 			.gap(4)
 			.when(this.openFailure !== null, (el) => el.child(problem(this.openFailure ?? "")))

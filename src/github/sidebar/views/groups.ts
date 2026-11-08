@@ -63,6 +63,11 @@ export class GroupList<K extends string, R extends Row, P extends Page<R>> {
 	private readonly source: GroupSource<K, R, P>;
 	private readonly previews = new RowPreviews();
 
+	/** The list is scrolling under the pointer: keep hover cards out of the way. */
+	scrolled(cx: Context): void {
+		this.previews.scrolled(cx);
+	}
+
 	constructor(host: ListHost, source: GroupSource<K, R, P>) {
 		this.host = host;
 		this.source = source;

@@ -14,6 +14,7 @@ import {
 	type Preview,
 	PreviewIntent,
 	previewKey,
+	ScrollQuiet,
 } from "../core/preview.ts";
 import type { Ready } from "../io/groups.ts";
 import { Previews } from "../io/preview.ts";
@@ -106,6 +107,26 @@ export class RowPreviews {
 	private timer: Task | null = null;
 	private failures = new Cache<string>(100);
 	private intent = new PreviewIntent();
+	private quiet = new ScrollQuiet();
+	private settle: Task | null = null;
+
+	/** Called for every wheel event over the list; cards come back once it has been still for a moment. */
+	scrolled(cx: Context): void {
+		const was = this.quiet.remaining(Date.now()) > 0;
+		this.quiet.scrolled(Date.now());
+		this.settle?.cancel();
+		const wait = (cx: Context) => {
+			const left = this.quiet.remaining(Date.now());
+			if (left > 0) this.settle = cx.timer.after(left, wait);
+			else {
+				this.settle = null;
+				cx.notify();
+			}
+		};
+		this.settle = cx.timer.after(this.quiet.remaining(Date.now()), wait);
+		// Close an open card at once; later wheel events change nothing visible.
+		if (!was) cx.notify();
+	}
 
 	hover(cx: Context, row: string, ref: DetailRef | null, r: Ready | null, current: () => boolean): void {
 		if (!ref && !this.intent.leave(row)) return;
@@ -116,7 +137,7 @@ export class RowPreviews {
 		const key = previewKey(ref, r.on, r.login);
 		this.failures.delete(key);
 		this.timer = cx.timer.after(PREVIEW_DWELL_MS, (cx) => {
-			if (!this.intent.current(ticket) || !current()) return;
+			if (!this.intent.current(ticket) || !current() || this.quiet.remaining(Date.now()) > 0) return;
 			cx.spawn(async (cx) => {
 				try {
 					await this.previews.load(ref, r.on, r.login);
@@ -130,14 +151,18 @@ export class RowPreviews {
 	}
 
 	wrap(id: string, trigger: Element, ref: DetailRef, r: Ready): Element {
+		if (this.quiet.remaining(Date.now()) > 0) return trigger;
 		const preview = this.previews.peek(ref, r.on, r.login);
 		const key = previewKey(ref, r.on, r.login);
 		const failure = this.failures.get(key);
-		return HoverCard.new(`preview-${id}-${key}`)
-			.w_full()
-			.open_delay(PREVIEW_OPEN_MS)
-			.close_delay(PREVIEW_CLOSE_MS)
-			.trigger(trigger)
-			.content(previewCard(ref, preview, failure));
+		return (
+			HoverCard.new(`preview-${id}-${key}`)
+				.w_full()
+				.open_delay(PREVIEW_OPEN_MS)
+				.close_delay(PREVIEW_CLOSE_MS)
+				.trigger(trigger)
+				// The card covers the list: a wheel over it means the person wants to scroll, so it gets out of the way.
+				.content(previewCard(ref, preview, failure).on_scroll_wheel((_e, cx) => this.scrolled(cx)))
+		);
 	}
 }
