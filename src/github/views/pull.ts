@@ -1,13 +1,13 @@
 // A PR reader switches between its published discussion and a changed file's read-only unified diff.
 import { h_flex, v_flex } from "gpui-base";
 import { type Context, div, type Element } from "gpui-kit";
-import { type DetailRef, notVisible } from "../core/detail.ts";
+import { type DetailRef, detailUrl, notVisible } from "../core/detail.ts";
 import type { ChangedFile } from "../core/files.ts";
 import type { MergeMethod } from "../core/merge.ts";
 import type { Projects } from "../core/projects.ts";
 import type { PullDetail } from "../core/pull-detail.ts";
 import type { ReviewState } from "../core/reviewers.ts";
-import { announce, Notices } from "../io/changes.ts";
+import { Notices } from "../io/changes.ts";
 import { detailLocation } from "../io/detail-tabs.ts";
 import * as gh from "../io/gh.ts";
 import { readProjects } from "../io/projects.ts";
@@ -217,7 +217,7 @@ export class Pull {
 					deletions: 0,
 					patch: null,
 					viewed: false,
-					url: this.entry?.pull?.url ?? `https://github.com/${this.ref?.repo}/pull/${this.ref?.number}`,
+					url: this.entry?.pull?.url ?? (this.ref ? detailUrl(this.ref) : ""),
 				};
 			return v_flex()
 				.flex_1()
@@ -316,10 +316,9 @@ export class Pull {
 			cx.spawn(async (cx) => {
 				try {
 					if (remove) {
-						await deletePullBranch(info, place.on);
+						await deletePullBranch(ref.repo, ref.number, info, place.on);
 						info.deletable = false;
 					} else await mergePull(ref.repo, ref.number, this.method ?? info.methods[0], info.sha, place.on);
-					announce({ repo: ref.repo, number: ref.number, pull: true });
 					if (this.ref === ref) {
 						this.confirming = false;
 						this.writeFailure = "";

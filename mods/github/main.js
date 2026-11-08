@@ -250,12 +250,109 @@ function footerStatus(s, now) {
 
 // src/github/io/changes.ts
 import { setShared, shared } from "herdr";
+
+// src/github/io/gh.ts
+import { exec } from "herdr";
+var GhError = class extends Error {
+  code;
+  stderr;
+  constructor(message, code, stderr) {
+    super(message);
+    this.code = code;
+    this.stderr = stderr;
+  }
+  /** Not there, or not visible to this account: REST's 404, GraphQL's NOT_FOUND for a repository. */
+  get notFound() {
+    return /HTTP 404|Could not resolve to a Repository/.test(this.stderr + this.message);
+  }
+  /** The connection dropped: GitHub may or may not have done a write. */
+  get transient() {
+    return transient(this.stderr);
+  }
+};
+function failureOf(e) {
+  if (e instanceof GhError) return { notFound: e.notFound, message: explain(e.message) };
+  return { notFound: false, message: e instanceof Error ? e.message : String(e) };
+}
+var TRIES = 3;
+async function execute(args, on, read, conditional = false) {
+  for (let tried = 1; ; tried++) {
+    const r = await exec("gh", args, { on });
+    if (r.code === 0 || conditional && responseHeaders(r.stdout).status === 304) return r;
+    if (!read || tried >= TRIES || !transient(r.stderr)) throw new GhError(errorMessage(r.stderr), r.code, r.stderr);
+  }
+}
+async function changes(path, etag, on) {
+  const args = ["api", path, "--include"];
+  if (etag) args.push("-H", `If-None-Match: ${etag}`);
+  const headers = responseHeaders((await execute(args, on, true, true)).stdout);
+  if (headers.status === 304) return { changed: false };
+  if (headers.status !== 200) throw new Error("GitHub did not return an HTTP 200 or 304 response.");
+  return { changed: true, etag: headers.etag };
+}
+var reads = (method) => !method || method.toUpperCase() === "GET";
+async function api(path, { on, ...options }) {
+  const args = apiArgs(path, { ...options, slurp: options.paginate });
+  const data = parseJson((await execute(args, on, reads(options.method))).stdout);
+  return options.paginate && Array.isArray(data) && data.every(Array.isArray) ? data.flat() : data;
+}
+async function apiText(path, jq, { on, ...options }) {
+  return (await execute(apiArgs(path, { ...options, jq }), on, reads(options.method))).stdout.trim();
+}
+var graphql = (query, on) => run2(query, on, true);
+var mutate = (query, on) => run2(query, on, false);
+async function run2(query, on, read) {
+  const out = parseJson((await execute(graphqlArgs(query), on, read)).stdout);
+  if (out?.errors?.length) throw new GhError(out.errors.map((e) => e.message).join("; "), 1, "");
+  return out?.data;
+}
+async function eachPage(what, query, select, visit, on) {
+  let after = null;
+  for (; ; ) {
+    const page = select(await graphql(query(after), on));
+    if (!page) throw new Error(`GitHub did not return ${what}.`);
+    if (visit(page) === true || !page.pageInfo.hasNextPage) return;
+    const next = page.pageInfo.endCursor;
+    if (!next || next === after) throw new Error(`GitHub did not return the next page of ${what}.`);
+    after = next;
+  }
+}
+async function account(on) {
+  return { on, status: await status(on) };
+}
+async function status(on) {
+  try {
+    return { ok: true, user: await apiText("user", ".login", { on }) };
+  } catch (e) {
+    const message = e instanceof Error ? e.message : String(e);
+    if (!(e instanceof GhError))
+      return { ok: false, reason: /^cannot (run|start) gh\b/.test(message) ? "missing" : "error", message };
+    if (/gh auth login|HTTP 401/.test(e.stderr)) return { ok: false, reason: "auth", message };
+    return { ok: false, reason: "error", message };
+  }
+}
+async function signedIn(on) {
+  const a = await account(on);
+  if (!a.status.ok) throw new Error(describeAccount(a).text);
+}
+
+// src/github/io/changes.ts
 var CHANGES = "github.changes";
 var KEPT = 20;
 var log = () => shared(CHANGES)?.notices ?? [];
 function announce(notice) {
   const id = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
   setShared(CHANGES, { notices: [...log(), { id, notice }].slice(-KEPT) });
+}
+async function written(notice, write) {
+  try {
+    const result = await write();
+    announce(notice);
+    return result;
+  } catch (e) {
+    if (!(e instanceof GhError) || e.transient) announce(notice);
+    throw e;
+  }
 }
 var Notices = class {
   taken = new Set(log().map((n) => n.id));
@@ -304,7 +401,7 @@ function location() {
 var sidebarVisible = () => layoutShows(layout(), "github");
 
 // src/github/io/detail-tabs.ts
-import { exec, focused as focused2, panes as panes3, run as run2, setShared as setShared2, shared as shared2, spaces as spaces2 } from "herdr";
+import { exec as exec2, focused as focused2, panes as panes3, run as run3, setShared as setShared2, shared as shared2, spaces as spaces2 } from "herdr";
 
 // src/github/core/detail.ts
 var detailKey = (ref) => `${ref.repo.toLowerCase()}${ref.kind === "pr" ? "/pull/" : "#"}${ref.number}`;
@@ -387,14 +484,14 @@ var DetailTabs = class {
     remember(target.id, { ...target.reader, identity, request: `${Date.now()}-${Math.random()}`, ready: null });
     const tabName = owner.tabs.find((t) => t.id === target.reader.tab)?.name;
     if (oldName && tabName?.toLowerCase() === oldName && tabName !== detailTabName(ref)) {
-      run2("tab.rename", { id: target.reader.tab, name: detailTabName(ref) });
+      run3("tab.rename", { id: target.reader.tab, name: detailTabName(ref) });
     }
-    if (focused2()?.space === space) run2("tab.select", { id: target.reader.tab });
+    if (focused2()?.space === space) run3("tab.select", { id: target.reader.tab });
   }
   async create(space, ref) {
     const id = `detail-${Date.now()}-${Math.random().toString(36).slice(2)}`;
     const args = { space, name: detailTabName(ref), mod: "github", props: { role: ref.kind, reader: id } };
-    const result = await exec("herdr-app", ["do", "tab.new", JSON.stringify(args)]);
+    const result = await exec2("herdr-app", ["do", "tab.new", JSON.stringify(args)]);
     if (result.code !== 0) throw new Error(result.stderr.trim() || result.stdout.trim() || "Could not open the tab.");
     let reply;
     try {
@@ -417,7 +514,7 @@ var DetailTabs = class {
       }
       if (r.tab !== tab || r.ready !== r.request) continue;
       this.pending.delete(id);
-      run2(`github.${COMMAND}${JSON.stringify({ reader: id, ...ref })}`);
+      run3(`github.${COMMAND}${JSON.stringify({ reader: id, ...ref })}`);
     }
   }
 };
@@ -426,7 +523,7 @@ function navigatedDetail(id, ref) {
   if (!r || !space) return;
   remember(id, { ...r, identity: `${space.id}:${detailKey(ref)}` });
   const name = detailTabName(ref);
-  if (space.tabs.find((t) => t.id === r.tab)?.name !== name) run2("tab.rename", { id: r.tab, name });
+  if (space.tabs.find((t) => t.id === r.tab)?.name !== name) run3("tab.rename", { id: r.tab, name });
 }
 function detailLocation(id) {
   const r = reader(id);
@@ -444,7 +541,7 @@ function detailLocation(id) {
 }
 function closeEmptyDetail(id) {
   const location2 = detailLocation(id);
-  if (location2?.visible) run2("pane.close", { pane: location2.pane });
+  if (location2?.visible) run3("pane.close", { pane: location2.pane });
 }
 function detailCommand(command, id) {
   if (!command.startsWith(COMMAND)) return null;
@@ -459,79 +556,6 @@ function detailCommand(command, id) {
   } catch {
     return null;
   }
-}
-
-// src/github/io/gh.ts
-import { exec as exec2 } from "herdr";
-var GhError = class extends Error {
-  code;
-  stderr;
-  constructor(message, code, stderr) {
-    super(message);
-    this.code = code;
-    this.stderr = stderr;
-  }
-  /** Not there, or not visible to this account: REST's 404, GraphQL's NOT_FOUND for a repository. */
-  get notFound() {
-    return /HTTP 404|Could not resolve to a Repository/.test(this.stderr + this.message);
-  }
-  /** The connection dropped: GitHub may or may not have done a write. */
-  get transient() {
-    return transient(this.stderr);
-  }
-};
-function failureOf(e) {
-  if (e instanceof GhError) return { notFound: e.notFound, message: explain(e.message) };
-  return { notFound: false, message: e instanceof Error ? e.message : String(e) };
-}
-var TRIES = 3;
-async function execute(args, on, read, conditional = false) {
-  for (let tried = 1; ; tried++) {
-    const r = await exec2("gh", args, { on });
-    if (r.code === 0 || conditional && responseHeaders(r.stdout).status === 304) return r;
-    if (!read || tried >= TRIES || !transient(r.stderr)) throw new GhError(errorMessage(r.stderr), r.code, r.stderr);
-  }
-}
-async function changes(path, etag, on) {
-  const args = ["api", path, "--include"];
-  if (etag) args.push("-H", `If-None-Match: ${etag}`);
-  const headers = responseHeaders((await execute(args, on, true, true)).stdout);
-  if (headers.status === 304) return { changed: false };
-  if (headers.status !== 200) throw new Error("GitHub did not return an HTTP 200 or 304 response.");
-  return { changed: true, etag: headers.etag };
-}
-var reads = (method) => !method || method.toUpperCase() === "GET";
-async function api(path, { on, ...options }) {
-  const args = apiArgs(path, { ...options, slurp: options.paginate });
-  const data = parseJson((await execute(args, on, reads(options.method))).stdout);
-  return options.paginate && Array.isArray(data) && data.every(Array.isArray) ? data.flat() : data;
-}
-async function apiText(path, jq, { on, ...options }) {
-  return (await execute(apiArgs(path, { ...options, jq }), on, reads(options.method))).stdout.trim();
-}
-async function graphql(query, on) {
-  const read = !/^\s*mutation\b/.test(query.query);
-  const out = parseJson((await execute(graphqlArgs(query), on, read)).stdout);
-  if (out?.errors?.length) throw new GhError(out.errors.map((e) => e.message).join("; "), 1, "");
-  return out?.data;
-}
-async function account(on) {
-  return { on, status: await status(on) };
-}
-async function status(on) {
-  try {
-    return { ok: true, user: await apiText("user", ".login", { on }) };
-  } catch (e) {
-    const message = e instanceof Error ? e.message : String(e);
-    if (!(e instanceof GhError))
-      return { ok: false, reason: /^cannot (run|start) gh\b/.test(message) ? "missing" : "error", message };
-    if (/gh auth login|HTTP 401/.test(e.stderr)) return { ok: false, reason: "auth", message };
-    return { ok: false, reason: "error", message };
-  }
-}
-async function signedIn(on) {
-  const a = await account(on);
-  if (!a.status.ok) throw new Error(describeAccount(a).text);
 }
 
 // node_modules/entities/dist/decode-codepoint.js
@@ -10131,7 +10155,7 @@ async function readIssue(repo, number, on) {
 }
 async function addComment(repo, number, body, on) {
   const comment = await api(`repos/${repo}/issues/${number}/comments`, { on, method: "POST", rawFields: { body } });
-  return parseComment(comment, `https://github.com/${repo}/issues/${number}`);
+  return parseComment(comment, detailUrl({ kind: "issue", repo, number }));
 }
 async function setIssueState(repo, number, state, on) {
   return parseIssueChange(
@@ -10180,8 +10204,8 @@ var Cache = class {
 };
 
 // src/github/core/pulls.ts
-function pullState(state, draft) {
-  return state === "open" && draft ? "draft" : state;
+function pullState(state, draft2) {
+  return state === "open" && draft2 ? "draft" : state;
 }
 var ROW = "number title url updatedAt isDraft state author { login }";
 var ALL_OPEN_QUERY = `query($owner: String!, $name: String!, $after: String) {
@@ -10571,14 +10595,14 @@ function parseThreads(nodes, comments, url, drafts = []) {
 }
 function mergeDraftThreads(remote2, drafts) {
   const result = [...remote2];
-  for (const draft of drafts) {
-    const index2 = result.findIndex((t) => t.root === draft.root);
+  for (const draft2 of drafts) {
+    const index2 = result.findIndex((t) => t.root === draft2.root);
     const thread = result[index2];
-    if (!thread) result.push(draft);
+    if (!thread) result.push(draft2);
     else
       result[index2] = {
         ...thread,
-        comments: [...thread.comments, ...draft.comments.filter((c) => !thread.comments.some((r) => r.id === c.id))]
+        comments: [...thread.comments, ...draft2.comments.filter((c) => !thread.comments.some((r) => r.id === c.id))]
       };
   }
   return result;
@@ -10612,144 +10636,133 @@ async function readPull(repo, number, on) {
   return parsePullDetail({ pull, issue, repository, comments, reviews, events, inline, checkRuns, statuses });
 }
 async function mergePull(repo, number, method, sha, on) {
-  const result = await api(`repos/${repo}/pulls/${number}/merge`, {
-    on,
-    method: "PUT",
-    rawFields: { merge_method: method, sha }
+  await written({ repo, number, pull: true }, async () => {
+    const result = await api(`repos/${repo}/pulls/${number}/merge`, {
+      on,
+      method: "PUT",
+      rawFields: { merge_method: method, sha }
+    });
+    if (!result.merged) throw new Error(result.message);
   });
-  if (!result.merged) throw new Error(result.message);
 }
-async function deletePullBranch(info, on) {
+async function deletePullBranch(repo, number, info, on) {
   if (!info.deletable || !info.headRepo) throw new Error("This branch cannot be deleted");
-  await api(`repos/${info.headRepo}/git/refs/heads/${info.headRef.split("/").map(encodeURIComponent).join("/")}`, {
-    on,
-    method: "DELETE"
-  });
+  const ref = info.headRef.split("/").map(encodeURIComponent).join("/");
+  await written(
+    { repo, number, pull: true },
+    () => api(`repos/${info.headRepo}/git/refs/heads/${ref}`, { on, method: "DELETE" })
+  );
 }
 async function readPullFiles(repo, number, on) {
   const files = parseFiles(await api(`repos/${repo}/pulls/${number}/files?per_page=100`, { on, paginate: true }));
-  const { viewed } = await readPullViewed(repo, number, on);
-  const paths = new Set(viewed);
-  return files.map((file) => ({ ...file, viewed: paths.has(file.path) }));
+  const viewed = new Set(await readPullViewed(repo, number, on));
+  return files.map((file) => ({ ...file, viewed: viewed.has(file.path) }));
 }
 async function readPullViewed(repo, number, on) {
-  const [owner, name] = repo.split("/");
+  const [owner = "", name = ""] = repo.split("/");
   const viewed = [];
-  let after = null;
-  let id = "";
-  for (; ; ) {
-    const data = await graphql(
-      {
-        query: "query($owner:String!,$repo:String!,$number:Int!,$after:String){repository(owner:$owner,name:$repo){pullRequest(number:$number){id files(first:100,after:$after){nodes{path viewerViewedState} pageInfo{hasNextPage endCursor}}}}}",
-        variables: { owner: owner ?? "", repo: name ?? "", number, after }
-      },
-      on
-    );
-    const pull = data?.repository?.pullRequest;
-    if (!pull) throw new Error("GitHub did not return the pull request's viewed-file states.");
-    id = pull.id;
-    viewed.push(...pull.files.nodes.filter((f) => f.viewerViewedState === "VIEWED").map((f) => f.path));
-    if (!pull.files.pageInfo.hasNextPage) return { id, viewed };
-    const next = pull.files.pageInfo.endCursor;
-    if (!next || next === after) throw new Error("GitHub did not return the next viewed-files page.");
-    after = next;
-  }
+  await eachPage(
+    "the pull request's viewed-file states",
+    (after) => ({
+      query: "query($owner:String!,$repo:String!,$number:Int!,$after:String){repository(owner:$owner,name:$repo){pullRequest(number:$number){id files(first:100,after:$after){nodes{path viewerViewedState} pageInfo{hasNextPage endCursor}}}}}",
+      variables: { owner, repo: name, number, after }
+    }),
+    (data) => data?.repository?.pullRequest?.files,
+    (page) => {
+      viewed.push(...page.nodes.filter((f) => f.viewerViewedState === "VIEWED").map((f) => f.path));
+      return false;
+    },
+    on
+  );
+  return viewed;
 }
-async function setPullFileViewed(repo, number, path, viewed, on) {
+async function pullId(repo, number, on) {
   const [owner, name] = repo.split("/");
   const data = await graphql(
     {
       query: "query($owner:String!,$repo:String!,$number:Int!){repository(owner:$owner,name:$repo){pullRequest(number:$number){id}}}",
-      variables: { owner, repo: name, number }
+      variables: { owner: owner ?? "", repo: name ?? "", number }
     },
     on
   );
   const id = data?.repository?.pullRequest?.id;
   if (!id) throw new Error("GitHub did not return the pull request's ID.");
+  return id;
+}
+async function setPullFileViewed(repo, number, path, viewed, on) {
+  const id = await pullId(repo, number, on);
   const operation = viewed ? "markFileAsViewed" : "unmarkFileAsViewed";
-  try {
-    await graphql(
+  await written(
+    { repo, number, files: { on } },
+    () => mutate(
       {
         query: `mutation($id:ID!,$path:String!){${operation}(input:{pullRequestId:$id,path:$path}){pullRequest{id}}}`,
         variables: { id, path }
       },
       on
-    );
-  } catch (e) {
-    if (e instanceof GhError && e.transient) announce({ repo, number, files: { on } });
-    throw e;
-  }
-  announce({ repo, number, files: { on } });
+    )
+  );
 }
+var pullUrl = (repo, number) => detailUrl({ kind: "pr", repo, number });
 async function addPullComment(repo, number, target, body, on) {
-  let raw;
-  try {
-    raw = await api(`repos/${repo}/pulls/${number}/comments`, {
+  return written({ repo, number, threads: { on } }, async () => {
+    const raw = await api(`repos/${repo}/pulls/${number}/comments`, {
       on,
       method: "POST",
       fields: { line: target.line },
       rawFields: { body, commit_id: target.commit, path: target.path, side: target.side }
     });
-  } catch (e) {
-    if (e instanceof GhError && e.transient) announce({ repo, number, threads: { on } });
-    throw e;
-  }
-  const comment = parseComment(raw, `https://github.com/${repo}/pull/${number}`);
-  announce({ repo, number, threads: { on } });
-  return comment;
+    return parseComment(raw, pullUrl(repo, number));
+  });
 }
 async function replyPullThread(repo, number, root, body, on) {
-  const raw = await api(`repos/${repo}/pulls/${number}/comments/${root}/replies`, {
-    on,
-    method: "POST",
-    rawFields: { body }
+  return written({ repo, number, threads: { on } }, async () => {
+    const raw = await api(`repos/${repo}/pulls/${number}/comments/${root}/replies`, {
+      on,
+      method: "POST",
+      rawFields: { body }
+    });
+    return parseComment(raw, pullUrl(repo, number));
   });
-  const comment = parseComment(raw, `https://github.com/${repo}/pull/${number}`);
-  announce({ repo, number, threads: { on } });
-  return comment;
 }
 async function resolvePullThread(repo, number, id, resolved, on) {
   const op = resolved ? "resolveReviewThread" : "unresolveReviewThread";
-  const data = await graphql(
-    {
-      query: `mutation($id:ID!){${op}(input:{threadId:$id}){thread{id isResolved viewerCanResolve viewerCanUnresolve}}}`,
-      variables: { id }
-    },
-    on
-  );
-  const thread = data?.[op]?.thread;
-  if (!thread || thread.id !== id) throw new Error("GitHub did not return the updated discussion.");
-  announce({ repo, number, threads: { on } });
-  return { resolved: thread.isResolved, canResolve: thread.viewerCanResolve, canUnresolve: thread.viewerCanUnresolve };
+  return written({ repo, number, threads: { on } }, async () => {
+    const data = await mutate(
+      {
+        query: `mutation($id:ID!){${op}(input:{threadId:$id}){thread{id isResolved viewerCanResolve viewerCanUnresolve}}}`,
+        variables: { id }
+      },
+      on
+    );
+    const thread = data?.[op]?.thread;
+    if (!thread || thread.id !== id) throw new Error("GitHub did not return the updated discussion.");
+    return {
+      resolved: thread.isResolved,
+      canResolve: thread.viewerCanResolve,
+      canUnresolve: thread.viewerCanUnresolve
+    };
+  });
 }
 async function readPullThreads(repo, number, on, pending = null) {
   const drafts = pending === null ? [] : await api(`repos/${repo}/pulls/${number}/reviews/${pending}/comments?per_page=100`, { on, paginate: true });
   const comments = await api(`repos/${repo}/pulls/${number}/comments?per_page=100`, { on, paginate: true });
-  const [owner, name] = repo.split("/");
+  const [owner = "", name = ""] = repo.split("/");
   const nodes = [];
-  let after = null;
-  for (; ; ) {
-    const data = await graphql(
-      {
-        query: "query($owner:String!,$repo:String!,$number:Int!,$after:String){repository(owner:$owner,name:$repo){pullRequest(number:$number){reviewThreads(first:100,after:$after){nodes{id path diffSide line isOutdated isResolved viewerCanResolve viewerCanUnresolve comments(first:1){nodes{databaseId}}} pageInfo{hasNextPage endCursor}}}}}",
-        variables: { owner: owner ?? "", repo: name ?? "", number, after }
-      },
-      on
-    );
-    const page = data?.repository?.pullRequest?.reviewThreads;
-    if (!page) throw new Error("GitHub did not return the pull request's discussions.");
-    nodes.push(...page.nodes);
-    if (!page.pageInfo.hasNextPage)
-      return parseThreads(
-        nodes,
-        comments,
-        `https://github.com/${repo}/pull/${number}`,
-        drafts
-      );
-    const next = page.pageInfo.endCursor;
-    if (!next || next === after) throw new Error("GitHub did not return the next discussions page.");
-    after = next;
-  }
+  await eachPage(
+    "the pull request's discussions",
+    (after) => ({
+      query: "query($owner:String!,$repo:String!,$number:Int!,$after:String){repository(owner:$owner,name:$repo){pullRequest(number:$number){reviewThreads(first:100,after:$after){nodes{id path diffSide line isOutdated isResolved viewerCanResolve viewerCanUnresolve comments(first:1){nodes{databaseId}}} pageInfo{hasNextPage endCursor}}}}}",
+      variables: { owner, repo: name, number, after }
+    }),
+    (data) => data?.repository?.pullRequest?.reviewThreads,
+    (page) => {
+      nodes.push(...page.nodes);
+      return false;
+    },
+    on
+  );
+  return parseThreads(nodes, comments, pullUrl(repo, number), drafts);
 }
 async function localPulls(remote2, { branches, head }, on) {
   if (branches.length === 0) return [];
@@ -11217,21 +11230,21 @@ var GroupList = class {
     }
   }
   loadGroup(cx, kind, force) {
-    const g = this.groups[kind], r = this.host.ready(), run3 = this.host.run();
+    const g = this.groups[kind], r = this.host.ready(), run4 = this.host.run();
     if (!r || !g.expanded || !this.host.asking()) return;
     g.loading = true;
     g.failure = void 0;
     cx.spawn(async (cx2) => {
       try {
         const page = await this.source.ask(kind, r, force);
-        if (run3 === this.host.run()) g.page = this.source.peek(kind, r) ?? page;
+        if (run4 === this.host.run()) g.page = this.source.peek(kind, r) ?? page;
       } catch (e) {
-        if (run3 === this.host.run()) {
+        if (run4 === this.host.run()) {
           g.failure = failureOf(e);
           this.source.failed?.();
         }
       } finally {
-        if (run3 === this.host.run()) {
+        if (run4 === this.host.run()) {
           g.loading = false;
           cx2.notify();
         }
@@ -11249,18 +11262,18 @@ var GroupList = class {
     cx.notify();
   }
   more(cx, kind) {
-    const g = this.groups[kind], r = this.host.ready(), run3 = this.host.run(), loaded = g.page;
+    const g = this.groups[kind], r = this.host.ready(), run4 = this.host.run(), loaded = g.page;
     if (!r || !loaded?.more || g.loadingMore) return;
     g.loadingMore = true;
     cx.notify();
     cx.spawn(async (cx2) => {
       try {
         const page = await this.source.more(kind, r, loaded);
-        if (run3 === this.host.run()) g.page = page;
+        if (run4 === this.host.run()) g.page = page;
       } catch (e) {
-        if (run3 === this.host.run()) g.failure = failureOf(e);
+        if (run4 === this.host.run()) g.failure = failureOf(e);
       } finally {
-        if (run3 === this.host.run()) {
+        if (run4 === this.host.run()) {
           g.loadingMore = false;
           cx2.notify();
         }
@@ -11649,11 +11662,11 @@ var Panel = class {
   }
   /** Only a changed list re-asks expanded groups; a refresh asks them even on 304. */
   check(cx, refresh) {
-    const r = this.ready(), run3 = this.latest;
+    const r = this.ready(), run4 = this.latest;
     const request = r && this.poll.begin(refresh !== void 0);
     if (!r || !request) return;
     cx.spawn(async (cx2) => {
-      const current = () => run3 === this.latest && this.poll.current(request);
+      const current = () => run4 === this.latest && this.poll.current(request);
       let change;
       try {
         change = await listChanges(`${r.remote.owner}/${r.remote.repo}`, request.etag, r.on);
@@ -11679,7 +11692,7 @@ var Panel = class {
   }
   /** Shows what is known about the focused place at once, then asks for what is stale (all of it unless it only moved). */
   refresh(cx, why) {
-    const where = location(), run3 = ++this.latest, current = () => run3 === this.latest, context = JSON.stringify(where), force = why !== "moved";
+    const where = location(), run4 = ++this.latest, current = () => run4 === this.latest, context = JSON.stringify(where), force = why !== "moved";
     if (context !== this.context) {
       this.issues.hovered = this.pulls.hovered = null;
       this.checkedAt = null;
@@ -11858,15 +11871,9 @@ function projectsQuery(ref, after) {
     variables: { owner, name, number: ref.number, after }
   };
 }
-function projectPage(data, kind) {
+function projectItems(data, kind) {
   const repository = data?.repository;
-  const items = repository?.[FIELD[kind]]?.projectItems;
-  if (!items) throw new Error(`GitHub did not return this ${kind === "pr" ? "pull request" : "issue"}'s Projects.`);
-  return {
-    projects: items.nodes.map((n) => ({ title: n.project.title, url: n.project.url })),
-    more: items.pageInfo.hasNextPage,
-    cursor: items.pageInfo.endCursor
-  };
+  return repository?.[FIELD[kind]]?.projectItems;
 }
 function projectsFailure(message, on) {
   const machine = on ?? "this computer";
@@ -11879,15 +11886,18 @@ function projectsFailure(message, on) {
 // src/github/io/projects.ts
 async function readProjects(ref, on) {
   const projects2 = [];
-  let after = null;
   try {
-    for (; ; ) {
-      const page = projectPage(await graphql(projectsQuery(ref, after), on), ref.kind);
-      projects2.push(...page.projects);
-      if (!page.more) return { ok: true, projects: projects2 };
-      if (!page.cursor || page.cursor === after) throw new Error("GitHub did not return the next Projects page.");
-      after = page.cursor;
-    }
+    await eachPage(
+      `this ${ref.kind === "pr" ? "pull request" : "issue"}'s Projects`,
+      (after) => projectsQuery(ref, after),
+      (data) => projectItems(data, ref.kind),
+      (page) => {
+        projects2.push(...page.nodes.map((n) => ({ title: n.project.title, url: n.project.url })));
+        return false;
+      },
+      on
+    );
+    return { ok: true, projects: projects2 };
   } catch (e) {
     return projectsFailure(e instanceof Error ? e.message : String(e), on);
   }
@@ -12352,10 +12362,14 @@ var PublishedComments = class {
 };
 
 // src/github/io/pull-reviews.ts
+var draft = (c, url) => ({
+  ...parseComment({ id: c.databaseId, body: c.body, created_at: c.createdAt, user: c.author }, url),
+  draft: true
+});
 async function addPullReviewComment(repo, number, target, body, on) {
   const pending = await startPullReview(repo, number, target.commit, on);
-  try {
-    const data = await graphql(
+  return written({ repo, number, threads: { on } }, async () => {
+    const data = await mutate(
       {
         query: "mutation($review:ID!,$path:String!,$side:DiffSide!,$line:Int!,$body:String!){addPullRequestReviewThread(input:{pullRequestReviewId:$review,path:$path,side:$side,line:$line,body:$body}){thread{id path diffSide line isOutdated isResolved viewerCanResolve viewerCanUnresolve comments(first:1){nodes{databaseId body createdAt author{login}}}}}}",
         variables: { review: pending.id, path: target.path, side: target.side, line: target.line, body }
@@ -12365,6 +12379,7 @@ async function addPullReviewComment(repo, number, target, body, on) {
     const node2 = data?.addPullRequestReviewThread?.thread;
     const first = node2?.comments.nodes[0];
     if (!node2?.id || !first) throw new Error("GitHub did not return the draft discussion.");
+    const url = detailUrl({ kind: "pr", repo, number });
     const thread = {
       id: node2.id,
       root: first.databaseId,
@@ -12375,128 +12390,102 @@ async function addPullReviewComment(repo, number, target, body, on) {
       resolved: node2.isResolved,
       canResolve: node2.viewerCanResolve,
       canUnresolve: node2.viewerCanUnresolve,
-      comments: node2.comments.nodes.map((c) => ({
-        ...parseComment(
-          { id: c.databaseId, body: c.body, created_at: c.createdAt, user: c.author },
-          `https://github.com/${repo}/pull/${number}`
-        ),
-        draft: true
-      }))
+      comments: node2.comments.nodes.map((c) => draft(c, url))
     };
-    announce({ repo, number, threads: { on } });
     return { pending, thread };
-  } catch (e) {
-    if (e instanceof GhError && e.transient) announce({ repo, number, threads: { on } });
-    throw e;
-  }
+  });
 }
 async function replyPullReviewThread(repo, number, thread, root, body, on) {
   const state = await readPullReview(repo, number, on);
-  if (!state.pending) return replyPullThread(repo, number, root, body, on);
-  try {
-    const data = await graphql(
+  const pending = state.pending;
+  if (!pending) return replyPullThread(repo, number, root, body, on);
+  return written({ repo, number, threads: { on } }, async () => {
+    const data = await mutate(
       {
         query: "mutation($review:ID!,$thread:ID!,$body:String!){addPullRequestReviewThreadReply(input:{pullRequestReviewId:$review,pullRequestReviewThreadId:$thread,body:$body}){comment{databaseId body createdAt author{login}}}}",
-        variables: { review: state.pending.id, thread, body }
+        variables: { review: pending.id, thread, body }
       },
       on
     );
     const c = data?.addPullRequestReviewThreadReply?.comment;
     if (!c?.databaseId) throw new Error("GitHub did not return the draft reply.");
-    announce({ repo, number, threads: { on } });
-    return {
-      ...parseComment(
-        { id: c.databaseId, body: c.body, created_at: c.createdAt, user: c.author },
-        `https://github.com/${repo}/pull/${number}`
-      ),
-      draft: true
-    };
-  } catch (e) {
-    if (e instanceof GhError && e.transient) announce({ repo, number, threads: { on } });
-    throw e;
-  }
+    return draft(c, detailUrl({ kind: "pr", repo, number }));
+  });
 }
 async function submitPullReview(repo, number, commit, event, body, on) {
   if (event === "REQUEST_CHANGES" && !body.trim()) throw new Error("Request Changes requires a summary.");
-  const state = await readPullReview(repo, number, on);
-  const url = `https://github.com/${repo}/pull/${number}`;
-  try {
-    let item;
-    if (!state.pending && event === "COMMENT") {
-      if (!body.trim()) throw new Error("Write a comment first.");
-      const raw = await api(`repos/${repo}/issues/${number}/comments`, { on, method: "POST", rawFields: { body } });
-      item = { ...parseComment(raw, url), kind: "comment", verb: "commented", discussion: [] };
-    } else {
-      let raw;
-      if (state.pending) {
-        const data = await graphql(
-          {
-            query: "mutation($id:ID!,$event:PullRequestReviewEvent!,$body:String!){submitPullRequestReview(input:{pullRequestReviewId:$id,event:$event,body:$body}){pullRequestReview{id databaseId state body submittedAt author{login}}}}",
-            variables: { id: state.pending.id, event, body }
-          },
-          on
-        );
-        const review = data?.submitPullRequestReview?.pullRequestReview;
-        if (!review?.submittedAt) throw new Error("GitHub did not return the submitted review.");
-        raw = {
-          id: review.databaseId,
-          body: review.body,
-          state: review.state,
-          submitted_at: review.submittedAt,
-          user: review.author
-        };
-      } else {
-        raw = await api(`repos/${repo}/pulls/${number}/reviews`, {
-          on,
-          method: "POST",
-          rawFields: { body, event, commit_id: commit }
-        });
-      }
-      const parsed = pullTimeline([], [], [raw], [], url)[0];
-      if (!parsed) throw new Error("GitHub did not return the submitted review.");
-      item = parsed;
+  const { pending } = await readPullReview(repo, number, on);
+  if (!pending && event === "COMMENT" && !body.trim()) throw new Error("Write a comment first.");
+  const url = detailUrl({ kind: "pr", repo, number });
+  return written({ repo, number, threads: { on }, review: { on } }, async () => {
+    if (!pending && event === "COMMENT") {
+      const raw2 = await api(`repos/${repo}/issues/${number}/comments`, { on, method: "POST", rawFields: { body } });
+      return { ...parseComment(raw2, url), kind: "comment", verb: "commented", discussion: [] };
     }
-    announce({ repo, number, threads: { on }, review: { on } });
-    return item;
-  } catch (e) {
-    if (e instanceof GhError && e.transient) announce({ repo, number, threads: { on }, review: { on } });
-    throw e;
-  }
+    let raw;
+    if (pending) {
+      const data = await mutate(
+        {
+          query: "mutation($id:ID!,$event:PullRequestReviewEvent!,$body:String!){submitPullRequestReview(input:{pullRequestReviewId:$id,event:$event,body:$body}){pullRequestReview{id databaseId state body submittedAt author{login}}}}",
+          variables: { id: pending.id, event, body }
+        },
+        on
+      );
+      const review = data?.submitPullRequestReview?.pullRequestReview;
+      if (!review?.submittedAt) throw new Error("GitHub did not return the submitted review.");
+      raw = {
+        id: review.databaseId,
+        body: review.body,
+        state: review.state,
+        submitted_at: review.submittedAt,
+        user: review.author
+      };
+    } else {
+      raw = await api(`repos/${repo}/pulls/${number}/reviews`, {
+        on,
+        method: "POST",
+        rawFields: { body, event, commit_id: commit }
+      });
+    }
+    const parsed = pullTimeline([], [], [raw], [], url)[0];
+    if (!parsed) throw new Error("GitHub did not return the submitted review.");
+    return parsed;
+  });
 }
 async function readPullReview(repo, number, on) {
-  const [owner, name] = repo.split("/");
-  let after = null;
-  for (; ; ) {
-    const data = await graphql(
-      {
-        query: "query($owner:String!,$repo:String!,$number:Int!,$after:String){repository(owner:$owner,name:$repo){pullRequest(number:$number){id reviews(first:100,states:PENDING,after:$after){nodes{id databaseId viewerDidAuthor body} pageInfo{hasNextPage endCursor}}}}}",
-        variables: { owner, repo: name, number, after }
-      },
-      on
-    );
-    const pull = data?.repository?.pullRequest;
-    if (!pull) throw new Error("GitHub did not return the pull request's pending review.");
-    const pending = pull.reviews.nodes.find((r) => r.viewerDidAuthor);
-    if (pending)
-      return {
-        id: pull.id,
-        pending: {
-          id: pending.id,
-          databaseId: pending.databaseId,
-          ...pending.body === void 0 ? {} : { body: pending.body }
-        }
-      };
-    if (!pull.reviews.pageInfo.hasNextPage) return { id: pull.id, pending: null };
-    const next = pull.reviews.pageInfo.endCursor;
-    if (!next || next === after) throw new Error("GitHub did not return the next reviews page.");
-    after = next;
-  }
+  const [owner = "", name = ""] = repo.split("/");
+  let id = "";
+  let pending = null;
+  await eachPage(
+    "the pull request's pending review",
+    (after) => ({
+      query: "query($owner:String!,$repo:String!,$number:Int!,$after:String){repository(owner:$owner,name:$repo){pullRequest(number:$number){id reviews(first:100,states:PENDING,after:$after){nodes{id databaseId viewerDidAuthor body} pageInfo{hasNextPage endCursor}}}}}",
+      variables: { owner, repo: name, number, after }
+    }),
+    (data) => {
+      const pull = data?.repository?.pullRequest;
+      if (pull) id = pull.id;
+      return pull?.reviews;
+    },
+    (page) => {
+      const mine = page.nodes.find((r) => r.viewerDidAuthor);
+      if (mine)
+        pending = {
+          id: mine.id,
+          databaseId: mine.databaseId,
+          ...mine.body === void 0 ? {} : { body: mine.body }
+        };
+      return Boolean(mine);
+    },
+    on
+  );
+  return { id, pending };
 }
 async function startPullReview(repo, number, commit, on) {
   const state = await readPullReview(repo, number, on);
   if (state.pending) return state.pending;
-  try {
-    const data = await graphql(
+  return written({ repo, number, threads: { on } }, async () => {
+    const data = await mutate(
       {
         query: "mutation($id:ID!,$commit:GitObjectID!){addPullRequestReview(input:{pullRequestId:$id,commitOID:$commit}){pullRequestReview{id databaseId state}}}",
         variables: { id: state.id, commit }
@@ -12505,12 +12494,8 @@ async function startPullReview(repo, number, commit, on) {
     );
     const review = data?.addPullRequestReview?.pullRequestReview;
     if (!review?.id || review.state !== "PENDING") throw new Error("GitHub did not return the pending review.");
-    announce({ repo, number, threads: { on } });
     return { id: review.id, databaseId: review.databaseId };
-  } catch (e) {
-    if (e instanceof GhError && e.transient) announce({ repo, number, threads: { on } });
-    throw e;
-  }
+  });
 }
 
 // src/github/views/review-threads.ts
@@ -12621,7 +12606,7 @@ var ReviewThreads = class {
       const anchor = commentTarget(row, side);
       if (!anchor) continue;
       const key = JSON.stringify([path, side, anchor.line]);
-      const draft = this.drafts.get(key);
+      const draft2 = this.drafts.get(key);
       const busy = this.writing.size > 0;
       gutters[side === "LEFT" ? "left" : "right"] = button(
         `add-inline-${key}`,
@@ -12636,10 +12621,10 @@ var ReviewThreads = class {
           cx.notify();
         }
       ).p(0).text_size(12);
-      if (!draft) continue;
+      if (!draft2) continue;
       const t = colors();
       editors.push(
-        v_flex8().w(width).h(COMPOSER_HEIGHT).p(12).gap(8).bg(t.surface).border_1().border_color(t.border).child(div12().text_size(12).text_color(t.dim).child(`${side} ${anchor.line}`)).child(commentEditor(draft.box, 90)).child(
+        v_flex8().w(width).h(COMPOSER_HEIGHT).p(12).gap(8).bg(t.surface).border_1().border_color(t.border).child(div12().text_size(12).text_color(t.dim).child(`${side} ${anchor.line}`)).child(commentEditor(draft2.box, 90)).child(
           div12().text_size(12).text_color(t.blocked).child(this.failures.get(key) ?? "")
         ).child(
           h_flex9().gap(8).child(
@@ -12670,29 +12655,29 @@ var ReviewThreads = class {
     return { gutters, editors };
   }
   postInline(cx, key, start, commit) {
-    const draft = this.drafts.get(key);
-    if (!draft?.box.value().trim()) return;
-    const body = draft.box.value();
+    const draft2 = this.drafts.get(key);
+    if (!draft2?.box.value().trim()) return;
+    const body = draft2.box.value();
     this.write(cx, key, async () => {
       const state = await readPullReview(this.ref.repo, this.ref.number, this.on);
       this.pending = state.pending;
       if (start || state.pending) {
-        const result = await addPullReviewComment(this.ref.repo, this.ref.number, draft.target, body, this.on);
+        const result = await addPullReviewComment(this.ref.repo, this.ref.number, draft2.target, body, this.on);
         this.pending = result.pending;
         this.localDrafts.set(result.thread.root, result.thread);
         this.threads.push(result.thread);
       } else {
-        const comment = await addPullComment(this.ref.repo, this.ref.number, draft.target, body, this.on);
+        const comment = await addPullComment(this.ref.repo, this.ref.number, draft2.target, body, this.on);
         this.threads.push(
           this.published.add(comment, {
-            path: draft.target.path,
-            side: draft.target.side,
-            line: draft.target.line,
-            outdated: draft.target.commit !== commit
+            path: draft2.target.path,
+            side: draft2.target.side,
+            line: draft2.target.line,
+            outdated: draft2.target.commit !== commit
           })
         );
       }
-      if (draft.box.value() === body) this.drafts.delete(key);
+      if (draft2.box.value() === body) this.drafts.delete(key);
     });
   }
   /** The PR summary and inline drafts share one write lock and one GitHub pending review. */
@@ -12768,7 +12753,7 @@ var ReviewThreads = class {
     const scope = virtual ? "diff" : "timeline";
     const box = this.boxes.get(thread.id);
     const busy = this.writing.size > 0;
-    const url = `https://github.com/${this.ref.repo}/pull/${this.ref.number}#discussion_r${thread.root}`;
+    const url = `${detailUrl(this.ref)}#discussion_r${thread.root}`;
     return v_flex8().flex_none().min_w(0).p(12).gap(8).when(virtual, (el) => el.border_1().border_color(t.border).bg(t.surface)).when(
       virtual,
       (el) => el.child(
@@ -12792,7 +12777,7 @@ var ReviewThreads = class {
             `${scope}-comment-${c.id}`,
             c,
             c.draft ? "Pending" : "commented",
-            (url2, cx) => openLink(cx, this.host, url2, `https://github.com/${this.ref.repo}/pull/${this.ref.number}`),
+            (url2, cx) => openLink(cx, this.host, url2, detailUrl(this.ref)),
             { embedded: true }
           ).when(index2 > 0, (el) => el.border_t(1).border_color(t.border))
         )
@@ -13267,7 +13252,7 @@ var Pull = class {
           deletions: 0,
           patch: null,
           viewed: false,
-          url: this.entry?.pull?.url ?? `https://github.com/${this.ref?.repo}/pull/${this.ref?.number}`
+          url: this.entry?.pull?.url ?? (this.ref ? detailUrl(this.ref) : "")
         };
       return v_flex11().flex_1().min_h(0).child(quiet("This file is no longer in the changed-files list. Its discussions are shown below.")).child(this.diff.render(this.missingFile, this.discussions));
     }
@@ -13341,10 +13326,9 @@ var Pull = class {
       cx.spawn(async (cx2) => {
         try {
           if (remove) {
-            await deletePullBranch(info, place.on);
+            await deletePullBranch(ref.repo, ref.number, info, place.on);
             info.deletable = false;
           } else await mergePull(ref.repo, ref.number, this.method ?? info.methods[0], info.sha, place.on);
-          announce({ repo: ref.repo, number: ref.number, pull: true });
           if (this.ref === ref) {
             this.confirming = false;
             this.writeFailure = "";

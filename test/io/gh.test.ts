@@ -301,7 +301,7 @@ describe('a dropped connection (real gh 2.96 on center: exit 1, `Get "…": EOF`
 			},
 		});
 		expect(
-			await gh.graphql({ query: "mutation { closeIssue }", variables: {} }, null).catch((e: unknown) => e),
+			await gh.mutate({ query: "mutation { closeIssue }", variables: {} }, null).catch((e: unknown) => e),
 		).toBeInstanceOf(gh.GhError);
 		expect(f.asked.count).toBe(1);
 	});

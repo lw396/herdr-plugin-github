@@ -58,23 +58,31 @@ test("thread reads follow GraphQL cursors and do not lose earlier pages", async 
 });
 
 for (const operation of ["reply", "resolve", "unresolve"] as const) {
-	test(`a rejected ${operation} announces nothing and is never retried or sent locally`, async () => {
+	const op = operation === "resolve" ? "resolveReviewThread" : "unresolveReviewThread";
+	const mutation = `mutation($id:ID!){${op}(input:{threadId:$id}){thread{id isResolved viewerCanResolve viewerCanUnresolve}}}`;
+	const cmd =
+		operation === "reply"
+			? `~$ gh api repos/${repo}/pulls/35/comments/4502780899/replies -X POST -f body=hello`
+			: `~$ gh api graphql -f query=${mutation} -f id=${id}`;
+	const write = () =>
+		operation === "reply"
+			? replyPullThread(repo, 35, 4502780899, "hello", "center")
+			: resolvePullThread(repo, 35, id, operation === "resolve", "center");
+
+	test(`a dropped ${operation} may have happened: other views re-read, but it is never retried or sent locally`, async () => {
 		const notices = new Notices();
-		const op = operation === "resolve" ? "resolveReviewThread" : "unresolveReviewThread";
-		const mutation = `mutation($id:ID!){${op}(input:{threadId:$id}){thread{id isResolved viewerCanResolve viewerCanUnresolve}}}`;
-		const cmd =
-			operation === "reply"
-				? `~$ gh api repos/${repo}/pulls/35/comments/4502780899/replies -X POST -f body=hello`
-				: `~$ gh api graphql -f query=${mutation} -f id=${id}`;
 		machine("center", { [cmd]: { code: 1, stderr: 'Post "https://api.github.com/graphql": EOF' } });
-		await expect(
-			operation === "reply"
-				? replyPullThread(repo, 35, 4502780899, "hello", "center")
-				: resolvePullThread(repo, 35, id, operation === "resolve", "center"),
-		).rejects.toThrow("EOF");
-		expect(notices.take()).toEqual([]);
+		await expect(write()).rejects.toThrow("EOF");
+		expect(notices.take()).toEqual([{ repo, number: 35, threads: { on: "center" } }]);
 		expect(execCalls()).toHaveLength(1);
 		expect(execCalls()[0]?.on).toBe("center");
+	});
+
+	test(`a ${operation} GitHub refused announces nothing`, async () => {
+		const notices = new Notices();
+		machine("center", { [cmd]: { code: 1, stderr: "gh: Validation Failed (HTTP 422)" } });
+		await expect(write()).rejects.toThrow("Validation Failed");
+		expect(notices.take()).toEqual([]);
 	});
 }
 

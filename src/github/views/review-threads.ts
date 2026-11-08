@@ -1,7 +1,7 @@
 // Existing published discussions, with per-thread drafts kept through refreshes.
 import { h_flex, Textarea, TextareaState, v_flex } from "gpui-base";
 import { type Context, div, type Element } from "gpui-kit";
-import type { DetailRef } from "../core/detail.ts";
+import { type DetailRef, detailUrl } from "../core/detail.ts";
 import { commentTarget, type DiffLine } from "../core/diff.ts";
 import { PublishedComments } from "../core/published-comments.ts";
 import { mergeDraftThreads, type ReviewThread } from "../core/review-threads.ts";
@@ -379,7 +379,7 @@ export class ReviewThreads {
 		const scope = virtual ? "diff" : "timeline";
 		const box = this.boxes.get(thread.id);
 		const busy = this.writing.size > 0;
-		const url = `https://github.com/${this.ref.repo}/pull/${this.ref.number}#discussion_r${thread.root}`;
+		const url = `${detailUrl(this.ref)}#discussion_r${thread.root}`;
 		return v_flex()
 			.flex_none()
 			.min_w(0)
@@ -428,8 +428,7 @@ export class ReviewThreads {
 								`${scope}-comment-${c.id}`,
 								c,
 								c.draft ? "Pending" : "commented",
-								(url, cx) =>
-									openLink(cx, this.host, url, `https://github.com/${this.ref.repo}/pull/${this.ref.number}`),
+								(url, cx) => openLink(cx, this.host, url, detailUrl(this.ref)),
 								{ embedded: true },
 							).when(index > 0, (el) => el.border_t(1).border_color(t.border)),
 						),

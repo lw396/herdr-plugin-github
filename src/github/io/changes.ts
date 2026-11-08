@@ -3,6 +3,7 @@
 import { setShared, shared } from "herdr";
 import type { Comment } from "../core/discussion.ts";
 import type { IssueChange } from "../core/issues.ts";
+import { GhError } from "./gh.ts";
 
 /** One write to an issue: a new comment, or its new state. */
 export interface Notice {
@@ -33,6 +34,21 @@ const log = (): Log => (shared(CHANGES) as { notices: Log } | null)?.notices ?? 
 export function announce(notice: Notice): void {
 	const id = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
 	setShared(CHANGES, { notices: [...log(), { id, notice }].slice(-KEPT) });
+}
+
+/**
+ * A write, never retried. Unless GitHub refused it, it may have happened even when its reply was lost
+ * or unreadable: every view affected re-reads.
+ */
+export async function written<T>(notice: Notice, write: () => Promise<T>): Promise<T> {
+	try {
+		const result = await write();
+		announce(notice);
+		return result;
+	} catch (e) {
+		if (!(e instanceof GhError) || e.transient) announce(notice);
+		throw e;
+	}
 }
 
 /** What one view has taken: it starts after what was announced before it (a read: safe in init). */

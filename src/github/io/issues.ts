@@ -1,5 +1,6 @@
 // Issues from GitHub, through gh on the folder's or reader tab's machine (ADR 0003).
 
+import { detailUrl } from "../core/detail.ts";
 import { type Comment, parseComment } from "../core/discussion.ts";
 import { type IssueDetail, parseIssueDetail } from "../core/issue-detail.ts";
 import {
@@ -45,7 +46,7 @@ export async function readIssue(repo: string, number: number, on: string | null)
 /** Posts a new comment; resolves with it as the timeline shows it. */
 export async function addComment(repo: string, number: number, body: string, on: string | null): Promise<Comment> {
 	const comment = await api(`repos/${repo}/issues/${number}/comments`, { on, method: "POST", rawFields: { body } });
-	return parseComment(comment, `https://github.com/${repo}/issues/${number}`);
+	return parseComment(comment, detailUrl({ kind: "issue", repo, number }));
 }
 
 /** Closes or reopens the issue; resolves with its new state and row, for the sidebar's groups. */

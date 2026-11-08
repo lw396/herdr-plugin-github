@@ -81,9 +81,7 @@ test("viewed states are read on the PR machine across all pages; changed-since-v
 			{ path: "docs/adr/0006-poll-with-conditional-requests.md", viewerViewedState: "UNVIEWED" },
 		]),
 	});
-	const result = await readPullViewed("lw396/herdr-plugin-github", 35, "center");
-	expect(result.id).toBe("PR_kwDOVkv4288AAAABNfEEsw");
-	expect(result.viewed).toEqual(["docs/pr-fixture.md"]);
+	expect(await readPullViewed("lw396/herdr-plugin-github", 35, "center")).toEqual(["docs/pr-fixture.md"]);
 });
 
 for (const viewed of [true, false]) {

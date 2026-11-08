@@ -28,25 +28,15 @@ export function projectsQuery(ref: DetailRef, after: string | null): Query {
 	};
 }
 
-interface ProjectItems {
+export interface ProjectItems {
 	pageInfo: { hasNextPage: boolean; endCursor: string | null };
 	nodes: { project: Project }[];
 }
 
-/** The reply to projectsQuery. */
-export function projectPage(
-	data: unknown,
-	kind: DetailRef["kind"],
-): { projects: Project[]; more: boolean; cursor: string | null } {
+export function projectItems(data: unknown, kind: DetailRef["kind"]): ProjectItems | undefined {
 	const repository = (data as { repository: Record<string, { projectItems: ProjectItems } | null> | null } | null)
 		?.repository;
-	const items = repository?.[FIELD[kind]]?.projectItems;
-	if (!items) throw new Error(`GitHub did not return this ${kind === "pr" ? "pull request" : "issue"}'s Projects.`);
-	return {
-		projects: items.nodes.map((n) => ({ title: n.project.title, url: n.project.url })),
-		more: items.pageInfo.hasNextPage,
-		cursor: items.pageInfo.endCursor,
-	};
+	return repository?.[FIELD[kind]]?.projectItems;
 }
 
 /** Missing scope is not an empty project list; say what to do on the right machine. */

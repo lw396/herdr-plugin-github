@@ -82,15 +82,45 @@ export async function apiText(path: string, jq: string, { on, ...options }: Rest
 	return (await execute(apiArgs(path, { ...options, jq }), on, reads(options.method))).stdout.trim();
 }
 
-/** `gh api graphql`, parsed; resolves with `data`. */
-export async function graphql<T = unknown>(query: Query, on: string | null): Promise<T> {
-	const read = !/^\s*mutation\b/.test(query.query);
+/** A GraphQL query, parsed; resolves with `data`. Asked again if the connection drops. */
+export const graphql = <T = unknown>(query: Query, on: string | null): Promise<T> => run<T>(query, on, true);
+
+/** A GraphQL mutation: never asked again, as GitHub may already have done it. */
+export const mutate = <T = unknown>(query: Query, on: string | null): Promise<T> => run<T>(query, on, false);
+
+async function run<T>(query: Query, on: string | null, read: boolean): Promise<T> {
 	const out = parseJson((await execute(graphqlArgs(query), on, read)).stdout) as {
 		data?: T;
 		errors?: { message: string }[];
 	} | null;
 	if (out?.errors?.length) throw new GhError(out.errors.map((e) => e.message).join("; "), 1, "");
 	return out?.data as T;
+}
+
+interface Connection {
+	pageInfo: { hasNextPage: boolean; endCursor: string | null };
+}
+
+/**
+ * Every page of one GraphQL connection, in order, until `visit` returns true. `select` finds the
+ * connection in a reply; a missing one, or a cursor that does not move, is GitHub failing to answer.
+ */
+export async function eachPage<C extends Connection>(
+	what: string,
+	query: (after: string | null) => Query,
+	select: (data: unknown) => C | null | undefined,
+	visit: (page: C) => boolean | undefined,
+	on: string | null,
+): Promise<void> {
+	let after: string | null = null;
+	for (;;) {
+		const page = select(await graphql(query(after), on));
+		if (!page) throw new Error(`GitHub did not return ${what}.`);
+		if (visit(page) === true || !page.pageInfo.hasNextPage) return;
+		const next = page.pageInfo.endCursor;
+		if (!next || next === after) throw new Error(`GitHub did not return the next page of ${what}.`);
+		after = next;
+	}
 }
 
 /**

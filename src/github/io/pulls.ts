@@ -1,4 +1,5 @@
 // Pull requests from GitHub, through gh on the folder's or reader tab's machine (ADR 0003).
+import { detailUrl } from "../core/detail.ts";
 import { type Comment, parseComment } from "../core/discussion.ts";
 import { type ChangedFile, parseFiles } from "../core/files.ts";
 import type { MergeInfo, MergeMethod } from "../core/merge.ts";
@@ -14,8 +15,8 @@ import {
 } from "../core/pulls.ts";
 import type { RemoteRepo } from "../core/remote.ts";
 import { parseThreads, type ReviewThread, type ThreadNode } from "../core/review-threads.ts";
-import { announce } from "./changes.ts";
-import { api, GhError, graphql } from "./gh.ts";
+import { written } from "./changes.ts";
+import { api, eachPage, graphql, mutate } from "./gh.ts";
 import type { LocalBranches } from "./git.ts";
 
 /** One page of a group, asked with the gh on `on`, whose account is `login` (for the searches). */
@@ -56,70 +57,80 @@ export async function mergePull(
 	sha: string,
 	on: string | null,
 ): Promise<void> {
-	const result = (await api(`repos/${repo}/pulls/${number}/merge`, {
-		on,
-		method: "PUT",
-		rawFields: { merge_method: method, sha },
-	})) as { merged: boolean; message: string };
-	if (!result.merged) throw new Error(result.message);
-}
-export async function deletePullBranch(info: MergeInfo, on: string | null): Promise<void> {
-	if (!info.deletable || !info.headRepo) throw new Error("This branch cannot be deleted");
-	await api(`repos/${info.headRepo}/git/refs/heads/${info.headRef.split("/").map(encodeURIComponent).join("/")}`, {
-		on,
-		method: "DELETE",
+	await written({ repo, number, pull: true }, async () => {
+		const result = (await api(`repos/${repo}/pulls/${number}/merge`, {
+			on,
+			method: "PUT",
+			rawFields: { merge_method: method, sha },
+		})) as { merged: boolean; message: string };
+		if (!result.merged) throw new Error(result.message);
 	});
+}
+
+export async function deletePullBranch(
+	repo: string,
+	number: number,
+	info: MergeInfo,
+	on: string | null,
+): Promise<void> {
+	if (!info.deletable || !info.headRepo) throw new Error("This branch cannot be deleted");
+	const ref = info.headRef.split("/").map(encodeURIComponent).join("/");
+	await written({ repo, number, pull: true }, () =>
+		api(`repos/${info.headRepo}/git/refs/heads/${ref}`, { on, method: "DELETE" }),
+	);
 }
 
 /** All changed-file pages; GitHub may omit a patch (binary, too large, or a pure rename). */
 export async function readPullFiles(repo: string, number: number, on: string | null): Promise<ChangedFile[]> {
 	const files = parseFiles(await api(`repos/${repo}/pulls/${number}/files?per_page=100`, { on, paginate: true }));
-	const { viewed } = await readPullViewed(repo, number, on);
-	const paths = new Set(viewed);
-	return files.map((file) => ({ ...file, viewed: paths.has(file.path) }));
+	const viewed = new Set(await readPullViewed(repo, number, on));
+	return files.map((file) => ({ ...file, viewed: viewed.has(file.path) }));
 }
+
+interface PullConnection<C> {
+	repository: { pullRequest: C | null } | null;
+}
+type Page<N> = { nodes: N[]; pageInfo: { hasNextPage: boolean; endCursor: string | null } };
 
 /** GitHub invalidates viewed marks after a file changes (DISMISSED, not VIEWED). */
-export async function readPullViewed(
-	repo: string,
-	number: number,
-	on: string | null,
-): Promise<{ id: string; viewed: string[] }> {
-	const [owner, name] = repo.split("/");
+export async function readPullViewed(repo: string, number: number, on: string | null): Promise<string[]> {
+	const [owner = "", name = ""] = repo.split("/");
 	const viewed: string[] = [];
-	let after: string | null = null;
-	let id = "";
-	for (;;) {
-		const data: {
-			repository: {
-				pullRequest: {
-					id: string;
-					files: {
-						nodes: { path: string; viewerViewedState: string }[];
-						pageInfo: { hasNextPage: boolean; endCursor: string | null };
-					};
-				} | null;
-			} | null;
-		} = await graphql(
-			{
-				query:
-					"query($owner:String!,$repo:String!,$number:Int!,$after:String){repository(owner:$owner,name:$repo){pullRequest(number:$number){id files(first:100,after:$after){nodes{path viewerViewedState} pageInfo{hasNextPage endCursor}}}}}",
-				variables: { owner: owner ?? "", repo: name ?? "", number, after },
-			},
-			on,
-		);
-		const pull = data?.repository?.pullRequest;
-		if (!pull) throw new Error("GitHub did not return the pull request's viewed-file states.");
-		id = pull.id;
-		viewed.push(...pull.files.nodes.filter((f) => f.viewerViewedState === "VIEWED").map((f) => f.path));
-		if (!pull.files.pageInfo.hasNextPage) return { id, viewed };
-		const next = pull.files.pageInfo.endCursor;
-		if (!next || next === after) throw new Error("GitHub did not return the next viewed-files page.");
-		after = next;
-	}
+	await eachPage(
+		"the pull request's viewed-file states",
+		(after) => ({
+			query:
+				"query($owner:String!,$repo:String!,$number:Int!,$after:String){repository(owner:$owner,name:$repo){pullRequest(number:$number){id files(first:100,after:$after){nodes{path viewerViewedState} pageInfo{hasNextPage endCursor}}}}}",
+			variables: { owner, repo: name, number, after },
+		}),
+		(data) =>
+			(data as PullConnection<{ files: Page<{ path: string; viewerViewedState: string }> }> | null)?.repository
+				?.pullRequest?.files,
+		(page) => {
+			viewed.push(...page.nodes.filter((f) => f.viewerViewedState === "VIEWED").map((f) => f.path));
+			return false;
+		},
+		on,
+	);
+	return viewed;
 }
 
-/** A write is never retried: a dropped reply may still have marked the file on GitHub. */
+/** The pull request's GraphQL node id, which its mutations name. */
+export async function pullId(repo: string, number: number, on: string | null): Promise<string> {
+	const [owner, name] = repo.split("/");
+	const data = await graphql<PullConnection<{ id: string }>>(
+		{
+			query:
+				"query($owner:String!,$repo:String!,$number:Int!){repository(owner:$owner,name:$repo){pullRequest(number:$number){id}}}",
+			variables: { owner: owner ?? "", repo: name ?? "", number },
+		},
+		on,
+	);
+	const id = data?.repository?.pullRequest?.id;
+	if (!id) throw new Error("GitHub did not return the pull request's ID.");
+	return id;
+}
+
 export async function setPullFileViewed(
 	repo: string,
 	number: number,
@@ -127,32 +138,17 @@ export async function setPullFileViewed(
 	viewed: boolean,
 	on: string | null,
 ): Promise<void> {
-	const [owner, name] = repo.split("/");
-	const data = await graphql<{ repository: { pullRequest: { id: string } | null } | null }>(
-		{
-			query:
-				"query($owner:String!,$repo:String!,$number:Int!){repository(owner:$owner,name:$repo){pullRequest(number:$number){id}}}",
-			variables: { owner, repo: name, number },
-		},
-		on,
-	);
-	const id = data?.repository?.pullRequest?.id;
-	if (!id) throw new Error("GitHub did not return the pull request's ID.");
+	const id = await pullId(repo, number, on);
 	const operation = viewed ? "markFileAsViewed" : "unmarkFileAsViewed";
-	try {
-		await graphql(
+	await written({ repo, number, files: { on } }, () =>
+		mutate(
 			{
 				query: `mutation($id:ID!,$path:String!){${operation}(input:{pullRequestId:$id,path:$path}){pullRequest{id}}}`,
 				variables: { id, path },
 			},
 			on,
-		);
-	} catch (e) {
-		// The write may have reached GitHub: reconcile every view without retrying the mutation.
-		if (e instanceof GhError && e.transient) announce({ repo, number, files: { on } });
-		throw e;
-	}
-	announce({ repo, number, files: { on } });
+		),
+	);
 }
 
 export interface PullCommentTarget {
@@ -162,6 +158,8 @@ export interface PullCommentTarget {
 	line: number;
 }
 
+const pullUrl = (repo: string, number: number): string => detailUrl({ kind: "pr", repo, number });
+
 /** REST publishes a standalone comment, without creating or submitting a pending review. */
 export async function addPullComment(
 	repo: string,
@@ -170,25 +168,17 @@ export async function addPullComment(
 	body: string,
 	on: string | null,
 ): Promise<Comment> {
-	let raw: unknown;
-	try {
-		raw = await api(`repos/${repo}/pulls/${number}/comments`, {
+	return written({ repo, number, threads: { on } }, async () => {
+		const raw = await api(`repos/${repo}/pulls/${number}/comments`, {
 			on,
 			method: "POST",
 			fields: { line: target.line },
 			rawFields: { body, commit_id: target.commit, path: target.path, side: target.side },
 		});
-	} catch (e) {
-		// A dropped reply is ambiguous: reconcile readers, but never retry the POST.
-		if (e instanceof GhError && e.transient) announce({ repo, number, threads: { on } });
-		throw e;
-	}
-	const comment = parseComment(raw, `https://github.com/${repo}/pull/${number}`);
-	announce({ repo, number, threads: { on } });
-	return comment;
+		return parseComment(raw, pullUrl(repo, number));
+	});
 }
 
-/** Replies are published once, never retried after a dropped response. */
 export async function replyPullThread(
 	repo: string,
 	number: number,
@@ -196,14 +186,14 @@ export async function replyPullThread(
 	body: string,
 	on: string | null,
 ): Promise<Comment> {
-	const raw = await api(`repos/${repo}/pulls/${number}/comments/${root}/replies`, {
-		on,
-		method: "POST",
-		rawFields: { body },
+	return written({ repo, number, threads: { on } }, async () => {
+		const raw = await api(`repos/${repo}/pulls/${number}/comments/${root}/replies`, {
+			on,
+			method: "POST",
+			rawFields: { body },
+		});
+		return parseComment(raw, pullUrl(repo, number));
 	});
-	const comment = parseComment(raw, `https://github.com/${repo}/pull/${number}`);
-	announce({ repo, number, threads: { on } });
-	return comment;
 }
 
 /** Resolution permissions come from GitHub, not from whether the viewer authored the PR. */
@@ -215,22 +205,27 @@ export async function resolvePullThread(
 	on: string | null,
 ): Promise<Pick<ReviewThread, "resolved" | "canResolve" | "canUnresolve">> {
 	const op = resolved ? "resolveReviewThread" : "unresolveReviewThread";
-	const data = await graphql<
-		Record<
-			string,
-			{ thread: { id: string; isResolved: boolean; viewerCanResolve: boolean; viewerCanUnresolve: boolean } }
-		>
-	>(
-		{
-			query: `mutation($id:ID!){${op}(input:{threadId:$id}){thread{id isResolved viewerCanResolve viewerCanUnresolve}}}`,
-			variables: { id },
-		},
-		on,
-	);
-	const thread = data?.[op]?.thread;
-	if (!thread || thread.id !== id) throw new Error("GitHub did not return the updated discussion.");
-	announce({ repo, number, threads: { on } });
-	return { resolved: thread.isResolved, canResolve: thread.viewerCanResolve, canUnresolve: thread.viewerCanUnresolve };
+	return written({ repo, number, threads: { on } }, async () => {
+		const data = await mutate<
+			Record<
+				string,
+				{ thread: { id: string; isResolved: boolean; viewerCanResolve: boolean; viewerCanUnresolve: boolean } }
+			>
+		>(
+			{
+				query: `mutation($id:ID!){${op}(input:{threadId:$id}){thread{id isResolved viewerCanResolve viewerCanUnresolve}}}`,
+				variables: { id },
+			},
+			on,
+		);
+		const thread = data?.[op]?.thread;
+		if (!thread || thread.id !== id) throw new Error("GitHub did not return the updated discussion.");
+		return {
+			resolved: thread.isResolved,
+			canResolve: thread.viewerCanResolve,
+			canUnresolve: thread.viewerCanUnresolve,
+		};
+	});
 }
 
 /** Thread metadata is paged separately from REST's complete comment/reaction list. */
@@ -245,38 +240,24 @@ export async function readPullThreads(
 			? []
 			: await api(`repos/${repo}/pulls/${number}/reviews/${pending}/comments?per_page=100`, { on, paginate: true });
 	const comments = await api(`repos/${repo}/pulls/${number}/comments?per_page=100`, { on, paginate: true });
-	const [owner, name] = repo.split("/");
+	const [owner = "", name = ""] = repo.split("/");
 	const nodes: ThreadNode[] = [];
-	let after: string | null = null;
-	for (;;) {
-		const data: {
-			repository: {
-				pullRequest: {
-					reviewThreads: { nodes: ThreadNode[]; pageInfo: { hasNextPage: boolean; endCursor: string | null } };
-				} | null;
-			} | null;
-		} = await graphql(
-			{
-				query:
-					"query($owner:String!,$repo:String!,$number:Int!,$after:String){repository(owner:$owner,name:$repo){pullRequest(number:$number){reviewThreads(first:100,after:$after){nodes{id path diffSide line isOutdated isResolved viewerCanResolve viewerCanUnresolve comments(first:1){nodes{databaseId}}} pageInfo{hasNextPage endCursor}}}}}",
-				variables: { owner: owner ?? "", repo: name ?? "", number, after },
-			},
-			on,
-		);
-		const page = data?.repository?.pullRequest?.reviewThreads;
-		if (!page) throw new Error("GitHub did not return the pull request's discussions.");
-		nodes.push(...page.nodes);
-		if (!page.pageInfo.hasNextPage)
-			return parseThreads(
-				nodes,
-				comments as unknown[],
-				`https://github.com/${repo}/pull/${number}`,
-				drafts as unknown[],
-			);
-		const next = page.pageInfo.endCursor;
-		if (!next || next === after) throw new Error("GitHub did not return the next discussions page.");
-		after = next;
-	}
+	await eachPage(
+		"the pull request's discussions",
+		(after) => ({
+			query:
+				"query($owner:String!,$repo:String!,$number:Int!,$after:String){repository(owner:$owner,name:$repo){pullRequest(number:$number){reviewThreads(first:100,after:$after){nodes{id path diffSide line isOutdated isResolved viewerCanResolve viewerCanUnresolve comments(first:1){nodes{databaseId}}} pageInfo{hasNextPage endCursor}}}}}",
+			variables: { owner, repo: name, number, after },
+		}),
+		(data) =>
+			(data as PullConnection<{ reviewThreads: Page<ThreadNode> }> | null)?.repository?.pullRequest?.reviewThreads,
+		(page) => {
+			nodes.push(...page.nodes);
+			return false;
+		},
+		on,
+	);
+	return parseThreads(nodes, comments as unknown[], pullUrl(repo, number), drafts as unknown[]);
 }
 
 /** The local branches' latest PRs, in one batch. */

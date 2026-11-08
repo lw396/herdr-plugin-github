@@ -24,6 +24,8 @@ test("merge rejection preserves gh error and never retries writes", async () => 
 test("delete targets the fork's remote ref, never a local branch", async () => {
 	machine("remote", { "~$ gh api repos/fork/b/git/refs/heads/feature/topic -X DELETE": { stdout: "" } });
 	await deletePullBranch(
+		"a/b",
+		1,
 		{ methods: [], reason: null, sha: "abc", headRepo: "fork/b", headRef: "feature/topic", deletable: true },
 		"remote",
 	);
