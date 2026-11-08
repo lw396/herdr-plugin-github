@@ -6,6 +6,16 @@ import type { ReviewThread } from "./review-threads.ts";
 export class PublishedComments {
 	private pendingThreads = new Map<number, ReviewThread>();
 	private pendingTimeline = new Map<number, PullTimelineItem>();
+	private activities = new Map<string, PullTimelineItem>();
+
+	/** Keep an acknowledged submission visible while the review and diff endpoints catch up separately. */
+	activity(item: PullTimelineItem, threads: ReviewThread[] = []): void {
+		this.activities.set(`${item.kind}-${item.id}`, item);
+		for (const thread of threads) {
+			this.pendingThreads.set(thread.root, thread);
+			for (const comment of thread.comments) this.pendingTimeline.delete(comment.id);
+		}
+	}
 
 	add(comment: Comment, target: Pick<ReviewThread, "path" | "side" | "line" | "outdated">): ReviewThread {
 		const thread: ReviewThread = {
@@ -34,17 +44,35 @@ export class PublishedComments {
 	/** Each endpoint releases only the writes it has actually observed. */
 	timeline(remote: PullTimelineItem[]): PullTimelineItem[] {
 		for (const item of remote) for (const d of item.discussion) this.pendingTimeline.delete(d.comment.id);
-		return [...remote, ...this.pendingTimeline.values()].sort(
+		const merged = remote.map((item) => {
+			const key = `${item.kind}-${item.id}`;
+			const local = this.activities.get(key);
+			if (!local) return item;
+			const missing = local.discussion.filter((d) => !item.discussion.some((r) => r.comment.id === d.comment.id));
+			if (!missing.length) this.activities.delete(key);
+			return missing.length ? { ...item, discussion: [...item.discussion, ...missing] } : item;
+		});
+		const unseen = [...this.activities.values()].filter(
+			(item) => !remote.some((r) => r.kind === item.kind && r.id === item.id),
+		);
+		return [...merged, ...this.pendingTimeline.values(), ...unseen].sort(
 			(a, b) => a.createdAt.localeCompare(b.createdAt) || a.id - b.id,
 		);
 	}
 
 	threads(remote: ReviewThread[]): ReviewThread[] {
-		const seen = new Set(remote.flatMap((t) => t.comments.map((c) => c.id)));
-		for (const id of seen) this.pendingThreads.delete(id);
+		const seen = new Set(remote.flatMap((t) => t.comments.filter((c) => !c.draft).map((c) => c.id)));
+		for (const [root, thread] of this.pendingThreads) {
+			if (thread.comments.every((c) => seen.has(c.id))) this.pendingThreads.delete(root);
+		}
 		const result = remote.map((thread) => {
 			const local = this.pendingThreads.get(thread.root);
-			return local ? { ...thread, comments: [...local.comments, ...thread.comments] } : thread;
+			return local
+				? {
+						...thread,
+						comments: [...local.comments, ...thread.comments.filter((c) => !local.comments.some((l) => l.id === c.id))],
+					}
+				: thread;
 		});
 		for (const local of this.pendingThreads.values())
 			if (!remote.some((t) => t.root === local.root)) result.push(local);

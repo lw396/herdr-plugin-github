@@ -27,8 +27,18 @@ export interface ThreadNode {
 }
 
 /** REST supplies all replies and reactions; GraphQL supplies the thread identity and resolution permissions. */
-export function parseThreads(nodes: ThreadNode[], comments: unknown[], url: string): ReviewThread[] {
-	const all = comments as { id: number; in_reply_to_id?: number }[];
+export function parseThreads(
+	nodes: ThreadNode[],
+	comments: unknown[],
+	url: string,
+	drafts: unknown[] = [],
+): ReviewThread[] {
+	const pending = drafts as { id: number; in_reply_to_id?: number }[];
+	const draftIds = new Set(pending.map((c) => c.id));
+	const all = [
+		...(comments as { id: number; in_reply_to_id?: number }[]).filter((c) => !draftIds.has(c.id)),
+		...pending,
+	];
 	return nodes.map((n) => {
 		const root = n.comments.nodes[0]?.databaseId;
 		if (!root) throw new Error("GitHub did not return the discussion's first comment.");
@@ -45,9 +55,25 @@ export function parseThreads(nodes: ThreadNode[], comments: unknown[], url: stri
 			comments: parseComments(
 				all.filter((c) => c.id === root || c.in_reply_to_id === root),
 				url,
-			),
+			).map((c) => (draftIds.has(c.id) ? { ...c, draft: true } : c)),
 		};
 	});
+}
+
+/** Acknowledged draft replies can arrive before the comments endpoint catches up. */
+export function mergeDraftThreads(remote: ReviewThread[], drafts: ReviewThread[]): ReviewThread[] {
+	const result = [...remote];
+	for (const draft of drafts) {
+		const index = result.findIndex((t) => t.root === draft.root);
+		const thread = result[index];
+		if (!thread) result.push(draft);
+		else
+			result[index] = {
+				...thread,
+				comments: [...thread.comments, ...draft.comments.filter((c) => !thread.comments.some((r) => r.id === c.id))],
+			};
+	}
+	return result;
 }
 
 /** A context row has two valid anchors, even though its new-comment target defaults to RIGHT. */

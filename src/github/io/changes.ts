@@ -14,6 +14,8 @@ export interface Notice {
 	files?: { on: string | null };
 	/** Re-read discussions through the same machine/account, without sharing private review data. */
 	threads?: { on: string | null };
+	/** A submitted review can move a PR out of Waiting For My Review. */
+	review?: { on: string | null };
 }
 
 /**

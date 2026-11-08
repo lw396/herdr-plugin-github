@@ -220,7 +220,16 @@ export async function resolvePullThread(
 }
 
 /** Thread metadata is paged separately from REST's complete comment/reaction list. */
-export async function readPullThreads(repo: string, number: number, on: string | null): Promise<ReviewThread[]> {
+export async function readPullThreads(
+	repo: string,
+	number: number,
+	on: string | null,
+	pending: number | null = null,
+): Promise<ReviewThread[]> {
+	const drafts =
+		pending === null
+			? []
+			: await api(`repos/${repo}/pulls/${number}/reviews/${pending}/comments?per_page=100`, { on, paginate: true });
 	const comments = await api(`repos/${repo}/pulls/${number}/comments?per_page=100`, { on, paginate: true });
 	const [owner, name] = repo.split("/");
 	const nodes: ThreadNode[] = [];
@@ -244,7 +253,12 @@ export async function readPullThreads(repo: string, number: number, on: string |
 		if (!page) throw new Error("GitHub did not return the pull request's discussions.");
 		nodes.push(...page.nodes);
 		if (!page.pageInfo.hasNextPage)
-			return parseThreads(nodes, comments as unknown[], `https://github.com/${repo}/pull/${number}`);
+			return parseThreads(
+				nodes,
+				comments as unknown[],
+				`https://github.com/${repo}/pull/${number}`,
+				drafts as unknown[],
+			);
 		const next = page.pageInfo.endCursor;
 		if (!next || next === after) throw new Error("GitHub did not return the next discussions page.");
 		after = next;

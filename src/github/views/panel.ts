@@ -165,7 +165,23 @@ export class Panel implements Role {
 	 * then the shown expanded groups ask GitHub again (the change made them stale).
 	 */
 	private receive(cx: Context): void {
-		const changes = this.notices.take().flatMap((n) => (n.state ? [n.state] : []));
+		const notices = this.notices.take();
+		const reviews = notices.filter((n) => n.review);
+		for (const notice of reviews) known.pullReviewed(notice.repo, notice.review!.on);
+		const ready = this.ready();
+		if (
+			ready &&
+			this.isVisible() &&
+			this.tab === "prs" &&
+			reviews.some(
+				(n) =>
+					n.review?.on === ready.on &&
+					n.repo.toLowerCase() === `${ready.remote.owner}/${ready.remote.repo}`.toLowerCase(),
+			)
+		) {
+			this.pulls.load(cx, true);
+		}
+		const changes = notices.flatMap((n) => (n.state ? [n.state] : []));
 		if (changes.length === 0) return;
 		changes.forEach(known.issueChanged);
 		this.issues.show();

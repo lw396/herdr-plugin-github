@@ -4,16 +4,18 @@ import { type Context, div, type Element } from "gpui-kit";
 import type { DetailRef } from "../core/detail.ts";
 import { commentTarget, type DiffLine } from "../core/diff.ts";
 import { PublishedComments } from "../core/published-comments.ts";
-import type { ReviewThread } from "../core/review-threads.ts";
+import { mergeDraftThreads, type ReviewThread } from "../core/review-threads.ts";
 import { Notices } from "../io/changes.ts";
 import { failureOf } from "../io/gh.ts";
 import {
-	addPullComment,
-	type PullCommentTarget,
-	readPullThreads,
-	replyPullThread,
-	resolvePullThread,
-} from "../io/pulls.ts";
+	addPullReviewComment,
+	type PendingReview,
+	type ReviewEvent,
+	readPullReview,
+	replyPullReviewThread,
+	submitPullReview,
+} from "../io/pull-reviews.ts";
+import { addPullComment, type PullCommentTarget, readPullThreads, resolvePullThread } from "../io/pulls.ts";
 import { type DetailHost, openLink, postCard } from "./detail.ts";
 import { diffSnippet } from "./diff-lines.ts";
 import { button, colors, link, stop } from "./ui.ts";
@@ -43,6 +45,10 @@ export class ReviewThreads {
 	loading = false;
 	failure: string | null = null;
 	private latest = 0;
+	private pending: PendingReview | null = null;
+	private ready = false;
+	private localDrafts = new Map<number, ReviewThread>();
+	private summaryBox: TextareaState | null = null;
 	private notices = new Notices();
 	private writing = new Set<string>();
 	private failures = new Map<string, string>();
@@ -69,8 +75,21 @@ export class ReviewThreads {
 		this.failure = null;
 		cx.spawn(async (cx) => {
 			try {
-				const threads = await readPullThreads(this.ref.repo, this.ref.number, this.on);
-				if (request === this.latest) this.threads = this.published.threads(threads);
+				const state = await readPullReview(this.ref.repo, this.ref.number, this.on);
+				const threads = await readPullThreads(
+					this.ref.repo,
+					this.ref.number,
+					this.on,
+					state.pending?.databaseId ?? null,
+				);
+				if (request === this.latest) {
+					this.pending = state.pending;
+					this.ready = true;
+					if (!state.pending) this.localDrafts.clear();
+					const seen = new Set(threads.flatMap((t) => t.comments.map((c) => c.id)));
+					for (const id of seen) this.localDrafts.delete(id);
+					this.threads = this.published.threads(mergeDraftThreads(threads, [...this.localDrafts.values()]));
+				}
 			} catch (e) {
 				if (request === this.latest) this.failure = failureOf(e).message;
 			} finally {
@@ -159,21 +178,15 @@ export class ReviewThreads {
 							.gap(8)
 							.child(
 								button(`post-inline-${key}`, busy ? "Saving…" : "Add Comment", "Add Comment", (_e, cx) => {
-									if (this.drafts.get(key) !== draft || !draft.box.value().trim()) return;
-									const body = draft.box.value();
-									this.write(cx, key, async () => {
-										const comment = await addPullComment(this.ref.repo, this.ref.number, draft.target, body, this.on);
-										this.threads.push(
-											this.published.add(comment, {
-												path,
-												side,
-												line: anchor.line,
-												outdated: draft.target.commit !== commit,
-											}),
-										);
-										if (draft.box.value() === body) this.drafts.delete(key);
-									});
+									this.postInline(cx, key, false, commit);
 								}),
+							)
+							.when(!this.pending, (el) =>
+								el.child(
+									button(`start-review-${key}`, "Start Review", "Start Review", (_e, cx) =>
+										this.postInline(cx, key, true, commit),
+									),
+								),
 							)
 							.child(
 								button(`cancel-inline-${key}`, "Cancel", "Cancel", (_e, cx) => {
@@ -187,6 +200,109 @@ export class ReviewThreads {
 			);
 		}
 		return { gutters, editors };
+	}
+
+	private postInline(cx: Context, key: string, start: boolean, commit: string): void {
+		const draft = this.drafts.get(key);
+		if (!this.ready || !draft?.box.value().trim()) return;
+		const body = draft.box.value();
+		this.write(cx, key, async () => {
+			// A review may have been started in the browser since the last render.
+			const state = await readPullReview(this.ref.repo, this.ref.number, this.on);
+			this.pending = state.pending;
+			if (start || state.pending) {
+				const result = await addPullReviewComment(this.ref.repo, this.ref.number, draft.target, body, this.on);
+				this.pending = result.pending;
+				this.localDrafts.set(result.thread.root, result.thread);
+				this.threads.push(result.thread);
+			} else {
+				const comment = await addPullComment(this.ref.repo, this.ref.number, draft.target, body, this.on);
+				this.threads.push(
+					this.published.add(comment, {
+						path: draft.target.path,
+						side: draft.target.side,
+						line: draft.target.line,
+						outdated: draft.target.commit !== commit,
+					}),
+				);
+			}
+			if (draft.box.value() === body) this.drafts.delete(key);
+		});
+	}
+
+	/** The PR summary and inline drafts share one write lock and one GitHub pending review. */
+	summary(commit: string): Element {
+		if (!this.summaryBox) {
+			this.summaryBox = TextareaState.new({ placeholder: "Leave a comment" });
+			this.summaryBox.on("change", (_e, cx) => cx.notify());
+		}
+		const box = this.summaryBox;
+		const busy = this.writing.size > 0;
+		return v_flex()
+			.gap(8)
+			.child(
+				div()
+					.font_semibold()
+					.child(this.pending ? "Pending review" : "Review"),
+			)
+			.child(commentEditor(box, 120))
+			.child(
+				div()
+					.text_size(12)
+					.text_color(colors().blocked)
+					.child(this.failures.get("summary") ?? ""),
+			)
+			.child(
+				h_flex()
+					.gap(8)
+					.children(
+						(
+							[
+								["COMMENT", "Comment"],
+								["APPROVE", "Approve"],
+								["REQUEST_CHANGES", "Request Changes"],
+							] as const
+						).map(([event, label]) =>
+							button(`submit-review-${event}`, busy ? "Saving…" : label, label, (_e, cx) => {
+								if (
+									!this.ready ||
+									busy ||
+									(event === "REQUEST_CHANGES" && !box.value().trim()) ||
+									(event === "COMMENT" && !this.pending && !box.value().trim())
+								)
+									return;
+								this.submit(cx, commit, event, box);
+							}).opacity(!this.ready || busy ? 0.5 : 1),
+						),
+					),
+			);
+	}
+
+	private submit(cx: Context, commit: string, event: ReviewEvent, box: TextareaState): void {
+		const body = box.value();
+		this.write(cx, "summary", async () => {
+			const item = await submitPullReview(this.ref.repo, this.ref.number, commit, event, body, this.on);
+			const submitted = this.threads
+				.filter((t) => t.comments.some((c) => c.draft))
+				.map((t) => ({
+					...t,
+					comments: t.comments.map((c) => {
+						const { draft: _draft, ...published } = c;
+						return published;
+					}),
+				}));
+			const newRoots = new Set(
+				this.threads.filter((t) => t.comments.some((c) => c.id === t.root && c.draft)).map((t) => t.root),
+			);
+			item.discussion = submitted
+				.filter((t) => newRoots.has(t.root))
+				.flatMap((t) => t.comments.map((c) => ({ root: t.root, comment: c, path: t.path, snippet: "" })));
+			this.published.activity(item, submitted);
+			this.threads = this.threads.map((t) => submitted.find((s) => s.id === t.id) ?? t);
+			this.pending = null;
+			this.localDrafts.clear();
+			if (box.value() === body) box.set_value("");
+		});
 	}
 
 	/** Built during render, NOT in the virtual list's deferred row callback. */
@@ -295,7 +411,7 @@ export class ReviewThreads {
 							postCard(
 								`${scope}-comment-${c.id}`,
 								c,
-								"commented",
+								c.draft ? "Pending" : "commented",
 								(url, cx) =>
 									openLink(cx, this.host, url, `https://github.com/${this.ref.repo}/pull/${this.ref.number}`),
 								{ embedded: true },
@@ -336,7 +452,15 @@ export class ReviewThreads {
 								const body = box.value();
 								if (!body.trim()) return;
 								this.write(cx, thread.id, async () => {
-									const comment = await replyPullThread(this.ref.repo, this.ref.number, thread.root, body, this.on);
+									const comment = await replyPullReviewThread(
+										this.ref.repo,
+										this.ref.number,
+										thread.id,
+										thread.root,
+										body,
+										this.on,
+									);
+									if (comment.draft) this.localDrafts.set(comment.id, { ...thread, comments: [comment] });
 									if (!thread.comments.some((c) => c.id === comment.id)) thread.comments.push(comment);
 									if (box.value() === body) box.set_value("");
 								});
@@ -364,7 +488,7 @@ export class ReviewThreads {
 	}
 
 	private write(cx: Context, key: string, act: () => Promise<unknown>): void {
-		if (this.writing.has(key)) return;
+		if (this.writing.size) return;
 		this.latest++; // An older read must not overwrite a successful write.
 		this.loading = false;
 		this.writing.add(key);

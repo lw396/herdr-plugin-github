@@ -5,6 +5,7 @@ import { execCalls, machine, reset } from "../fake-herdr.ts";
 import inline from "../fixtures/pull-plugin-35-inline.json";
 import reply from "../fixtures/pull-plugin-35-reply.json";
 import resolved from "../fixtures/pull-plugin-35-resolve.json";
+import drafts from "../fixtures/pull-plugin-35-review-comments.json";
 import threads from "../fixtures/pull-plugin-35-threads.json";
 import unresolved from "../fixtures/pull-plugin-35-unresolve.json";
 
@@ -83,6 +84,22 @@ test("thread permission errors are not silently treated as no discussions", asyn
 		[`~$ gh api repos/${repo}/pulls/35/comments?per_page=100 --paginate --slurp`]: { stdout: JSON.stringify(inline) },
 	});
 	await expect(readPullThreads(repo, 35, "center")).rejects.toThrow("Resource not accessible");
+});
+
+test("a resumed pending review reads its private comments through the PR machine", async () => {
+	const metadata = JSON.parse(JSON.stringify(threads));
+	metadata.data.repository.pullRequest.reviewThreads.nodes[0].comments.nodes[0].databaseId = 4504980203;
+	machine("center", {
+		[command]: { stdout: JSON.stringify(metadata) },
+		[`~$ gh api repos/${repo}/pulls/35/comments?per_page=100 --paginate --slurp`]: { stdout: "[[]]" },
+		[`~$ gh api repos/${repo}/pulls/35/reviews/5816560818/comments?per_page=100 --paginate --slurp`]: {
+			stdout: JSON.stringify(drafts),
+		},
+	});
+	expect((await readPullThreads(repo, 35, "center", 5816560818))[0]?.comments).toMatchObject([
+		{ id: 4504980203, draft: true, author: "lw396" },
+	]);
+	expect(execCalls().every((c) => c.on === "center")).toBe(true);
 });
 
 const command = `~$ gh api graphql -F number=35 -F after=null -f query=${query} -f owner=lw396 -f repo=herdr-plugin-github`;

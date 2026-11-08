@@ -280,6 +280,7 @@ export class Pull {
 								: quiet(`${c.name} · ${c.status} · ${c.duration}`),
 						),
 					),
+				...(this.discussions ? [this.discussions.summary(pull.headSha)] : []),
 			],
 			[
 				["Reviewers", this.reviewers(pull)],

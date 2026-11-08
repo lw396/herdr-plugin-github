@@ -34,6 +34,28 @@ const ASSIGNED = `~$ gh api graphql -F after=null -f query=${groupQuery("assigne
 const OPEN_CLI = `~$ gh api graphql -F after=null -f query=${groupQuery("open")} -f owner=cli -f name=cli`;
 const OPEN_CLI_2 = `~$ gh api graphql -f query=${groupQuery("open")} -f owner=cli -f name=cli -f after=Y3Vyc29yOnYyOpK0MjAyNi0xMS0wMlQxNzowMDozMVrPAAAAAW3jAo8=`;
 
+test("a submitted review invalidates PR lists only for that repository machine, without fetching hidden groups", async () => {
+	const remote = { remote: "origin", host: "github.com", owner: "lw396", repo: "herdr-plugin-github" };
+	const command = `~$ gh api graphql -F after=null -f query=${ALL_OPEN_QUERY} -f owner=lw396 -f name=herdr-plugin-github`;
+	for (const on of [null, "center"]) machine(on, { [command]: { stdout: fixture("pulls-all-plugin.json") } });
+	await known.pullGroup("all", at(remote, "lw396", "center"));
+	await known.pullGroup("all", at(remote, "lw396", null));
+	known.pullReviewed("lw396/herdr-plugin-github", "center");
+	expect(execCalls()).toHaveLength(2);
+	machine("center", {
+		[command]: {
+			stdout: JSON.stringify({
+				data: {
+					repository: { pullRequests: { totalCount: 0, nodes: [], pageInfo: { hasNextPage: false, endCursor: null } } },
+				},
+			}),
+		},
+	});
+	expect((await known.pullGroup("all", at(remote, "lw396", "center"))).rows).toEqual([]);
+	expect((await known.pullGroup("all", at(remote, "lw396", null))).rows.length).toBeGreaterThan(0);
+	expect(execCalls()).toHaveLength(3);
+});
+
 describe("account", () => {
 	test("asked once per machine, then kept", async () => {
 		machine("center", { [LOGIN]: { stdout: "lw396\n" } });

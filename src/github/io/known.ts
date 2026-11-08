@@ -166,6 +166,19 @@ async function localGroup(r: Ready, force: boolean): Promise<PullGroup> {
 	return localShown.get(rows) ?? showLocal(rows, PAGE);
 }
 
+/** Submission invalidates search membership without fetching hidden or folded groups. */
+export function pullReviewed(repo: string, on: string | null): void {
+	const matches = (key: string) => {
+		const parts = JSON.parse(key) as unknown[];
+		return parts[1] === on && groupOf(key).repo === `github.com/${repo}`.toLowerCase();
+	};
+	pullGroups.kept.patch((key, group) => (matches(key) ? group : undefined));
+	// Local branch snapshots can stay identical while their review metadata changes.
+	localMatches.patch((key, value) =>
+		matches((JSON.parse(key) as string[])[0] ?? "") ? { ...value, signature: "" } : undefined,
+	);
+}
+
 /** A PR group's first page, and any pages Load more added. */
 export const pullGroup = (kind: PullCategory, r: Ready, force = false): Promise<PullGroup> =>
 	kind === "local" ? localGroup(r, force) : pullGroups.look(kind, r, force);

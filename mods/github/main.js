@@ -10497,8 +10497,13 @@ function parseChecks(pages, statuses) {
 }
 
 // src/github/core/review-threads.ts
-function parseThreads(nodes, comments, url) {
-  const all2 = comments;
+function parseThreads(nodes, comments, url, drafts = []) {
+  const pending = drafts;
+  const draftIds = new Set(pending.map((c) => c.id));
+  const all2 = [
+    ...comments.filter((c) => !draftIds.has(c.id)),
+    ...pending
+  ];
   return nodes.map((n) => {
     const root = n.comments.nodes[0]?.databaseId;
     if (!root) throw new Error("GitHub did not return the discussion's first comment.");
@@ -10515,9 +10520,23 @@ function parseThreads(nodes, comments, url) {
       comments: parseComments(
         all2.filter((c) => c.id === root || c.in_reply_to_id === root),
         url
-      )
+      ).map((c) => draftIds.has(c.id) ? { ...c, draft: true } : c)
     };
   });
+}
+function mergeDraftThreads(remote2, drafts) {
+  const result = [...remote2];
+  for (const draft of drafts) {
+    const index2 = result.findIndex((t) => t.root === draft.root);
+    const thread = result[index2];
+    if (!thread) result.push(draft);
+    else
+      result[index2] = {
+        ...thread,
+        comments: [...thread.comments, ...draft.comments.filter((c) => !thread.comments.some((r) => r.id === c.id))]
+      };
+  }
+  return result;
 }
 function threadRow(rows, thread) {
   if (thread.outdated || thread.line === null) return null;
@@ -10651,7 +10670,8 @@ async function resolvePullThread(repo, number, id, resolved, on) {
   announce({ repo, number, threads: { on } });
   return { resolved: thread.isResolved, canResolve: thread.viewerCanResolve, canUnresolve: thread.viewerCanUnresolve };
 }
-async function readPullThreads(repo, number, on) {
+async function readPullThreads(repo, number, on, pending = null) {
+  const drafts = pending === null ? [] : await api(`repos/${repo}/pulls/${number}/reviews/${pending}/comments?per_page=100`, { on, paginate: true });
   const comments = await api(`repos/${repo}/pulls/${number}/comments?per_page=100`, { on, paginate: true });
   const [owner, name] = repo.split("/");
   const nodes = [];
@@ -10668,7 +10688,12 @@ async function readPullThreads(repo, number, on) {
     if (!page) throw new Error("GitHub did not return the pull request's discussions.");
     nodes.push(...page.nodes);
     if (!page.pageInfo.hasNextPage)
-      return parseThreads(nodes, comments, `https://github.com/${repo}/pull/${number}`);
+      return parseThreads(
+        nodes,
+        comments,
+        `https://github.com/${repo}/pull/${number}`,
+        drafts
+      );
     const next = page.pageInfo.endCursor;
     if (!next || next === after) throw new Error("GitHub did not return the next discussions page.");
     after = next;
@@ -10777,6 +10802,16 @@ async function localGroup(r, force) {
     return { signature, rows: await localPulls(r.remote, snapshot, r.on) };
   });
   return localShown.get(rows) ?? showLocal(rows, PAGE);
+}
+function pullReviewed(repo, on) {
+  const matches = (key) => {
+    const parts = JSON.parse(key);
+    return parts[1] === on && groupOf(key).repo === `github.com/${repo}`.toLowerCase();
+  };
+  pullGroups.kept.patch((key, group) => matches(key) ? group : void 0);
+  localMatches.patch(
+    (key, value) => matches(JSON.parse(key)[0] ?? "") ? { ...value, signature: "" } : void 0
+  );
 }
 var pullGroup = (kind, r, force = false) => kind === "local" ? localGroup(r, force) : pullGroups.look(kind, r, force);
 function peekPullGroup(kind, r) {
@@ -11631,7 +11666,16 @@ var Panel = class {
    * then the shown expanded groups ask GitHub again (the change made them stale).
    */
   receive(cx) {
-    const changes2 = this.notices.take().flatMap((n) => n.state ? [n.state] : []);
+    const notices = this.notices.take();
+    const reviews = notices.filter((n) => n.review);
+    for (const notice of reviews) pullReviewed(notice.repo, notice.review.on);
+    const ready = this.ready();
+    if (ready && this.isVisible() && this.tab === "prs" && reviews.some(
+      (n) => n.review?.on === ready.on && n.repo.toLowerCase() === `${ready.remote.owner}/${ready.remote.repo}`.toLowerCase()
+    )) {
+      this.pulls.load(cx, true);
+    }
+    const changes2 = notices.flatMap((n) => n.state ? [n.state] : []);
     if (changes2.length === 0) return;
     changes2.forEach(issueChanged);
     this.issues.show();
@@ -12155,6 +12199,15 @@ import { div as div12 } from "gpui-kit";
 var PublishedComments = class {
   pendingThreads = /* @__PURE__ */ new Map();
   pendingTimeline = /* @__PURE__ */ new Map();
+  activities = /* @__PURE__ */ new Map();
+  /** Keep an acknowledged submission visible while the review and diff endpoints catch up separately. */
+  activity(item, threads = []) {
+    this.activities.set(`${item.kind}-${item.id}`, item);
+    for (const thread of threads) {
+      this.pendingThreads.set(thread.root, thread);
+      for (const comment of thread.comments) this.pendingTimeline.delete(comment.id);
+    }
+  }
   add(comment, target) {
     const thread = {
       ...target,
@@ -12181,22 +12234,192 @@ var PublishedComments = class {
   /** Each endpoint releases only the writes it has actually observed. */
   timeline(remote2) {
     for (const item of remote2) for (const d of item.discussion) this.pendingTimeline.delete(d.comment.id);
-    return [...remote2, ...this.pendingTimeline.values()].sort(
+    const merged = remote2.map((item) => {
+      const key = `${item.kind}-${item.id}`;
+      const local = this.activities.get(key);
+      if (!local) return item;
+      const missing = local.discussion.filter((d) => !item.discussion.some((r) => r.comment.id === d.comment.id));
+      if (!missing.length) this.activities.delete(key);
+      return missing.length ? { ...item, discussion: [...item.discussion, ...missing] } : item;
+    });
+    const unseen = [...this.activities.values()].filter(
+      (item) => !remote2.some((r) => r.kind === item.kind && r.id === item.id)
+    );
+    return [...merged, ...this.pendingTimeline.values(), ...unseen].sort(
       (a, b) => a.createdAt.localeCompare(b.createdAt) || a.id - b.id
     );
   }
   threads(remote2) {
-    const seen = new Set(remote2.flatMap((t) => t.comments.map((c) => c.id)));
-    for (const id of seen) this.pendingThreads.delete(id);
+    const seen = new Set(remote2.flatMap((t) => t.comments.filter((c) => !c.draft).map((c) => c.id)));
+    for (const [root, thread] of this.pendingThreads) {
+      if (thread.comments.every((c) => seen.has(c.id))) this.pendingThreads.delete(root);
+    }
     const result = remote2.map((thread) => {
       const local = this.pendingThreads.get(thread.root);
-      return local ? { ...thread, comments: [...local.comments, ...thread.comments] } : thread;
+      return local ? {
+        ...thread,
+        comments: [...local.comments, ...thread.comments.filter((c) => !local.comments.some((l) => l.id === c.id))]
+      } : thread;
     });
     for (const local of this.pendingThreads.values())
       if (!remote2.some((t) => t.root === local.root)) result.push(local);
     return result;
   }
 };
+
+// src/github/io/pull-reviews.ts
+async function addPullReviewComment(repo, number, target, body, on) {
+  const pending = await startPullReview(repo, number, target.commit, on);
+  try {
+    const data = await graphql(
+      {
+        query: "mutation($review:ID!,$path:String!,$side:DiffSide!,$line:Int!,$body:String!){addPullRequestReviewThread(input:{pullRequestReviewId:$review,path:$path,side:$side,line:$line,body:$body}){thread{id path diffSide line isOutdated isResolved viewerCanResolve viewerCanUnresolve comments(first:1){nodes{databaseId body createdAt author{login}}}}}}",
+        variables: { review: pending.id, path: target.path, side: target.side, line: target.line, body }
+      },
+      on
+    );
+    const node2 = data?.addPullRequestReviewThread?.thread;
+    const first = node2?.comments.nodes[0];
+    if (!node2?.id || !first) throw new Error("GitHub did not return the draft discussion.");
+    const thread = {
+      id: node2.id,
+      root: first.databaseId,
+      path: node2.path,
+      side: node2.diffSide,
+      line: node2.line,
+      outdated: node2.isOutdated,
+      resolved: node2.isResolved,
+      canResolve: node2.viewerCanResolve,
+      canUnresolve: node2.viewerCanUnresolve,
+      comments: node2.comments.nodes.map((c) => ({
+        ...parseComment(
+          { id: c.databaseId, body: c.body, created_at: c.createdAt, user: c.author },
+          `https://github.com/${repo}/pull/${number}`
+        ),
+        draft: true
+      }))
+    };
+    announce({ repo, number, threads: { on } });
+    return { pending, thread };
+  } catch (e) {
+    if (e instanceof GhError && e.transient) announce({ repo, number, threads: { on } });
+    throw e;
+  }
+}
+async function replyPullReviewThread(repo, number, thread, root, body, on) {
+  const state = await readPullReview(repo, number, on);
+  if (!state.pending) return replyPullThread(repo, number, root, body, on);
+  try {
+    const data = await graphql(
+      {
+        query: "mutation($review:ID!,$thread:ID!,$body:String!){addPullRequestReviewThreadReply(input:{pullRequestReviewId:$review,pullRequestReviewThreadId:$thread,body:$body}){comment{databaseId body createdAt author{login}}}}",
+        variables: { review: state.pending.id, thread, body }
+      },
+      on
+    );
+    const c = data?.addPullRequestReviewThreadReply?.comment;
+    if (!c?.databaseId) throw new Error("GitHub did not return the draft reply.");
+    announce({ repo, number, threads: { on } });
+    return {
+      ...parseComment(
+        { id: c.databaseId, body: c.body, created_at: c.createdAt, user: c.author },
+        `https://github.com/${repo}/pull/${number}`
+      ),
+      draft: true
+    };
+  } catch (e) {
+    if (e instanceof GhError && e.transient) announce({ repo, number, threads: { on } });
+    throw e;
+  }
+}
+async function submitPullReview(repo, number, commit, event, body, on) {
+  if (event === "REQUEST_CHANGES" && !body.trim()) throw new Error("Request Changes requires a summary.");
+  const state = await readPullReview(repo, number, on);
+  const url = `https://github.com/${repo}/pull/${number}`;
+  try {
+    let item;
+    if (!state.pending && event === "COMMENT") {
+      if (!body.trim()) throw new Error("Write a comment first.");
+      const raw = await api(`repos/${repo}/issues/${number}/comments`, { on, method: "POST", rawFields: { body } });
+      item = { ...parseComment(raw, url), kind: "comment", verb: "commented", discussion: [] };
+    } else {
+      let raw;
+      if (state.pending) {
+        const data = await graphql(
+          {
+            query: "mutation($id:ID!,$event:PullRequestReviewEvent!,$body:String!){submitPullRequestReview(input:{pullRequestReviewId:$id,event:$event,body:$body}){pullRequestReview{id databaseId state body submittedAt author{login}}}}",
+            variables: { id: state.pending.id, event, body }
+          },
+          on
+        );
+        const review = data?.submitPullRequestReview?.pullRequestReview;
+        if (!review?.submittedAt) throw new Error("GitHub did not return the submitted review.");
+        raw = {
+          id: review.databaseId,
+          body: review.body,
+          state: review.state,
+          submitted_at: review.submittedAt,
+          user: review.author
+        };
+      } else {
+        raw = await api(`repos/${repo}/pulls/${number}/reviews`, {
+          on,
+          method: "POST",
+          rawFields: { body, event, commit_id: commit }
+        });
+      }
+      const parsed = pullTimeline([], [], [raw], [], url)[0];
+      if (!parsed) throw new Error("GitHub did not return the submitted review.");
+      item = parsed;
+    }
+    announce({ repo, number, threads: { on }, review: { on } });
+    return item;
+  } catch (e) {
+    if (e instanceof GhError && e.transient) announce({ repo, number, threads: { on }, review: { on } });
+    throw e;
+  }
+}
+async function readPullReview(repo, number, on) {
+  const [owner, name] = repo.split("/");
+  let after = null;
+  for (; ; ) {
+    const data = await graphql(
+      {
+        query: "query($owner:String!,$repo:String!,$number:Int!,$after:String){repository(owner:$owner,name:$repo){pullRequest(number:$number){id reviews(first:100,states:PENDING,after:$after){nodes{id databaseId viewerDidAuthor} pageInfo{hasNextPage endCursor}}}}}",
+        variables: { owner, repo: name, number, after }
+      },
+      on
+    );
+    const pull = data?.repository?.pullRequest;
+    if (!pull) throw new Error("GitHub did not return the pull request's pending review.");
+    const pending = pull.reviews.nodes.find((r) => r.viewerDidAuthor);
+    if (pending) return { id: pull.id, pending: { id: pending.id, databaseId: pending.databaseId } };
+    if (!pull.reviews.pageInfo.hasNextPage) return { id: pull.id, pending: null };
+    const next = pull.reviews.pageInfo.endCursor;
+    if (!next || next === after) throw new Error("GitHub did not return the next reviews page.");
+    after = next;
+  }
+}
+async function startPullReview(repo, number, commit, on) {
+  const state = await readPullReview(repo, number, on);
+  if (state.pending) return state.pending;
+  try {
+    const data = await graphql(
+      {
+        query: "mutation($id:ID!,$commit:GitObjectID!){addPullRequestReview(input:{pullRequestId:$id,commitOID:$commit}){pullRequestReview{id databaseId state}}}",
+        variables: { id: state.id, commit }
+      },
+      on
+    );
+    const review = data?.addPullRequestReview?.pullRequestReview;
+    if (!review?.id || review.state !== "PENDING") throw new Error("GitHub did not return the pending review.");
+    announce({ repo, number, threads: { on } });
+    return { id: review.id, databaseId: review.databaseId };
+  } catch (e) {
+    if (e instanceof GhError && e.transient) announce({ repo, number, threads: { on } });
+    throw e;
+  }
+}
 
 // src/github/views/review-threads.ts
 var THREAD_HEIGHT = 340;
@@ -12211,6 +12434,10 @@ var ReviewThreads = class {
   loading = false;
   failure = null;
   latest = 0;
+  pending = null;
+  ready = false;
+  localDrafts = /* @__PURE__ */ new Map();
+  summaryBox = null;
   notices = new Notices();
   writing = /* @__PURE__ */ new Set();
   failures = /* @__PURE__ */ new Map();
@@ -12236,8 +12463,21 @@ var ReviewThreads = class {
     this.failure = null;
     cx.spawn(async (cx2) => {
       try {
-        const threads = await readPullThreads(this.ref.repo, this.ref.number, this.on);
-        if (request === this.latest) this.threads = this.published.threads(threads);
+        const state = await readPullReview(this.ref.repo, this.ref.number, this.on);
+        const threads = await readPullThreads(
+          this.ref.repo,
+          this.ref.number,
+          this.on,
+          state.pending?.databaseId ?? null
+        );
+        if (request === this.latest) {
+          this.pending = state.pending;
+          this.ready = true;
+          if (!state.pending) this.localDrafts.clear();
+          const seen = new Set(threads.flatMap((t) => t.comments.map((c) => c.id)));
+          for (const id of seen) this.localDrafts.delete(id);
+          this.threads = this.published.threads(mergeDraftThreads(threads, [...this.localDrafts.values()]));
+        }
       } catch (e) {
         if (request === this.latest) this.failure = failureOf(e).message;
       } finally {
@@ -12290,21 +12530,18 @@ var ReviewThreads = class {
         ).child(
           h_flex9().gap(8).child(
             button(`post-inline-${key}`, busy ? "Saving\u2026" : "Add Comment", "Add Comment", (_e, cx) => {
-              if (this.drafts.get(key) !== draft || !draft.box.value().trim()) return;
-              const body = draft.box.value();
-              this.write(cx, key, async () => {
-                const comment = await addPullComment(this.ref.repo, this.ref.number, draft.target, body, this.on);
-                this.threads.push(
-                  this.published.add(comment, {
-                    path,
-                    side,
-                    line: anchor.line,
-                    outdated: draft.target.commit !== commit
-                  })
-                );
-                if (draft.box.value() === body) this.drafts.delete(key);
-              });
+              this.postInline(cx, key, false, commit);
             })
+          ).when(
+            !this.pending,
+            (el) => el.child(
+              button(
+                `start-review-${key}`,
+                "Start Review",
+                "Start Review",
+                (_e, cx) => this.postInline(cx, key, true, commit)
+              )
+            )
           ).child(
             button(`cancel-inline-${key}`, "Cancel", "Cancel", (_e, cx) => {
               if (this.writing.has(key)) return;
@@ -12317,6 +12554,82 @@ var ReviewThreads = class {
       );
     }
     return { gutters, editors };
+  }
+  postInline(cx, key, start, commit) {
+    const draft = this.drafts.get(key);
+    if (!this.ready || !draft?.box.value().trim()) return;
+    const body = draft.box.value();
+    this.write(cx, key, async () => {
+      const state = await readPullReview(this.ref.repo, this.ref.number, this.on);
+      this.pending = state.pending;
+      if (start || state.pending) {
+        const result = await addPullReviewComment(this.ref.repo, this.ref.number, draft.target, body, this.on);
+        this.pending = result.pending;
+        this.localDrafts.set(result.thread.root, result.thread);
+        this.threads.push(result.thread);
+      } else {
+        const comment = await addPullComment(this.ref.repo, this.ref.number, draft.target, body, this.on);
+        this.threads.push(
+          this.published.add(comment, {
+            path: draft.target.path,
+            side: draft.target.side,
+            line: draft.target.line,
+            outdated: draft.target.commit !== commit
+          })
+        );
+      }
+      if (draft.box.value() === body) this.drafts.delete(key);
+    });
+  }
+  /** The PR summary and inline drafts share one write lock and one GitHub pending review. */
+  summary(commit) {
+    if (!this.summaryBox) {
+      this.summaryBox = TextareaState2.new({ placeholder: "Leave a comment" });
+      this.summaryBox.on("change", (_e, cx) => cx.notify());
+    }
+    const box = this.summaryBox;
+    const busy = this.writing.size > 0;
+    return v_flex8().gap(8).child(
+      div12().font_semibold().child(this.pending ? "Pending review" : "Review")
+    ).child(commentEditor(box, 120)).child(
+      div12().text_size(12).text_color(colors().blocked).child(this.failures.get("summary") ?? "")
+    ).child(
+      h_flex9().gap(8).children(
+        [
+          ["COMMENT", "Comment"],
+          ["APPROVE", "Approve"],
+          ["REQUEST_CHANGES", "Request Changes"]
+        ].map(
+          ([event, label]) => button(`submit-review-${event}`, busy ? "Saving\u2026" : label, label, (_e, cx) => {
+            if (!this.ready || busy || event === "REQUEST_CHANGES" && !box.value().trim() || event === "COMMENT" && !this.pending && !box.value().trim())
+              return;
+            this.submit(cx, commit, event, box);
+          }).opacity(!this.ready || busy ? 0.5 : 1)
+        )
+      )
+    );
+  }
+  submit(cx, commit, event, box) {
+    const body = box.value();
+    this.write(cx, "summary", async () => {
+      const item = await submitPullReview(this.ref.repo, this.ref.number, commit, event, body, this.on);
+      const submitted = this.threads.filter((t) => t.comments.some((c) => c.draft)).map((t) => ({
+        ...t,
+        comments: t.comments.map((c) => {
+          const { draft: _draft, ...published } = c;
+          return published;
+        })
+      }));
+      const newRoots = new Set(
+        this.threads.filter((t) => t.comments.some((c) => c.id === t.root && c.draft)).map((t) => t.root)
+      );
+      item.discussion = submitted.filter((t) => newRoots.has(t.root)).flatMap((t) => t.comments.map((c) => ({ root: t.root, comment: c, path: t.path, snippet: "" })));
+      this.published.activity(item, submitted);
+      this.threads = this.threads.map((t) => submitted.find((s) => s.id === t.id) ?? t);
+      this.pending = null;
+      this.localDrafts.clear();
+      if (box.value() === body) box.set_value("");
+    });
   }
   /** Built during render, NOT in the virtual list's deferred row callback. */
   card(thread, unavailable, width) {
@@ -12376,7 +12689,7 @@ var ReviewThreads = class {
           (c, index2) => postCard(
             `${scope}-comment-${c.id}`,
             c,
-            "commented",
+            c.draft ? "Pending" : "commented",
             (url2, cx) => openLink(cx, this.host, url2, `https://github.com/${this.ref.repo}/pull/${this.ref.number}`),
             { embedded: true }
           ).when(index2 > 0, (el) => el.border_t(1).border_color(t.border))
@@ -12410,7 +12723,15 @@ var ReviewThreads = class {
             const body = box.value();
             if (!body.trim()) return;
             this.write(cx, thread.id, async () => {
-              const comment = await replyPullThread(this.ref.repo, this.ref.number, thread.root, body, this.on);
+              const comment = await replyPullReviewThread(
+                this.ref.repo,
+                this.ref.number,
+                thread.id,
+                thread.root,
+                body,
+                this.on
+              );
+              if (comment.draft) this.localDrafts.set(comment.id, { ...thread, comments: [comment] });
               if (!thread.comments.some((c) => c.id === comment.id)) thread.comments.push(comment);
               if (box.value() === body) box.set_value("");
             });
@@ -12439,7 +12760,7 @@ var ReviewThreads = class {
     );
   }
   write(cx, key, act) {
-    if (this.writing.has(key)) return;
+    if (this.writing.size) return;
     this.latest++;
     this.loading = false;
     this.writing.add(key);
@@ -12813,7 +13134,8 @@ var Pull = class {
           (pull.checks ?? []).map(
             (c) => c.url ? link(c.id, c.url, `${c.name} \xB7 ${c.status} \xB7 ${c.duration}`).text_color(t.accent) : quiet(`${c.name} \xB7 ${c.status} \xB7 ${c.duration}`)
           )
-        )
+        ),
+        ...this.discussions ? [this.discussions.summary(pull.headSha)] : []
       ],
       [
         ["Reviewers", this.reviewers(pull)],

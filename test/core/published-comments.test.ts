@@ -5,6 +5,44 @@ import type { PullTimelineItem } from "../../src/github/core/pull-timeline.ts";
 import right from "../fixtures/pull-plugin-35-comment-right.json";
 
 const comment = parseComment(right, "https://github.com/lw396/herdr-plugin-github/pull/35");
+test("submitted review stays visible until both endpoints observe it, without draft markers", () => {
+	const published = new PublishedComments();
+	const thread = published.add(comment, { path: "file", side: "RIGHT", line: 2, outdated: false });
+	const item: PullTimelineItem = { ...comment, id: 99, kind: "review", verb: "reviewed", discussion: [] };
+	published.activity(item, [thread]);
+	expect(published.timeline([]).map((i) => i.id)).toEqual([99]);
+	expect(published.timeline([item])).toEqual([item]);
+	expect(published.threads([{ ...thread, comments: [{ ...comment, draft: true }] }])[0]?.comments).toEqual([comment]);
+	expect(published.threads([])[0]?.comments).toEqual([comment]);
+});
+
+test("a submitted review keeps its acknowledged drafts when review metadata arrives before inline comments", () => {
+	const published = new PublishedComments();
+	const item: PullTimelineItem = {
+		...comment,
+		id: 99,
+		kind: "review",
+		verb: "reviewed",
+		discussion: [{ root: comment.id, comment, path: "file", snippet: "" }],
+	};
+	published.activity(item);
+	const lagging = { ...item, discussion: [] };
+	expect(published.timeline([lagging])[0]?.discussion).toEqual(item.discussion);
+	expect(published.timeline([item])).toEqual([item]);
+	expect(published.timeline([])).toEqual([]);
+});
+
+test("submitting a draft reply keeps it in the diff while the published root is already visible", () => {
+	const published = new PublishedComments();
+	const thread = published.add(comment, { path: "file", side: "RIGHT", line: 2, outdated: false });
+	const reply = { ...comment, id: 999, body: "Reply" };
+	const item: PullTimelineItem = { ...comment, id: 99, kind: "review", verb: "reviewed", discussion: [] };
+	published.activity(item, [{ ...thread, comments: [comment, reply] }]);
+	expect(published.threads([thread])[0]?.comments).toEqual([comment, reply]);
+	expect(published.threads([{ ...thread, comments: [comment, reply] }])[0]?.comments).toEqual([comment, reply]);
+	expect(published.threads([])).toEqual([]);
+});
+
 const target = { path: "docs/pr-fixture.md", side: "RIGHT", line: 2, outdated: false } as const;
 
 test("diff and timeline catch up independently without losing or duplicating an acknowledged comment", () => {

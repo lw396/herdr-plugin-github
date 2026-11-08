@@ -7,6 +7,8 @@ export interface Reaction {
 }
 
 export interface Comment {
+	/** Confirmed on GitHub, but private until its review is submitted. */
+	draft?: boolean;
 	id: number;
 	author: string;
 	createdAt: string;
