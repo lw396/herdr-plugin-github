@@ -340,7 +340,7 @@ export class Issue {
 		const close = {
 			id: "issue-state",
 			label: open ? "Close issue" : "Reopen issue",
-			tip: open ? `Close #${issue.number}` : `Reopen #${issue.number}`,
+			tip: `${open ? "Close" : "Reopen"} #${this.ref?.number}`,
 			enabled: !busy,
 			primary: false,
 		};

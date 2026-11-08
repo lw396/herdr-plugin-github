@@ -121,7 +121,17 @@ export default class Smoke extends View {
 			loading: false,
 			projectsLoading: false,
 			projects: { ok: true, projects: [] },
-			pull: parsePullDetail(pull, pullIssue, pullComments.flat(), pullReviews.flat()),
+			pull: parsePullDetail({
+				pull,
+				issue: pullIssue,
+				repository: {},
+				comments: pullComments.flat(),
+				reviews: pullReviews.flat(),
+				events: [],
+				inline: [],
+				checkRuns: { check_runs: [] },
+				statuses: [],
+			}),
 		};
 		expectEqual(pr.pull.entry.pull?.state ?? "", "closed", "PR state");
 		expectEqual(parsePreview(pull, "pr").summary, "probe", "hover summary in QuickJS");

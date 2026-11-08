@@ -173,7 +173,6 @@ test("read a closed fork PR and its Markdown discussion using the reader machine
 	machine("center", replies(14974));
 	const pull = await pulls.readPull("cli/cli", 14974, "center");
 	expect(pull).toMatchObject({
-		number: 14974,
 		title: "probe fork pr",
 		state: "closed",
 		author: "escaleraalcielo",
@@ -187,7 +186,8 @@ test("read a closed fork PR and its Markdown discussion using the reader machine
 		],
 		url: "https://github.com/cli/cli/pull/14974",
 	});
-	expect(pull.comments).toHaveLength(1);
-	expect(pull.comments[0]).toMatchObject({ id: 6694345158, author: "github-actions[bot]", reactions: [] });
-	expect(pull.comments[0]?.markdown).toContain("**Please update your PR");
+	const comments = pull.timeline.filter((item) => item.kind === "comment");
+	expect(comments).toHaveLength(1);
+	expect(comments[0]).toMatchObject({ id: 6694345158, author: "github-actions[bot]", reactions: [] });
+	expect(comments[0]?.markdown).toContain("**Please update your PR");
 });

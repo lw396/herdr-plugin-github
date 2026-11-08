@@ -1,3 +1,6 @@
+import { checkHolds, type PullCheck } from "./checks.ts";
+import type { Reviewer } from "./reviewers.ts";
+
 export type MergeMethod = "merge" | "squash" | "rebase";
 export interface MergeInfo {
 	methods: MergeMethod[];
@@ -7,41 +10,60 @@ export interface MergeInfo {
 	headRef: string;
 	deletable: boolean;
 }
+
+export interface RestMergePull {
+	mergeable?: boolean | null;
+	mergeable_state?: string;
+	draft?: boolean;
+	state: string;
+	merged?: boolean;
+	head: { sha: string; ref: string; repo: { full_name: string; default_branch: string } | null };
+}
+
+const REASONS: Record<string, string> = {
+	dirty: "This branch has conflicts that must be resolved",
+	blocked: "Merging is blocked by branch protection rules (required checks or reviews)",
+	behind: "This branch is out-of-date with the base branch",
+	unknown: "Checking mergeability…",
+	unstable: "Checks have not passed",
+};
+
+/** Branch protection does not say which rule blocks: name the reviews and checks that can. */
+function blockers(reviewers: Reviewer[], checks: PullCheck[]): string[] {
+	return [
+		reviewers.some((r) => r.state === "changes_requested") && "Changes requested",
+		reviewers.some((r) => r.state === "requested") && "Review required",
+		checks.some(checkHolds) && "Checks have not passed",
+	].filter((x): x is string => Boolean(x));
+}
+
+function reason(p: RestMergePull, methods: MergeMethod[], reviewers: Reviewer[], checks: PullCheck[]): string | null {
+	if (p.merged) return "Pull request successfully merged";
+	if (p.state !== "open") return "Pull request is closed";
+	if (p.draft) return "This pull request is still a draft";
+	const state = p.mergeable_state ?? "unknown";
+	if (p.mergeable === true && (state === "clean" || state === "has_hooks"))
+		return methods.length === 0 ? "No merge methods are enabled" : null;
+	if (state === "blocked") {
+		const causes = blockers(reviewers, checks);
+		return causes.length ? `${REASONS.blocked}: ${causes.join("; ")}` : (REASONS.blocked ?? null);
+	}
+	return REASONS[state] ?? (p.mergeable === true ? `Merging is blocked: ${state}` : "Checking mergeability…");
+}
+
+/** `repository` carries which merge methods it allows (`allow_<method>_merge`). */
 export function mergeInfo(
-	p: {
-		mergeable?: boolean | null;
-		mergeable_state?: string;
-		draft?: boolean;
-		state: string;
-		merged?: boolean;
-		head: { sha: string; ref: string; repo: { full_name: string; default_branch: string } | null };
-	},
-	r: Record<string, unknown>,
+	p: RestMergePull,
+	repository: Record<string, unknown>,
+	reviewers: Reviewer[] = [],
+	checks: PullCheck[] = [],
 ): MergeInfo {
-	const methods = (["merge", "squash", "rebase"] as MergeMethod[]).filter((m) => r[`allow_${m}_merge`] === true);
-	const reasons: Record<string, string> = {
-		dirty: "This branch has conflicts that must be resolved",
-		blocked: "Merging is blocked by branch protection rules (required checks or reviews)",
-		behind: "This branch is out-of-date with the base branch",
-		unknown: "Checking mergeability…",
-		unstable: "Checks have not passed",
-	};
-	const reason = p.merged
-		? "Pull request successfully merged"
-		: p.state !== "open"
-			? "Pull request is closed"
-			: p.draft
-				? "This pull request is still a draft"
-				: p.mergeable !== true
-					? (reasons[p.mergeable_state ?? "unknown"] ?? "Checking mergeability…")
-					: p.mergeable_state !== "clean" && p.mergeable_state !== "has_hooks"
-						? (reasons[p.mergeable_state ?? "unknown"] ?? `Merging is blocked: ${p.mergeable_state}`)
-						: methods.length === 0
-							? "No merge methods are enabled"
-							: null;
+	const methods = (["merge", "squash", "rebase"] as MergeMethod[]).filter(
+		(m) => repository[`allow_${m}_merge`] === true,
+	);
 	return {
 		methods,
-		reason,
+		reason: reason(p, methods, reviewers, checks),
 		sha: p.head.sha,
 		headRepo: p.head.repo?.full_name ?? null,
 		headRef: p.head.ref,

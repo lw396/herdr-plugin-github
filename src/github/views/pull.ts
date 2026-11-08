@@ -5,7 +5,8 @@ import { type DetailRef, notVisible } from "../core/detail.ts";
 import type { ChangedFile } from "../core/files.ts";
 import type { MergeMethod } from "../core/merge.ts";
 import type { Projects } from "../core/projects.ts";
-import type { PullDetail, ReviewState } from "../core/pull-detail.ts";
+import type { PullDetail } from "../core/pull-detail.ts";
+import type { ReviewState } from "../core/reviewers.ts";
 import { announce, Notices } from "../io/changes.ts";
 import { detailLocation } from "../io/detail-tabs.ts";
 import * as gh from "../io/gh.ts";
@@ -266,7 +267,7 @@ export class Pull {
 				this.mergeArea(pull),
 				// Discussion metadata is fetched once per PR; report its progress/failure once, not per thread.
 				...(this.discussions?.loading || this.discussions?.failure ? [this.discussions.status()] : []),
-				...(this.discussions?.published.timeline(pull.timeline ?? []) ?? pull.timeline ?? []).map((item) => {
+				...(this.discussions?.published.timeline(pull.timeline) ?? pull.timeline).map((item) => {
 					// Commit timeline events have no REST id; their fallback index can move during refresh.
 					const key = JSON.stringify([item.author, item.createdAt, item.body]);
 					return timelineItem(item, this.discussions, onLink, (cx, path, comment) => this.select(cx, path, comment), {
@@ -281,9 +282,9 @@ export class Pull {
 				v_flex()
 					.gap(10)
 					.child(div().font_semibold().child("Checks"))
-					.when(!pull.checks?.length, (el) => el.child(quiet("No checks reported")))
+					.when(!pull.checks.length, (el) => el.child(quiet("No checks reported")))
 					.children(
-						(pull.checks ?? []).map((c) =>
+						pull.checks.map((c) =>
 							c.url
 								? link(c.id, c.url, `${c.name} · ${c.status} · ${c.duration}`).text_color(t.accent)
 								: quiet(`${c.name} · ${c.status} · ${c.duration}`),
@@ -305,7 +306,6 @@ export class Pull {
 	private mergeArea(pull: PullDetail): Element {
 		const info = pull.merge;
 		const area = v_flex().gap(10).child(div().font_semibold().child("Merge"));
-		if (!info) return area;
 		area.child(quiet(info.reason ?? "This branch has no conflicts with the base branch"));
 		if (this.writeFailure) area.child(quiet(this.writeFailure));
 		const act = (cx: Context, remove: boolean) => {

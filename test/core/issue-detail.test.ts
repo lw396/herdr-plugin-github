@@ -32,8 +32,16 @@ test("the reader's Markdown is prepared once when the issue is parsed: images be
 	expect(detail.comments[0]?.markdown).toBe("[🖼 图片](<https://example.com/c.png>)");
 });
 
-test("an empty description or comment reads as no text, while the raw body stays empty", () => {
+test("an empty description or comment reads as no text, while the comment's raw body stays empty", () => {
 	const detail = parseIssueDetail(issue(null), [comment("")]);
-	expect([detail.body, detail.markdown]).toEqual(["", "_No text._"]);
+	expect(detail.markdown).toBe("_No text._");
 	expect([detail.comments[0]?.body, detail.comments[0]?.markdown]).toEqual(["", "_No text._"]);
+});
+
+test("an issue description shows its reactions, as a PR description does", () => {
+	const detail = parseIssueDetail({ ...issue("x"), reactions: { "+1": 2, heart: 0, eyes: 1 } }, []);
+	expect(detail.reactions).toEqual([
+		{ emoji: "👍", count: 2 },
+		{ emoji: "👀", count: 1 },
+	]);
 });

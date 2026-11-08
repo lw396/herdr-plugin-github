@@ -10024,21 +10024,27 @@ function parseActivity(data) {
   });
 }
 
+// src/github/core/item.ts
+function parseItem(item, reactions = item.reactions) {
+  return {
+    title: item.title,
+    author: login(item.user),
+    createdAt: item.created_at,
+    url: item.html_url,
+    labels: item.labels.map(parseLabel),
+    assignees: item.assignees.map((a) => a.login),
+    milestone: item.milestone?.title ?? null,
+    markdown: readerMarkdown(item.body ?? "", item.html_url),
+    reactions: parseReactions(reactions)
+  };
+}
+
 // src/github/core/issue-detail.ts
 function parseIssueDetail(issue, timeline) {
   const i = issue, events = timeline;
   return {
-    number: i.number,
-    title: i.title,
+    ...parseItem(i),
     state: i.state,
-    author: login(i.user),
-    createdAt: i.created_at,
-    url: i.html_url,
-    labels: i.labels.map(parseLabel),
-    assignees: i.assignees.map((a) => a.login),
-    milestone: i.milestone?.title ?? null,
-    body: i.body ?? "",
-    markdown: readerMarkdown(i.body ?? "", i.html_url),
     activities: parseActivity(events),
     comments: parseComments(
       events.filter((e) => e.event === "commented"),
@@ -10359,20 +10365,63 @@ function parseFiles(data) {
   }));
 }
 
+// src/github/core/checks.ts
+function parseChecks(pages, statuses) {
+  const checks = (Array.isArray(pages) ? pages : [pages]).flatMap((p) => p.check_runs).map((c) => {
+    const seconds = c.started_at && c.completed_at ? Math.max(0, Math.floor((Date.parse(c.completed_at) - Date.parse(c.started_at)) / 1e3)) : null;
+    return {
+      id: `check-${c.id}`,
+      name: c.name,
+      status: c.conclusion ?? c.status,
+      duration: seconds === null ? "\u2014" : `${Math.floor(seconds / 60)}m ${seconds % 60}s`,
+      url: c.html_url
+    };
+  });
+  const seen = /* @__PURE__ */ new Set();
+  for (const s of statuses) {
+    if (seen.has(s.context)) continue;
+    seen.add(s.context);
+    checks.push({ id: `status-${s.id}`, name: s.context, status: s.state, duration: "\u2014", url: s.target_url ?? "" });
+  }
+  return checks;
+}
+var checkHolds = (check) => /fail|pending|queued|progress|error/i.test(check.status);
+
 // src/github/core/merge.ts
-function mergeInfo(p, r) {
-  const methods = ["merge", "squash", "rebase"].filter((m) => r[`allow_${m}_merge`] === true);
-  const reasons = {
-    dirty: "This branch has conflicts that must be resolved",
-    blocked: "Merging is blocked by branch protection rules (required checks or reviews)",
-    behind: "This branch is out-of-date with the base branch",
-    unknown: "Checking mergeability\u2026",
-    unstable: "Checks have not passed"
-  };
-  const reason = p.merged ? "Pull request successfully merged" : p.state !== "open" ? "Pull request is closed" : p.draft ? "This pull request is still a draft" : p.mergeable !== true ? reasons[p.mergeable_state ?? "unknown"] ?? "Checking mergeability\u2026" : p.mergeable_state !== "clean" && p.mergeable_state !== "has_hooks" ? reasons[p.mergeable_state ?? "unknown"] ?? `Merging is blocked: ${p.mergeable_state}` : methods.length === 0 ? "No merge methods are enabled" : null;
+var REASONS = {
+  dirty: "This branch has conflicts that must be resolved",
+  blocked: "Merging is blocked by branch protection rules (required checks or reviews)",
+  behind: "This branch is out-of-date with the base branch",
+  unknown: "Checking mergeability\u2026",
+  unstable: "Checks have not passed"
+};
+function blockers(reviewers, checks) {
+  return [
+    reviewers.some((r) => r.state === "changes_requested") && "Changes requested",
+    reviewers.some((r) => r.state === "requested") && "Review required",
+    checks.some(checkHolds) && "Checks have not passed"
+  ].filter((x) => Boolean(x));
+}
+function reason(p, methods, reviewers, checks) {
+  if (p.merged) return "Pull request successfully merged";
+  if (p.state !== "open") return "Pull request is closed";
+  if (p.draft) return "This pull request is still a draft";
+  const state = p.mergeable_state ?? "unknown";
+  if (p.mergeable === true && (state === "clean" || state === "has_hooks"))
+    return methods.length === 0 ? "No merge methods are enabled" : null;
+  if (state === "blocked") {
+    const causes = blockers(reviewers, checks);
+    return causes.length ? `${REASONS.blocked}: ${causes.join("; ")}` : REASONS.blocked ?? null;
+  }
+  return REASONS[state] ?? (p.mergeable === true ? `Merging is blocked: ${state}` : "Checking mergeability\u2026");
+}
+function mergeInfo(p, repository, reviewers = [], checks = []) {
+  const methods = ["merge", "squash", "rebase"].filter(
+    (m) => repository[`allow_${m}_merge`] === true
+  );
   return {
     methods,
-    reason,
+    reason: reason(p, methods, reviewers, checks),
     sha: p.head.sha,
     headRepo: p.head.repo?.full_name ?? null,
     headRef: p.head.ref,
@@ -10380,13 +10429,11 @@ function mergeInfo(p, r) {
   };
 }
 
-// src/github/core/pull-detail.ts
-function reviewers(pull, reviews) {
+// src/github/core/reviewers.ts
+var submitted = (review) => review.state !== "PENDING" && Boolean(review.submitted_at);
+function parseReviewers(pull, reviews) {
   const byName = /* @__PURE__ */ new Map();
-  for (const review of [...reviews].sort(
-    (a, b) => (b.submitted_at ?? "").localeCompare(a.submitted_at ?? "") || b.id - a.id
-  )) {
-    if (review.state === "PENDING" || !review.submitted_at) continue;
+  for (const review of reviews.filter(submitted).sort((a, b) => (b.submitted_at ?? "").localeCompare(a.submitted_at ?? "") || b.id - a.id)) {
     const name = login(review.user);
     const key = name.toLowerCase();
     if (key === pull.user?.login.toLowerCase() || byName.has(key)) continue;
@@ -10398,30 +10445,6 @@ function reviewers(pull, reviews) {
     byName.set(`team:${team.slug}`, { name: team.slug, state: "requested", team: true });
   return [...byName.values()];
 }
-function parsePullDetail(pull, issue, comments, reviews) {
-  const p = pull;
-  const crossOwner = p.head.label.split(":")[0]?.toLowerCase() !== p.base.label.split(":")[0]?.toLowerCase();
-  const reactions = issue.reactions;
-  return {
-    number: p.number,
-    title: p.title,
-    state: pullState(p.merged ? "merged" : p.state, p.draft),
-    author: login(p.user),
-    createdAt: p.created_at,
-    url: p.html_url,
-    head: crossOwner ? p.head.label || p.head.ref : p.head.ref,
-    headSha: p.head.sha,
-    base: crossOwner ? p.base.label || p.base.ref : p.base.ref,
-    labels: p.labels.map(parseLabel),
-    assignees: p.assignees.map((a) => a.login),
-    milestone: p.milestone?.title ?? null,
-    body: p.body ?? "",
-    markdown: readerMarkdown(p.body ?? "", p.html_url),
-    reactions: parseReactions(reactions),
-    reviewers: reviewers(p, reviews),
-    comments: parseComments(comments, p.html_url)
-  };
-}
 
 // src/github/core/pull-timeline.ts
 function pullTimeline(comments, events, reviews, inline, url) {
@@ -10431,8 +10454,7 @@ function pullTimeline(comments, events, reviews, inline, url) {
     verb: "commented",
     discussion: []
   }));
-  for (const r of reviews) {
-    if (!r.submitted_at || r.state === "PENDING") continue;
+  for (const r of reviews.filter(submitted)) {
     const all2 = inline;
     const roots = all2.filter((c) => !c.in_reply_to_id && c.pull_request_review_id === r.id).sort((a, b) => a.created_at.localeCompare(b.created_at) || a.id - b.id);
     if (r.state === "COMMENTED" && !r.body?.trim() && roots.length === 0 && all2.some((c) => c.pull_request_review_id === r.id && c.in_reply_to_id))
@@ -10497,25 +10519,27 @@ function pullTimeline(comments, events, reviews, inline, url) {
   }
   return result.sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id - b.id);
 }
-function parseChecks(pages, statuses) {
-  const checks = pages.flatMap((p) => p.check_runs).map((c) => {
-    const seconds = c.started_at && c.completed_at ? Math.max(0, Math.floor((Date.parse(c.completed_at) - Date.parse(c.started_at)) / 1e3)) : null;
-    return {
-      id: `check-${c.id}`,
-      name: c.name,
-      status: c.conclusion ?? c.status,
-      duration: seconds === null ? "\u2014" : `${Math.floor(seconds / 60)}m ${seconds % 60}s`,
-      url: c.html_url
-    };
-  });
-  const seen = /* @__PURE__ */ new Set();
-  for (const s of statuses) {
-    if (seen.has(s.context)) continue;
-    seen.add(s.context);
-    checks.push({ id: `status-${s.id}`, name: s.context, status: s.state, duration: "\u2014", url: s.target_url ?? "" });
-  }
-  return checks;
+
+// src/github/core/pull-detail.ts
+function parsePullDetail(r) {
+  const p = r.pull;
+  const crossOwner = p.head.label.split(":")[0]?.toLowerCase() !== p.base.label.split(":")[0]?.toLowerCase();
+  const reviewers = parseReviewers(p, r.reviews);
+  const checks = parseChecks(r.checkRuns, r.statuses);
+  const comments = parseComments(r.comments, p.html_url);
+  return {
+    ...parseItem(p, r.issue.reactions),
+    state: pullState(p.merged ? "merged" : p.state, p.draft),
+    head: crossOwner ? p.head.label || p.head.ref : p.head.ref,
+    headSha: p.head.sha,
+    base: crossOwner ? p.base.label || p.base.ref : p.base.ref,
+    merge: mergeInfo(p, r.repository, reviewers, checks),
+    timeline: pullTimeline(comments, r.events, r.reviews, r.inline, p.html_url),
+    checks,
+    reviewers
+  };
 }
+var pullHead = (pull) => pull.head.sha;
 
 // src/github/core/review-threads.ts
 function parseThreads(nodes, comments, url, drafts = []) {
@@ -10570,42 +10594,22 @@ async function pullPage(kind, remote2, login2, on, after) {
   return parsePullGroup(await graphql(pullGroupQuery(kind, remote2, login2, after), on));
 }
 async function readPull(repo, number, on) {
-  const [pull, issue, comments, reviews] = await Promise.all([
+  const list2 = (path) => api(`${path}?per_page=100`, { on, paginate: true });
+  const [pull, issue, repository, comments, reviews, events, inline] = await Promise.all([
     api(`repos/${repo}/pulls/${number}`, { on }),
-    // Description reactions live on the issue resource, not the REST pull request resource.
     api(`repos/${repo}/issues/${number}`, { on }),
-    api(`repos/${repo}/issues/${number}/comments?per_page=100`, { on, paginate: true }),
-    api(`repos/${repo}/pulls/${number}/reviews?per_page=100`, { on, paginate: true })
+    api(`repos/${repo}`, { on }),
+    list2(`repos/${repo}/issues/${number}/comments`),
+    list2(`repos/${repo}/pulls/${number}/reviews`),
+    list2(`repos/${repo}/issues/${number}/timeline`),
+    list2(`repos/${repo}/pulls/${number}/comments`)
   ]);
-  const detail = parsePullDetail(pull, issue, comments, reviews);
-  detail.merge = mergeInfo(
-    pull,
-    await api(`repos/${repo}`, { on })
-  );
-  const sha = pull.head.sha;
-  const [events, inline, checks, statuses] = await Promise.all([
-    api(`repos/${repo}/issues/${number}/timeline?per_page=100`, { on, paginate: true }),
-    api(`repos/${repo}/pulls/${number}/comments?per_page=100`, { on, paginate: true }),
+  const sha = pullHead(pull);
+  const [checkRuns, statuses] = await Promise.all([
     api(`repos/${repo}/commits/${sha}/check-runs?per_page=100`, { on, paginate: true }),
-    api(`repos/${repo}/commits/${sha}/statuses?per_page=100`, { on, paginate: true })
+    list2(`repos/${repo}/commits/${sha}/statuses`)
   ]);
-  detail.timeline = pullTimeline(
-    detail.comments,
-    events,
-    reviews,
-    inline,
-    detail.url
-  );
-  detail.checks = parseChecks(Array.isArray(checks) ? checks : [checks], statuses);
-  if (detail.merge?.reason?.startsWith("Merging is blocked by")) {
-    const reasons = [];
-    if (detail.reviewers.some((r) => r.state === "changes_requested")) reasons.push("Changes requested");
-    if (detail.reviewers.some((r) => r.state === "requested")) reasons.push("Review required");
-    if (detail.checks.some((c) => /fail|pending|queued|progress|error/i.test(c.status)))
-      reasons.push("Checks have not passed");
-    if (reasons.length) detail.merge.reason += ": " + reasons.join("; ");
-  }
-  return detail;
+  return parsePullDetail({ pull, issue, repository, comments, reviews, events, inline, checkRuns, statuses });
 }
 async function mergePull(repo, number, method, sha, on) {
   const result = await api(`repos/${repo}/pulls/${number}/merge`, {
@@ -12120,7 +12124,7 @@ ${detailKey(this.ref)}` : null;
     const close = {
       id: "issue-state",
       label: open ? "Close issue" : "Reopen issue",
-      tip: open ? `Close #${issue.number}` : `Reopen #${issue.number}`,
+      tip: `${open ? "Close" : "Reopen"} #${this.ref?.number}`,
       enabled: !busy,
       primary: false
     };
@@ -13297,7 +13301,7 @@ var Pull = class {
         this.mergeArea(pull),
         // Discussion metadata is fetched once per PR; report its progress/failure once, not per thread.
         ...this.discussions?.loading || this.discussions?.failure ? [this.discussions.status()] : [],
-        ...(this.discussions?.published.timeline(pull.timeline ?? []) ?? pull.timeline ?? []).map((item) => {
+        ...(this.discussions?.published.timeline(pull.timeline) ?? pull.timeline).map((item) => {
           const key = JSON.stringify([item.author, item.createdAt, item.body]);
           return timelineItem(item, this.discussions, onLink, (cx, path, comment) => this.select(cx, path, comment), {
             expanded: this.expandedActivity.has(key),
@@ -13308,8 +13312,8 @@ var Pull = class {
             }
           });
         }),
-        v_flex11().gap(10).child(div15().font_semibold().child("Checks")).when(!pull.checks?.length, (el) => el.child(quiet("No checks reported"))).children(
-          (pull.checks ?? []).map(
+        v_flex11().gap(10).child(div15().font_semibold().child("Checks")).when(!pull.checks.length, (el) => el.child(quiet("No checks reported"))).children(
+          pull.checks.map(
             (c) => c.url ? link(c.id, c.url, `${c.name} \xB7 ${c.status} \xB7 ${c.duration}`).text_color(t.accent) : quiet(`${c.name} \xB7 ${c.status} \xB7 ${c.duration}`)
           )
         ),
@@ -13328,7 +13332,6 @@ var Pull = class {
   mergeArea(pull) {
     const info = pull.merge;
     const area = v_flex11().gap(10).child(div15().font_semibold().child("Merge"));
-    if (!info) return area;
     area.child(quiet(info.reason ?? "This branch has no conflicts with the base branch"));
     if (this.writeFailure) area.child(quiet(this.writeFailure));
     const act = (cx, remove) => {

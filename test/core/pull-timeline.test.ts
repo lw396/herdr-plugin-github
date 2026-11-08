@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { parseChecks, pullTimeline } from "../../src/github/core/pull-timeline.ts";
+import { pullTimeline } from "../../src/github/core/pull-timeline.ts";
 
 test("commit activity shows only its subject and keeps multiline details available separately", () => {
 	const [commit] = pullTimeline(
@@ -109,30 +109,5 @@ test("label, assignment, force-push and merge events sort together, without dupl
 		["assigned dev", ""],
 		["force-pushed the branch", "abcdefg"],
 		["merged this", "1234567"],
-	]);
-});
-
-test("checks include duration and browser target", () => {
-	expect(
-		parseChecks(
-			[
-				{
-					check_runs: [
-						{
-							id: 1,
-							name: "test",
-							status: "completed",
-							conclusion: "success",
-							started_at: "2026-01-01T00:00:00Z",
-							completed_at: "2026-01-01T00:01:05Z",
-							html_url: "https://github.com/a/b/actions/runs/1",
-						},
-					],
-				},
-			],
-			[],
-		),
-	).toEqual([
-		{ id: "check-1", name: "test", status: "success", duration: "1m 5s", url: "https://github.com/a/b/actions/runs/1" },
 	]);
 });

@@ -1,106 +1,65 @@
-// The PR description page: REST replies become ready-to-render Markdown and read-only metadata.
-import { type Comment, login, parseComments, parseReactions, type Reaction } from "./discussion.ts";
-import { type Label, parseLabel } from "./labels.ts";
-import { readerMarkdown } from "./markdown.ts";
-import type { PullCheck, PullTimelineItem } from "./pull-timeline.ts";
+// The PR description page: every REST reply becomes ready-to-render Markdown, metadata and merge state.
+import { type PullCheck, parseChecks } from "./checks.ts";
+import { parseComments } from "./discussion.ts";
+import { type Item, parseItem, type RestItem } from "./item.ts";
+import { type MergeInfo, mergeInfo, type RestMergePull } from "./merge.ts";
+import { type PullTimelineItem, pullTimeline } from "./pull-timeline.ts";
 import { type PullState, pullState } from "./pulls.ts";
+import { parseReviewers, type RestReview, type Reviewer } from "./reviewers.ts";
 
-export type ReviewState = "requested" | "approved" | "changes_requested" | "commented" | "dismissed";
-export interface Reviewer {
-	name: string;
-	state: ReviewState;
-	team: boolean;
-}
-
-export interface PullDetail {
-	merge?: import("./merge.ts").MergeInfo;
-	number: number;
-	title: string;
+export interface PullDetail extends Item {
 	state: PullState;
-	author: string;
-	createdAt: string;
-	url: string;
 	head: string;
 	headSha: string;
 	base: string;
-	labels: Label[];
-	assignees: string[];
-	milestone: string | null;
-	body: string;
-	markdown: string;
-	reactions: Reaction[];
-	comments: Comment[];
-	timeline?: PullTimelineItem[];
-	checks?: PullCheck[];
+	merge: MergeInfo;
+	timeline: PullTimelineItem[];
+	checks: PullCheck[];
 	reviewers: Reviewer[];
 }
 
-interface RestPull {
-	number: number;
-	title: string;
+interface RestPull extends RestItem, RestMergePull {
 	state: "open" | "closed";
 	merged: boolean;
 	draft: boolean;
-	user: { login: string } | null;
-	created_at: string;
-	html_url: string;
-	head: { label: string; ref: string; sha: string };
+	head: RestMergePull["head"] & { label: string };
 	base: { label: string; ref: string };
-	labels: (string | { name: string; color?: string })[];
-	assignees: { login: string }[];
-	milestone: { title: string } | null;
-	body: string | null;
 	requested_reviewers: { login: string }[];
 	requested_teams: { slug: string }[];
 }
 
-interface RestReview {
-	id: number;
-	user: { login: string } | null;
-	state: "APPROVED" | "CHANGES_REQUESTED" | "COMMENTED" | "DISMISSED" | "PENDING";
-	submitted_at: string | null;
+/** The REST replies one PR page reads: everything paginated is already flattened. */
+export interface PullReplies {
+	pull: unknown;
+	/** Its issue resource: the description's reactions live there. */
+	issue: unknown;
+	repository: unknown;
+	comments: unknown[];
+	reviews: unknown[];
+	events: unknown[];
+	inline: unknown[];
+	checkRuns: unknown;
+	statuses: unknown[];
 }
 
-/** As in the VS Code extension's parseReviewers: latest non-pending review, no author, requests override. */
-function reviewers(pull: RestPull, reviews: RestReview[]): Reviewer[] {
-	const byName = new Map<string, Reviewer>();
-	for (const review of [...reviews].sort(
-		(a, b) => (b.submitted_at ?? "").localeCompare(a.submitted_at ?? "") || b.id - a.id,
-	)) {
-		if (review.state === "PENDING" || !review.submitted_at) continue;
-		const name = login(review.user);
-		const key = name.toLowerCase();
-		if (key === pull.user?.login.toLowerCase() || byName.has(key)) continue;
-		byName.set(key, { name, state: review.state.toLowerCase() as ReviewState, team: false });
-	}
-	for (const user of pull.requested_reviewers)
-		byName.set(user.login.toLowerCase(), { name: user.login, state: "requested", team: false });
-	for (const team of pull.requested_teams)
-		byName.set(`team:${team.slug}`, { name: team.slug, state: "requested", team: true });
-	return [...byName.values()];
-}
-
-export function parsePullDetail(pull: unknown, issue: unknown, comments: unknown, reviews: unknown): PullDetail {
-	const p = pull as RestPull;
+export function parsePullDetail(r: PullReplies): PullDetail {
+	const p = r.pull as RestPull;
 	const crossOwner = p.head.label.split(":")[0]?.toLowerCase() !== p.base.label.split(":")[0]?.toLowerCase();
-	const reactions = (issue as { reactions?: Record<string, number | string> }).reactions;
+	const reviewers = parseReviewers(p, r.reviews as RestReview[]);
+	const checks = parseChecks(r.checkRuns, r.statuses);
+	const comments = parseComments(r.comments, p.html_url);
 	return {
-		number: p.number,
-		title: p.title,
+		...parseItem(p, (r.issue as { reactions?: Record<string, number | string> }).reactions),
 		state: pullState(p.merged ? "merged" : p.state, p.draft),
-		author: login(p.user),
-		createdAt: p.created_at,
-		url: p.html_url,
 		head: crossOwner ? p.head.label || p.head.ref : p.head.ref,
 		headSha: p.head.sha,
 		base: crossOwner ? p.base.label || p.base.ref : p.base.ref,
-		labels: p.labels.map(parseLabel),
-		assignees: p.assignees.map((a) => a.login),
-		milestone: p.milestone?.title ?? null,
-		body: p.body ?? "",
-		markdown: readerMarkdown(p.body ?? "", p.html_url),
-		reactions: parseReactions(reactions),
-		reviewers: reviewers(p, reviews as RestReview[]),
-		comments: parseComments(comments as unknown[], p.html_url),
+		merge: mergeInfo(p, r.repository as Record<string, unknown>, reviewers, checks),
+		timeline: pullTimeline(comments, r.events, r.reviews, r.inline, p.html_url),
+		checks,
+		reviewers,
 	};
 }
+
+/** Commit-dependent replies need the head SHA from the pull request itself. */
+export const pullHead = (pull: unknown): string => (pull as RestPull).head.sha;

@@ -31,7 +31,6 @@ test("one timeline read gives the issue's complete discussion and activity on th
 	});
 	const issue = await readIssue("cli/cli", 9789, "center");
 	expect(issue).toMatchObject({
-		number: 9789,
 		title: "`gh auth login --with-token` hangs",
 		state: "open",
 		author: "jtmcg",
@@ -45,7 +44,7 @@ test("one timeline read gives the issue's complete discussion and activity on th
 		],
 		url: "https://github.com/cli/cli/issues/9789",
 	});
-	expect(issue.body).toContain("gh auth login --with-token");
+	expect(issue.markdown).toContain("gh auth login --with-token");
 	// The same three comments the comments endpoint returns (ids, authors, times, reactions).
 	expect(issue.comments.map((c) => [c.id, c.author, c.createdAt])).toEqual([
 		[2426092653, "williammartin", "2024-10-21T09:17:22Z"],

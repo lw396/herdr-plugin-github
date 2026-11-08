@@ -1,6 +1,7 @@
 import { activityText, parseActivity } from "./activity.ts";
 import { type Comment, login, parseComment } from "./discussion.ts";
 import { readerMarkdown } from "./markdown.ts";
+import { type RestReview, submitted } from "./reviewers.ts";
 
 interface Event {
 	id: number;
@@ -13,13 +14,6 @@ interface Event {
 	label?: { name: string };
 	assignee?: { login: string };
 	commit_id?: string;
-}
-interface Review {
-	id: number;
-	user: { login: string } | null;
-	submitted_at: string | null;
-	state: string;
-	body: string | null;
 }
 interface Inline {
 	id: number;
@@ -54,8 +48,7 @@ export function pullTimeline(
 		verb: "commented",
 		discussion: [],
 	}));
-	for (const r of reviews as Review[]) {
-		if (!r.submitted_at || r.state === "PENDING") continue;
+	for (const r of (reviews as RestReview[]).filter(submitted)) {
 		const all = inline as Inline[];
 		// Replies may belong to a later review; keep the conversation beside its original code snippet.
 		const roots = all
@@ -132,50 +125,4 @@ export function pullTimeline(
 		});
 	}
 	return result.sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id - b.id);
-}
-export interface PullCheck {
-	id: string;
-	name: string;
-	status: string;
-	duration: string;
-	url: string;
-}
-interface CheckRun {
-	id: number;
-	name: string;
-	status: string;
-	conclusion: string | null;
-	started_at: string | null;
-	completed_at: string | null;
-	html_url: string;
-}
-interface Status {
-	id: number;
-	context: string;
-	state: string;
-	target_url: string | null;
-}
-export function parseChecks(pages: unknown[], statuses: unknown[]): PullCheck[] {
-	const checks = pages
-		.flatMap((p) => (p as { check_runs: CheckRun[] }).check_runs)
-		.map((c) => {
-			const seconds =
-				c.started_at && c.completed_at
-					? Math.max(0, Math.floor((Date.parse(c.completed_at) - Date.parse(c.started_at)) / 1000))
-					: null;
-			return {
-				id: `check-${c.id}`,
-				name: c.name,
-				status: c.conclusion ?? c.status,
-				duration: seconds === null ? "—" : `${Math.floor(seconds / 60)}m ${seconds % 60}s`,
-				url: c.html_url,
-			};
-		});
-	const seen = new Set<string>();
-	for (const s of statuses as Status[]) {
-		if (seen.has(s.context)) continue;
-		seen.add(s.context);
-		checks.push({ id: `status-${s.id}`, name: s.context, status: s.state, duration: "—", url: s.target_url ?? "" });
-	}
-	return checks;
 }
