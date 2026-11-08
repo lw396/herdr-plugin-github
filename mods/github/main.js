@@ -10359,6 +10359,27 @@ function parseFiles(data) {
   }));
 }
 
+// src/github/core/merge.ts
+function mergeInfo(p, r) {
+  const methods = ["merge", "squash", "rebase"].filter((m) => r[`allow_${m}_merge`] === true);
+  const reasons = {
+    dirty: "This branch has conflicts that must be resolved",
+    blocked: "Merging is blocked by branch protection rules (required checks or reviews)",
+    behind: "This branch is out-of-date with the base branch",
+    unknown: "Checking mergeability\u2026",
+    unstable: "Checks have not passed"
+  };
+  const reason = p.merged ? "Pull request successfully merged" : p.state !== "open" ? "Pull request is closed" : p.draft ? "This pull request is still a draft" : p.mergeable !== true ? reasons[p.mergeable_state ?? "unknown"] ?? "Checking mergeability\u2026" : p.mergeable_state !== "clean" && p.mergeable_state !== "has_hooks" ? reasons[p.mergeable_state ?? "unknown"] ?? `Merging is blocked: ${p.mergeable_state}` : methods.length === 0 ? "No merge methods are enabled" : null;
+  return {
+    methods,
+    reason,
+    sha: p.head.sha,
+    headRepo: p.head.repo?.full_name ?? null,
+    headRef: p.head.ref,
+    deletable: Boolean(p.merged && p.head.repo && p.head.ref !== p.head.repo.default_branch)
+  };
+}
+
 // src/github/core/pull-detail.ts
 function reviewers(pull, reviews) {
   const byName = /* @__PURE__ */ new Map();
@@ -10557,6 +10578,10 @@ async function readPull(repo, number, on) {
     api(`repos/${repo}/pulls/${number}/reviews?per_page=100`, { on, paginate: true })
   ]);
   const detail = parsePullDetail(pull, issue, comments, reviews);
+  detail.merge = mergeInfo(
+    pull,
+    await api(`repos/${repo}`, { on })
+  );
   const sha = pull.head.sha;
   const [events, inline, checks, statuses] = await Promise.all([
     api(`repos/${repo}/issues/${number}/timeline?per_page=100`, { on, paginate: true }),
@@ -10572,7 +10597,30 @@ async function readPull(repo, number, on) {
     detail.url
   );
   detail.checks = parseChecks(Array.isArray(checks) ? checks : [checks], statuses);
+  if (detail.merge?.reason?.startsWith("Merging is blocked by")) {
+    const reasons = [];
+    if (detail.reviewers.some((r) => r.state === "changes_requested")) reasons.push("Changes requested");
+    if (detail.reviewers.some((r) => r.state === "requested")) reasons.push("Review required");
+    if (detail.checks.some((c) => /fail|pending|queued|progress|error/i.test(c.status)))
+      reasons.push("Checks have not passed");
+    if (reasons.length) detail.merge.reason += ": " + reasons.join("; ");
+  }
   return detail;
+}
+async function mergePull(repo, number, method, sha, on) {
+  const result = await api(`repos/${repo}/pulls/${number}/merge`, {
+    on,
+    method: "PUT",
+    rawFields: { merge_method: method, sha }
+  });
+  if (!result.merged) throw new Error(result.message);
+}
+async function deletePullBranch(info, on) {
+  if (!info.deletable || !info.headRepo) throw new Error("This branch cannot be deleted");
+  await api(`repos/${info.headRepo}/git/refs/heads/${info.headRef.split("/").map(encodeURIComponent).join("/")}`, {
+    on,
+    method: "DELETE"
+  });
 }
 async function readPullFiles(repo, number, on) {
   const files = parseFiles(await api(`repos/${repo}/pulls/${number}/files?per_page=100`, { on, paginate: true }));
@@ -11667,6 +11715,7 @@ var Panel = class {
    */
   receive(cx) {
     const notices = this.notices.take();
+    if (notices.some((n) => n.pull)) this.pulls.load(cx, true);
     const reviews = notices.filter((n) => n.review);
     for (const notice of reviews) pullReviewed(notice.repo, notice.review.on);
     const ready = this.ready();
@@ -13079,6 +13128,10 @@ var REVIEWS = {
   dismissed: { label: "Review dismissed", icon: "\u2212", color: "dim" }
 };
 var Pull = class {
+  method = null;
+  confirming = false;
+  writing = false;
+  writeFailure = "";
   ref = null;
   entry = null;
   files = null;
@@ -13097,6 +13150,9 @@ var Pull = class {
     this.host = host;
   }
   show(cx, ref) {
+    this.method = null;
+    this.confirming = false;
+    this.writeFailure = "";
     this.metadata.expanded = false;
     this.ref = ref;
     this.entry = null;
@@ -13238,6 +13294,7 @@ var Pull = class {
       ],
       [
         postCard("pull-body", pull, "opened this pull request", onLink),
+        this.mergeArea(pull),
         // Discussion metadata is fetched once per PR; report its progress/failure once, not per thread.
         ...this.discussions?.loading || this.discussions?.failure ? [this.discussions.status()] : [],
         ...(this.discussions?.published.timeline(pull.timeline ?? []) ?? pull.timeline ?? []).map((item) => {
@@ -13267,6 +13324,77 @@ var Pull = class {
       ],
       this.metadata
     );
+  }
+  mergeArea(pull) {
+    const info = pull.merge;
+    const area = v_flex11().gap(10).child(div15().font_semibold().child("Merge"));
+    if (!info) return area;
+    area.child(quiet(info.reason ?? "This branch has no conflicts with the base branch"));
+    if (this.writeFailure) area.child(quiet(this.writeFailure));
+    const act = (cx, remove) => {
+      const ref = this.ref, place = detailLocation(this.host.reader);
+      if (!ref || !place || this.writing) return;
+      this.writing = true;
+      cx.spawn(async (cx2) => {
+        try {
+          if (remove) {
+            await deletePullBranch(info, place.on);
+            info.deletable = false;
+          } else await mergePull(ref.repo, ref.number, this.method ?? info.methods[0], info.sha, place.on);
+          announce({ repo: ref.repo, number: ref.number, pull: true });
+          if (this.ref === ref) {
+            this.confirming = false;
+            this.writeFailure = "";
+            if (!remove) this.load(cx2);
+          }
+        } catch (e) {
+          if (this.ref === ref) this.writeFailure = failureOf(e).message;
+        } finally {
+          this.writing = false;
+          cx2.notify();
+        }
+      });
+    };
+    if (this.writing) return area.child(quiet("Updating pull request\u2026"));
+    if (info.deletable)
+      area.child(button("delete-branch", "Delete branch", "Delete remote branch", (_e, cx) => act(cx, true)));
+    if (!info.reason) {
+      for (const method of info.methods)
+        area.child(
+          button(
+            `method-${method}`,
+            `${(this.method ?? info.methods[0]) === method ? "\u25CF" : "\u25CB"} ${method === "merge" ? "Create a merge commit" : method === "squash" ? "Squash and merge" : "Rebase and merge"}`,
+            "Merge method",
+            (_e, cx) => {
+              this.method = method;
+              this.confirming = false;
+              cx.notify();
+            }
+          )
+        );
+      area.child(
+        button(
+          "merge-confirm",
+          this.confirming ? "Confirm Merge" : "Merge Pull Request",
+          "Merge pull request",
+          (_e, cx) => {
+            if (this.confirming) act(cx, false);
+            else {
+              this.confirming = true;
+              cx.notify();
+            }
+          }
+        )
+      );
+      if (this.confirming)
+        area.child(
+          button("merge-cancel", "Cancel", "Cancel merge", (_e, cx) => {
+            this.confirming = false;
+            cx.notify();
+          })
+        );
+    }
+    return area;
   }
   reviewers(pull) {
     const t = colors();

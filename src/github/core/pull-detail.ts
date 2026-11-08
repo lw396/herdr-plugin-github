@@ -13,6 +13,7 @@ export interface Reviewer {
 }
 
 export interface PullDetail {
+	merge?: import("./merge.ts").MergeInfo;
 	number: number;
 	title: string;
 	state: PullState;

@@ -166,6 +166,7 @@ export class Panel implements Role {
 	 */
 	private receive(cx: Context): void {
 		const notices = this.notices.take();
+		if (notices.some((n) => n.pull)) this.pulls.load(cx, true);
 		const reviews = notices.filter((n) => n.review);
 		for (const notice of reviews) known.pullReviewed(notice.repo, notice.review!.on);
 		const ready = this.ready();
