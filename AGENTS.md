@@ -5,7 +5,11 @@ and its sub-issues define the plan and order; use the tracker guide below before
 
 ## Change rules
 
-- Edit `src/github/`; `mods/github/` is generated, installable output. Rebuild and commit it with code changes.
+- Edit `src/github/`; `github/mods/github/` is generated, installable output. Rebuild and commit it with code
+  changes.
+- `github/` is the folder shared at herdr.dev/layouts, laid out like a Herdr app home. Keep `github/RECIPE.md`
+  true when what the person sees or the layout changes, and `github/preview.png` current when the UI changes
+  visibly.
 - Folders go feature first, then layer (ADR 0008): each feature folder keeps pure logic in `core/`, external
   operations in `io/`, and UI in `views/`; `roles/` assembles them and `main.ts` selects the role.
   `test/layers.test.ts` defines permitted imports: the layers, the feature order, and their exceptions.

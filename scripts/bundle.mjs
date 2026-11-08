@@ -3,7 +3,7 @@
 // entry and output, so it is bundled exactly as the mod is.
 import { build, context } from "esbuild";
 
-const [entry = "src/github/main.ts", outfile = "mods/github/main.js"] = process.argv
+const [entry = "src/github/main.ts", outfile = "github/mods/github/main.js"] = process.argv
 	.slice(2)
 	.filter((arg) => !arg.startsWith("--"));
 const options = {

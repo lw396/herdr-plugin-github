@@ -10,7 +10,7 @@ the repository you are working in, right beside your terminals. The interface fo
 All GitHub access goes through the GitHub CLI (`gh`) on the machine that hosts the folder, so local
 and remote folders each use their own account and credentials.
 
-![A cli/cli pull request open in a Herdr tab, with its description, activity timeline and metadata, beside the GitHub sidebar listing open pull requests](docs/images/screenshot.png)
+![A cli/cli pull request open in a Herdr tab, with its description, activity timeline and metadata, beside the GitHub sidebar listing open pull requests](github/preview.png)
 
 ## Features
 
@@ -56,13 +56,14 @@ your local account.
 
 ## Installation
 
-Copy these into your Herdr app home:
+The layout is listed at [herdr.dev/layouts](https://herdr.dev/layouts): ask the agent in Herdr to add
+it, or copy these into your Herdr app home yourself:
 
-| From this repository  | To                                        |
-| --------------------- | ----------------------------------------- |
-| `mods/github/`        | `~/.config/herdr-app/mods/github/`        |
-| `mods/tabs-github/`   | `~/.config/herdr-app/mods/tabs-github/`   |
-| `layouts/github.json` | `~/.config/herdr-app/layouts/github.json` |
+| From this repository         | To                                        |
+| ---------------------------- | ----------------------------------------- |
+| `github/mods/github/`        | `~/.config/herdr-app/mods/github/`        |
+| `github/mods/tabs-github/`   | `~/.config/herdr-app/mods/tabs-github/`   |
+| `github/layouts/github.json` | `~/.config/herdr-app/layouts/github.json` |
 
 Then switch to the included layout:
 
@@ -83,8 +84,9 @@ repository and open it.
 
 ## Development
 
-The source lives in `src/github/`. `mods/github/` is the bundled output and is committed, so
-installing needs neither Node.js nor npm packages.
+The source lives in `src/github/`. `github/mods/github/` is the bundled output and is committed, so
+installing needs neither Node.js nor npm packages. [`github/`](github/) is the folder shared at
+herdr.dev, with its [`RECIPE.md`](github/RECIPE.md).
 
 ```sh
 bun install

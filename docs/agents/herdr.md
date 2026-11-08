@@ -31,7 +31,7 @@ The target machine needs gh with this flag. Preserve its error rather than falli
 
 ## Layout and upgrades
 
-`mods/tabs-github/` and `layouts/github.json` adapt Herdr 0.1.13's shipped `tabs` and `main` layout.
+`github/mods/tabs-github/` and `github/layouts/github.json` adapt Herdr 0.1.13's shipped `tabs` and `main` layout.
 Keep changes small and mark tab-mod changes `herdr-plugin-github`. The layout renames the tab bar,
 adds GitHub to `panel-body`, and selects the GitHub pane-header role.
 `src/github/roles/pane.ts` only adds GitHub branding; preserve terminal headers and controls.
@@ -41,8 +41,9 @@ and reapply these adaptations. Theme picks and panel sizes are per-layout; `gith
 
 ## App validation
 
-The app runs on the person's Mac; this dev server has no display. Mutagen mirrors `mods/github/`,
-`mods/tabs-github/` and `layouts/github.json` into the Mac's app home, where Herdr hot-reloads them.
+The app runs on the person's Mac; this dev server has no display. Mutagen mirrors `github/mods/github/`,
+`github/mods/tabs-github/` and `github/layouts/github.json` into the Mac's app home, where Herdr hot-reloads
+them.
 Ask for `herdr-app status` or a screenshot: a failed save can leave the previous build running.
 A layout error appears in `layouts/github.error` in the app home.
 

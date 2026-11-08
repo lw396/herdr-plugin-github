@@ -45,7 +45,7 @@ test("an absent sidebar does not poll", () => {
 });
 
 test("the shipped layout's GitHub block is the slot the sidebar watches", () => {
-	const layoutFile = JSON.parse(readFileSync(new URL("../../../layouts/github.json", import.meta.url), "utf8"));
+	const layoutFile = JSON.parse(readFileSync(new URL("../../../github/layouts/github.json", import.meta.url), "utf8"));
 	const blocks: { id?: string; content?: { mod?: string; props?: { role?: string } } }[] = [];
 	const walk = (node: unknown): void => {
 		if (!node || typeof node !== "object") return;

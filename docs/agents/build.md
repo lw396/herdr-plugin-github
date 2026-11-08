@@ -3,17 +3,20 @@
 ## Source and output
 
 `src/github/` contains the TypeScript, manifest and assets. `scripts/build.sh` and `scripts/bundle.mjs`
-bundle the entry point as unminified ESM and copy assets. `tsc` checks types only.
+bundle the entry point as unminified ESM into `github/mods/github/` and copy assets. `tsc` checks types only.
+`github/` is laid out like a Herdr app home so it can be shared: the layout, both mods, `RECIPE.md` and
+`preview.png`.
 The watch build copies assets at startup; restart it after an asset change.
 
-Import source siblings as `./x.ts`. Reference UI assets as `mods/github/assets/<file>`.
+Import source siblings as `./x.ts`. Reference UI assets as `mods/github/assets/<file>`: Herdr resolves the path
+from the app home, not from this repository.
 Keep TypeScript erasable: no enums, namespaces or constructor parameter properties.
 
 ## Formatting and lint
 
 Biome (`biome.json`) formats and lints TypeScript, JavaScript and JSON; `bun run lint` (part of `verify`)
-checks, and `bun run format` rewrites. Do not hand-format. Markdown, generated output (`mods/`, `types/`),
-Herdr's own files (`layouts/`, `docs/`) and the real gh replies in `test/fixtures/` are excluded:
+checks, and `bun run format` rewrites. Do not hand-format. Markdown, generated output (`github/mods/`, `types/`),
+Herdr's own files (`github/layouts/`, `docs/`) and the real gh replies in `test/fixtures/` are excluded:
 keep them as written.
 
 ## Dependency constraints

@@ -38,8 +38,8 @@ test("the review artifact includes staged, unstaged and new files, but not gener
 	run("git", "add", "tracked.txt");
 	writeFileSync(join(cwd, "tracked.txt"), "staged\nunstaged\n");
 	writeFileSync(join(cwd, "new file.txt"), "new source\n");
-	mkdirSync(join(cwd, "mods/github"), { recursive: true });
-	writeFileSync(join(cwd, "mods/github/main.js"), "generated\n");
+	mkdirSync(join(cwd, "github/mods/github"), { recursive: true });
+	writeFileSync(join(cwd, "github/mods/github/main.js"), "generated\n");
 	writeFileSync(join(cwd, "bun.lock"), "lockfile\n");
 	const result = run("sh", "scripts/review-patch.sh", "HEAD", output);
 	expect(result.exitCode).toBe(0);

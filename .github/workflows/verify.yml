@@ -27,5 +27,5 @@ jobs:
           echo "$RUNNER_TEMP/herdr-app" >> "$GITHUB_PATH"
       - run: bun install --frozen-lockfile
       - run: bun run verify
-      - name: Committed mods/github matches the source
-        run: git diff --exit-code --stat -- mods/github
+      - name: Committed github/mods/github matches the source
+        run: git diff --exit-code --stat -- github/mods/github
