@@ -145,6 +145,11 @@ function explain(stderr) {
 }
 
 // src/github/core/account.ts
+var ACCOUNT_PROBLEM = {
+  missing: "gh is not installed",
+  auth: "Not signed in to gh",
+  error: "gh is not working"
+};
 function describeAccount(account3) {
   const { on, status: status2 } = account3;
   if (status2.ok) return { ok: true, text: `signed in as ${status2.user}${on ? ` on ${on}` : ""}` };
@@ -235,13 +240,12 @@ function listNotice(s) {
   if (s.issuesEnabled === false) return `Issues are turned off for ${repo}.`;
   return null;
 }
-var PROBLEM = { missing: "gh is not installed", auth: "Not signed in to gh", error: "gh is not working" };
 var ago = (ms) => ms < 6e4 ? "just now" : `${Math.floor(ms / 6e4)}m ago`;
 function footerStatus(s, now) {
   const machine = s.on ?? "this computer";
   if (!s.account) return { tone: "pending", account: "Checking gh\u2026", machine, sync: null };
   const { status: status2 } = s.account;
-  if (!status2.ok) return { tone: "problem", account: PROBLEM[status2.reason], machine, sync: null };
+  if (!status2.ok) return { tone: "problem", account: ACCOUNT_PROBLEM[status2.reason], machine, sync: null };
   if (!s.polling || !s.failed) return { tone: "ok", account: status2.user, machine, sync: null };
   const last = s.checkedAt === null ? null : ago(Math.max(0, now - s.checkedAt));
   const sync = last ? `Check failed \xB7 last ok ${last}` : `Check failed \xB7 retrying every ${POLL_SECONDS}s`;
@@ -10164,45 +10168,6 @@ async function setIssueState(repo, number, state, on) {
   );
 }
 
-// src/github/core/cache.ts
-var Cache = class {
-  limit;
-  entries = /* @__PURE__ */ new Map();
-  constructor(limit) {
-    this.limit = limit;
-  }
-  keys() {
-    return [...this.entries.keys()];
-  }
-  has(key) {
-    return this.entries.has(key);
-  }
-  /** The value, fresh or not; marks it recently used. */
-  get(key) {
-    const entry = this.entries.get(key);
-    if (!entry) return void 0;
-    this.entries.delete(key);
-    this.entries.set(key, entry);
-    return entry.value;
-  }
-  /** Whether it was set less than `maxAge` ms before `now`. */
-  fresh(key, maxAge, now) {
-    const entry = this.entries.get(key);
-    return entry !== void 0 && now - entry.at < maxAge;
-  }
-  delete(key) {
-    this.entries.delete(key);
-  }
-  clear() {
-    this.entries.clear();
-  }
-  set(key, value, now) {
-    this.entries.delete(key);
-    this.entries.set(key, { value, at: now });
-    while (this.entries.size > this.limit) this.entries.delete(this.entries.keys().next().value);
-  }
-};
-
 // src/github/core/pulls.ts
 function pullState(state, draft2) {
   return state === "open" && draft2 ? "draft" : state;
@@ -10289,6 +10254,92 @@ function localPage(all2, count) {
   const more = count < all2.length;
   return { total: all2.length, more, cursor: more ? String(count) : null, rows: all2.slice(0, count) };
 }
+
+// src/github/core/cache.ts
+var Cache = class {
+  limit;
+  entries = /* @__PURE__ */ new Map();
+  constructor(limit) {
+    this.limit = limit;
+  }
+  keys() {
+    return [...this.entries.keys()];
+  }
+  /** The value, fresh or not; marks it recently used. */
+  get(key) {
+    const entry = this.entries.get(key);
+    if (!entry) return void 0;
+    this.entries.delete(key);
+    this.entries.set(key, entry);
+    return entry.value;
+  }
+  /** Whether it was set less than `maxAge` ms before `now`. */
+  fresh(key, maxAge, now) {
+    const entry = this.entries.get(key);
+    return entry !== void 0 && now - entry.at < maxAge;
+  }
+  delete(key) {
+    this.entries.delete(key);
+  }
+  clear() {
+    this.entries.clear();
+  }
+  set(key, value, now) {
+    this.entries.delete(key);
+    this.entries.set(key, { value, at: now });
+    while (this.entries.size > this.limit) this.entries.delete(this.entries.keys().next().value);
+  }
+};
+
+// src/github/io/facts.ts
+var Facts = class {
+  cache;
+  asking = /* @__PURE__ */ new Map();
+  fresh;
+  /** Only answers `keep` accepts are kept. */
+  keep;
+  constructor(limit, fresh, keep = () => true) {
+    this.cache = new Cache(limit);
+    this.fresh = fresh;
+    this.keep = keep;
+  }
+  peek(key) {
+    return this.cache.get(key);
+  }
+  /** The kept answer when fresh (unless forced), else the ask already out (unless forced), else a new ask. */
+  look(key, force, ask) {
+    const kept = this.cache.get(key);
+    if (!force && kept !== void 0 && this.cache.fresh(key, this.fresh, Date.now())) return Promise.resolve(kept);
+    const pending = this.asking.get(key);
+    if (pending && !force) return pending;
+    const p = ask().then((value) => {
+      if (this.asking.get(key) === p && this.keep(value)) this.cache.set(key, value, Date.now());
+      return value;
+    }).finally(() => {
+      if (this.asking.get(key) === p) this.asking.delete(key);
+    });
+    this.asking.set(key, p);
+    return p;
+  }
+  /** Keeps `value` as the answer now (a page loaded by other means: Load more). */
+  put(key, value) {
+    this.cache.set(key, value, Date.now());
+  }
+  /** Shows what `change` returns for a kept key until asked again (undefined: untouched); an answer still out is dropped. */
+  patch(change) {
+    for (const key of this.cache.keys()) {
+      const value = this.cache.get(key);
+      const changed = value === void 0 ? void 0 : change(key, value);
+      if (changed === void 0) continue;
+      this.cache.set(key, changed, -Infinity);
+      this.asking.delete(key);
+    }
+  }
+  clear() {
+    this.cache.clear();
+    this.asking.clear();
+  }
+};
 
 // src/github/io/git.ts
 import { exec as exec3 } from "herdr";
@@ -10770,63 +10821,33 @@ async function localPulls(remote2, { branches, head }, on) {
 }
 
 // src/github/io/known.ts
-function facts(limit, fresh, keep) {
-  const cache = new Cache(limit), asking = /* @__PURE__ */ new Map();
-  return {
-    peek: (key) => cache.get(key),
-    /** The kept answer when fresh (unless forced), else the ask already out (unless forced), else a new ask. */
-    look(key, force, ask) {
-      if (!force && cache.fresh(key, fresh, Date.now())) return Promise.resolve(cache.get(key));
-      const pending = asking.get(key);
-      if (pending && !force) return pending;
-      const p = ask().then((value) => {
-        if (asking.get(key) === p && keep(value)) cache.set(key, value, Date.now());
-        return value;
-      }).finally(() => {
-        if (asking.get(key) === p) asking.delete(key);
-      });
-      asking.set(key, p);
-      return p;
-    },
-    /** Keeps `value` as the answer now (a page loaded by other means: Load more). */
-    put(key, value) {
-      cache.set(key, value, Date.now());
-    },
-    /** Shows what `change` returns for a kept key until asked again (undefined: untouched); an answer still out is dropped. */
-    patch(change) {
-      for (const key of cache.keys()) {
-        const changed = change(key, cache.get(key));
-        if (changed === void 0) continue;
-        cache.set(key, changed, -Infinity);
-        asking.delete(key);
-      }
-    },
-    clear() {
-      cache.clear();
-      asking.clear();
-    }
-  };
-}
-var accounts = facts(16, 60 * 6e4, (a) => a.status.ok);
-var remotes = facts(64, 5 * 6e4, (r) => r !== null);
+var accounts = new Facts(16, 60 * 6e4, (a) => a.status.ok);
+var remotes = new Facts(64, 5 * 6e4, (r) => r !== null);
 var folderKey = ({ on, cwd }) => JSON.stringify([on, cwd]);
 var account2 = (on, force = false) => accounts.look(JSON.stringify(on), force && !accounts.peek(JSON.stringify(on)), () => account(on));
 var peekAccount = (on) => accounts.peek(JSON.stringify(on));
 var remote = (folder2, force = false) => remotes.look(folderKey(folder2), force, () => githubRemote(folder2));
 var peekRemote = (folder2) => remotes.peek(folderKey(folder2));
-var groupKey = (kind, r) => JSON.stringify([kind, r.on, r.remote.host, r.remote.owner, r.remote.repo, r.login]);
-var groupOf = (key) => {
-  const [kind, , host, owner, repo, login2] = JSON.parse(key);
-  return { kind: kind ?? "", repo: `${host}/${owner}/${repo}`.toLowerCase(), login: login2 ?? "" };
-};
+var where = (kind, r, cwd = null) => ({
+  kind,
+  on: r.on,
+  repo: `${r.remote.owner}/${r.remote.repo}`.toLowerCase(),
+  login: r.login,
+  cwd
+});
+var groupKey = (w) => JSON.stringify([w.kind, w.on, w.repo, w.login, w.cwd]);
+function groupOf(key) {
+  const [kind, on, repo, login2, cwd] = JSON.parse(key);
+  return { kind, on, repo, login: login2, cwd };
+}
 function pagedGroups(ask) {
-  const kept = facts(64, 6e4, () => true);
+  const kept = new Facts(64, 6e4);
   return {
     kept,
-    look: (kind, r, force = false) => kept.look(groupKey(kind, r), force, () => ask(kind, r, null)),
-    peek: (kind, r) => kept.peek(groupKey(kind, r)),
+    look: (kind, r, force = false) => kept.look(groupKey(where(kind, r)), force, () => ask(kind, r, null)),
+    peek: (kind, r) => kept.peek(groupKey(where(kind, r))),
     async more(kind, r, loaded) {
-      const key = groupKey(kind, r);
+      const key = groupKey(where(kind, r));
       const both = appendPage(loaded, await ask(kind, r, loaded.cursor));
       if (kept.peek(key) === loaded) kept.put(key, both);
       return both;
@@ -10843,15 +10864,15 @@ var issueGroup = issueGroups.look;
 var peekIssueGroup = issueGroups.peek;
 var moreIssues = issueGroups.more;
 function issueChanged(change) {
-  const repo = `github.com/${change.repo}`.toLowerCase();
+  const repo = change.repo.toLowerCase();
   issueGroups.kept.patch((key, group) => {
     const g = groupOf(key);
     return g.repo === repo ? applyChange(g.kind, group, change, g.login) : void 0;
   });
 }
-var localMatches = facts(64, 0, () => true);
+var localMatches = new Facts(64, 0);
 var localShown = /* @__PURE__ */ new WeakMap();
-var localKey = (r) => JSON.stringify([groupKey("local", r), r.cwd]);
+var localKey = (r) => groupKey(where("local", r, r.cwd));
 function showLocal(rows, count) {
   const page = localPage(rows, count);
   localShown.set(rows, page);
@@ -10868,15 +10889,13 @@ async function localGroup(r, force) {
   });
   return localShown.get(rows) ?? showLocal(rows, PAGE);
 }
-function pullReviewed(repo, on) {
+function pullsChanged(repo, on) {
   const matches = (key) => {
-    const parts = JSON.parse(key);
-    return parts[1] === on && groupOf(key).repo === `github.com/${repo}`.toLowerCase();
+    const w = groupOf(key);
+    return w.repo === repo.toLowerCase() && (on === void 0 || w.on === on);
   };
   pullGroups.kept.patch((key, group) => matches(key) ? group : void 0);
-  localMatches.patch(
-    (key, value) => matches(JSON.parse(key)[0] ?? "") ? { ...value, signature: "" } : void 0
-  );
+  localMatches.patch((key, value) => matches(key) ? { ...value, signature: "" } : void 0);
 }
 var pullGroup = (kind, r, force = false) => kind === "local" ? localGroup(r, force) : pullGroups.look(kind, r, force);
 function peekPullGroup(kind, r) {
@@ -10952,24 +10971,17 @@ import { div as div4, svg as svg4 } from "gpui-kit";
 
 // src/github/io/preview.ts
 var Previews = class {
-  cache = new Cache(100);
-  pending = /* @__PURE__ */ new Map();
+  kept = new Facts(100, 6e4);
   peek(ref, on, login2) {
-    return this.cache.get(previewKey(ref, on, login2));
+    return this.kept.peek(previewKey(ref, on, login2));
   }
   load(ref, on, login2) {
-    const key = previewKey(ref, on, login2);
-    if (this.cache.fresh(key, 6e4, Date.now())) return Promise.resolve(this.cache.get(key));
-    const pending = this.pending.get(key);
-    if (pending) return pending;
     const path = `repos/${ref.repo}/${ref.kind === "pr" ? "pulls" : "issues"}/${ref.number}`;
-    const request = api(path, { on }).then((data) => {
-      const preview = parsePreview(data, ref.kind);
-      this.cache.set(key, preview, Date.now());
-      return preview;
-    }).finally(() => this.pending.delete(key));
-    this.pending.set(key, request);
-    return request;
+    return this.kept.look(
+      previewKey(ref, on, login2),
+      false,
+      async () => parsePreview(await api(path, { on }), ref.kind)
+    );
   }
 };
 
@@ -11695,7 +11707,10 @@ var Panel = class {
   // undefined: not known yet for this place.
   account;
   remote;
+  /** The place could not be read (its git remote): said in the list's place. */
   failure;
+  /** The last list-change check failed: said in the footer, while the rows already shown stay. */
+  checkFailed = false;
   loading = false;
   /** The tab shown; each keeps its own state (folded groups and pages) while the other is shown. */
   tab = "issues";
@@ -11743,9 +11758,9 @@ var Panel = class {
         change = await listChanges(`${r.remote.owner}/${r.remote.repo}`, request.etag, r.on);
         if (!current()) return;
         this.checkedAt = Date.now();
-        this.failure = void 0;
-      } catch (e) {
-        if (current()) this.failure = failureOf(e);
+        this.checkFailed = false;
+      } catch {
+        if (current()) this.checkFailed = true;
       } finally {
         if (current()) {
           if (change?.changed || refresh) this.issues.load(cx2, true);
@@ -11763,26 +11778,27 @@ var Panel = class {
   }
   /** Shows what is known about the focused place at once, then asks for what is stale (all of it unless it only moved). */
   refresh(cx, why) {
-    const where = location(), run4 = ++this.latest, current = () => run4 === this.latest, context = JSON.stringify(where), force = why !== "moved";
+    const where2 = location(), run4 = ++this.latest, current = () => run4 === this.latest, context = JSON.stringify(where2), force = why !== "moved";
     if (context !== this.context) {
       this.issues.hovered = this.pulls.hovered = null;
       this.checkedAt = null;
     }
     this.context = context;
     this.poll.sync(context, true);
-    this.account = peekAccount(where.on);
-    this.remote = peekRemote(where);
+    this.account = peekAccount(where2.on);
+    this.remote = peekRemote(where2);
     this.failure = void 0;
+    this.checkFailed = false;
     this.issues.show();
     this.pulls.show();
     this.loading = true;
     cx.spawn(async (cx2) => {
       try {
         const [, remote2] = await Promise.all([
-          account2(where.on, force).then((a) => {
+          account2(where2.on, force).then((a) => {
             if (current()) this.account = a;
           }),
-          remote(where, force)
+          remote(where2, force)
         ]);
         if (!current()) return;
         this.remote = remote2;
@@ -11803,15 +11819,15 @@ var Panel = class {
    */
   receive(cx) {
     const notices = this.notices.take();
-    if (notices.some((n) => n.pull)) this.pulls.load(cx, true);
-    const reviews = notices.filter((n) => n.review);
-    for (const notice of reviews) pullReviewed(notice.repo, notice.review.on);
     const ready = this.ready();
-    if (ready && this.isVisible() && this.tab === "prs" && reviews.some(
-      (n) => n.review?.on === ready.on && n.repo.toLowerCase() === `${ready.remote.owner}/${ready.remote.repo}`.toLowerCase()
-    )) {
-      this.pulls.load(cx, true);
+    let shownPullsChanged = false;
+    for (const n of notices) {
+      if (!n.pull && !n.review) continue;
+      const on = n.pull ? void 0 : n.review?.on;
+      pullsChanged(n.repo, on);
+      shownPullsChanged ||= ready !== null && (on === void 0 || on === ready.on) && n.repo.toLowerCase() === `${ready.remote.owner}/${ready.remote.repo}`.toLowerCase();
     }
+    if (shownPullsChanged && this.isVisible() && this.tab === "prs") this.pulls.load(cx, true);
     const changes2 = notices.flatMap((n) => n.state ? [n.state] : []);
     if (changes2.length === 0) return;
     changes2.forEach(issueChanged);
@@ -11833,15 +11849,15 @@ var Panel = class {
   render(cx) {
     this.details.deliver();
     this.receive(cx);
-    const where = location();
+    const where2 = location();
     const visible = this.isVisible();
     if (!visible) this.poll.sync(this.context, false);
     else if (!this.poll.shown) this.refresh(cx, "shown");
-    else if (JSON.stringify(where) !== this.context) this.refresh(cx, "moved");
+    else if (JSON.stringify(where2) !== this.context) this.refresh(cx, "moved");
     const t = colors();
     const overlay = props2()?.overlay;
     const noRemote = this.remote === null && !(this.account && !this.account.status.ok);
-    return v_flex5().id("github").size_full().min_h(0).overflow_hidden().bg(t.background).text_color(t.foreground).text_size(13).when(!overlay, (el) => el.rounded(10).border_1().border_color(t.border)).child(this.header(overlay, where.cwd ?? "no folder")).when(noRemote, (el) => el.child(this.noRemote(where.cwd))).when(!noRemote, (el) => el.child(this.tabs()).child(this.list(cx))).child(this.statusCard(where.on, where.cwd));
+    return v_flex5().id("github").size_full().min_h(0).overflow_hidden().bg(t.background).text_color(t.foreground).text_size(13).when(!overlay, (el) => el.rounded(10).border_1().border_color(t.border)).child(this.header(overlay, where2.cwd ?? "no folder")).when(noRemote, (el) => el.child(this.noRemote(where2.cwd))).when(!noRemote, (el) => el.child(this.tabs()).child(this.list(cx))).child(this.statusCard(where2.on, where2.cwd));
   }
   /** The repository, then ↻ (Herdr's own spinner while anything loads, as its tab bar shows a working agent). */
   header(overlay, context) {
@@ -11862,7 +11878,7 @@ var Panel = class {
         account: this.account,
         on,
         checkedAt: this.checkedAt,
-        failed: this.failure !== void 0 && this.ready() !== null,
+        failed: this.checkFailed && this.ready() !== null,
         polling: this.ready() !== null
       },
       Date.now()

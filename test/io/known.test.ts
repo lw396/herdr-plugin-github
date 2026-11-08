@@ -40,7 +40,7 @@ test("a submitted review invalidates PR lists only for that repository machine, 
 	for (const on of [null, "center"]) machine(on, { [command]: { stdout: fixture("pulls-all-plugin.json") } });
 	await known.pullGroup("all", at(remote, "lw396", "center"));
 	await known.pullGroup("all", at(remote, "lw396", null));
-	known.pullReviewed("lw396/herdr-plugin-github", "center");
+	known.pullsChanged("lw396/herdr-plugin-github", "center");
 	expect(execCalls()).toHaveLength(2);
 	machine("center", {
 		[command]: {

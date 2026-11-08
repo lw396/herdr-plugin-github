@@ -1,6 +1,6 @@
 // What the sidebar says besides its rows: a problem in the list's place, a folder without a repository,
 // and the footer's gh account and list checks (ADR 0003, 0006).
-import { type Account, describeAccount } from "./account.ts";
+import { ACCOUNT_PROBLEM, type Account, describeAccount } from "./account.ts";
 import type { Failure } from "./gh.ts";
 import type { RemoteRepo } from "./remote.ts";
 
@@ -60,15 +60,13 @@ export interface FooterStatus {
 	sync: string | null;
 }
 
-const PROBLEM = { missing: "gh is not installed", auth: "Not signed in to gh", error: "gh is not working" } as const;
-
 const ago = (ms: number): string => (ms < 60_000 ? "just now" : `${Math.floor(ms / 60_000)}m ago`);
 
 export function footerStatus(s: SyncState, now: number): FooterStatus {
 	const machine = s.on ?? "this computer";
 	if (!s.account) return { tone: "pending", account: "Checking gh…", machine, sync: null };
 	const { status } = s.account;
-	if (!status.ok) return { tone: "problem", account: PROBLEM[status.reason], machine, sync: null };
+	if (!status.ok) return { tone: "problem", account: ACCOUNT_PROBLEM[status.reason], machine, sync: null };
 	if (!s.polling || !s.failed) return { tone: "ok", account: status.user, machine, sync: null };
 	const last = s.checkedAt === null ? null : ago(Math.max(0, now - s.checkedAt));
 	const sync = last ? `Check failed · last ok ${last}` : `Check failed · retrying every ${POLL_SECONDS}s`;

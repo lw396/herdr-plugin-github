@@ -37,7 +37,10 @@ export class Panel implements Role {
 	// undefined: not known yet for this place.
 	private account: Account | undefined;
 	private remote: RemoteRepo | null | undefined;
+	/** The place could not be read (its git remote): said in the list's place. */
 	private failure: Failure | undefined;
+	/** The last list-change check failed: said in the footer, while the rows already shown stay. */
+	private checkFailed = false;
 	private loading = false;
 	/** The tab shown; each keeps its own state (folded groups and pages) while the other is shown. */
 	private tab: SidebarTab = "issues";
@@ -90,9 +93,9 @@ export class Panel implements Role {
 				change = await listChanges(`${r.remote.owner}/${r.remote.repo}`, request.etag, r.on);
 				if (!current()) return;
 				this.checkedAt = Date.now();
-				this.failure = undefined;
-			} catch (e) {
-				if (current()) this.failure = gh.failureOf(e);
+				this.checkFailed = false;
+			} catch {
+				if (current()) this.checkFailed = true;
 			} finally {
 				if (current()) {
 					if (change?.changed || refresh) this.issues.load(cx, true);
@@ -134,6 +137,7 @@ export class Panel implements Role {
 		this.account = known.peekAccount(where.on);
 		this.remote = known.peekRemote(where);
 		this.failure = undefined;
+		this.checkFailed = false;
 		this.issues.show();
 		this.pulls.show();
 		this.loading = true;
@@ -166,22 +170,19 @@ export class Panel implements Role {
 	 */
 	private receive(cx: Context): void {
 		const notices = this.notices.take();
-		if (notices.some((n) => n.pull)) this.pulls.load(cx, true);
-		const reviews = notices.filter((n) => n.review);
-		for (const notice of reviews) known.pullReviewed(notice.repo, notice.review!.on);
 		const ready = this.ready();
-		if (
-			ready &&
-			this.isVisible() &&
-			this.tab === "prs" &&
-			reviews.some(
-				(n) =>
-					n.review?.on === ready.on &&
-					n.repo.toLowerCase() === `${ready.remote.owner}/${ready.remote.repo}`.toLowerCase(),
-			)
-		) {
-			this.pulls.load(cx, true);
+		let shownPullsChanged = false;
+		for (const n of notices) {
+			// A merge changes every account's lists; a submitted review only what that machine's account sees.
+			if (!n.pull && !n.review) continue;
+			const on = n.pull ? undefined : n.review?.on;
+			known.pullsChanged(n.repo, on);
+			shownPullsChanged ||=
+				ready !== null &&
+				(on === undefined || on === ready.on) &&
+				n.repo.toLowerCase() === `${ready.remote.owner}/${ready.remote.repo}`.toLowerCase();
 		}
+		if (shownPullsChanged && this.isVisible() && this.tab === "prs") this.pulls.load(cx, true);
 		const changes = notices.flatMap((n) => (n.state ? [n.state] : []));
 		if (changes.length === 0) return;
 		changes.forEach(known.issueChanged);
@@ -266,7 +267,7 @@ export class Panel implements Role {
 				account: this.account,
 				on,
 				checkedAt: this.checkedAt,
-				failed: this.failure !== undefined && this.ready() !== null,
+				failed: this.checkFailed && this.ready() !== null,
 				polling: this.ready() !== null,
 			},
 			Date.now(),

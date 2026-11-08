@@ -5,12 +5,12 @@
 // share one call.
 
 import type { Account } from "../core/account.ts";
-import { Cache } from "../core/cache.ts";
 import { applyChange, type GroupKind, type IssueChange, type IssueGroup } from "../core/issues.ts";
 import type { Folder } from "../core/location.ts";
 import { appendPage, PAGE, type Page } from "../core/page.ts";
 import { localPage, type Pull, type PullCategory, type PullGroup, type PullGroupKind } from "../core/pulls.ts";
 import type { RemoteRepo } from "../core/remote.ts";
+import { Facts } from "./facts.ts";
 import * as gh from "./gh.ts";
 import { githubRemote, localBranches } from "./git.ts";
 import { issuePage } from "./issues.ts";
@@ -22,58 +22,12 @@ export interface Ready extends Folder {
 	login: string;
 }
 
-/**
- * One kind of fact: kept answers, fresh for `fresh` ms (stale ones still show while asked
- * again), and the ask still out per key. Only answers `keep` accepts are kept.
- */
-function facts<T>(limit: number, fresh: number, keep: (value: T) => boolean) {
-	const cache = new Cache<T>(limit),
-		asking = new Map<string, Promise<T>>();
-	return {
-		peek: (key: string): T | undefined => cache.get(key),
-		/** The kept answer when fresh (unless forced), else the ask already out (unless forced), else a new ask. */
-		look(key: string, force: boolean, ask: () => Promise<T>): Promise<T> {
-			if (!force && cache.fresh(key, fresh, Date.now())) return Promise.resolve(cache.get(key) as T);
-			const pending = asking.get(key);
-			if (pending && !force) return pending;
-			const p: Promise<T> = ask()
-				.then((value) => {
-					// Only the newest ask is kept: a slower, older answer arriving after a ↻ is already out of date.
-					if (asking.get(key) === p && keep(value)) cache.set(key, value, Date.now());
-					return value;
-				})
-				.finally(() => {
-					if (asking.get(key) === p) asking.delete(key);
-				});
-			asking.set(key, p);
-			return p;
-		},
-		/** Keeps `value` as the answer now (a page loaded by other means: Load more). */
-		put(key: string, value: T): void {
-			cache.set(key, value, Date.now());
-		},
-		/** Shows what `change` returns for a kept key until asked again (undefined: untouched); an answer still out is dropped. */
-		patch(change: (key: string, value: T) => T | undefined): void {
-			for (const key of cache.keys()) {
-				const changed = change(key, cache.get(key) as T);
-				if (changed === undefined) continue;
-				cache.set(key, changed, -Infinity);
-				asking.delete(key);
-			}
-		},
-		clear(): void {
-			cache.clear();
-			asking.clear();
-		},
-	};
-}
-
 // Not kept: a gh that isn't signed in, and a folder without a GitHub remote (yet): both are
 // what the person is about to fix, so the next look asks again.
 // A GitHub account hardly ever changes: a signed-in one is kept for an hour, even through ↻.
 // Remotes rarely change; visible lists also use conditional polling to detect external changes.
-const accounts = facts<Account>(16, 60 * 60_000, (a) => a.status.ok);
-const remotes = facts<RemoteRepo | null>(64, 5 * 60_000, (r) => r !== null);
+const accounts = new Facts<Account>(16, 60 * 60_000, (a) => a.status.ok);
+const remotes = new Facts<RemoteRepo | null>(64, 5 * 60_000, (r) => r !== null);
 
 const folderKey = ({ on, cwd }: Folder): string => JSON.stringify([on, cwd]);
 
@@ -88,26 +42,42 @@ export const remote = (folder: Folder, force = false): Promise<RemoteRepo | null
 /** undefined: not known (yet). */
 export const peekRemote = (folder: Folder): RemoteRepo | null | undefined => remotes.peek(folderKey(folder));
 
-/** A group's key and back: what its rows depend on, the login too (what an account can see). */
-const groupKey = (kind: string, r: Ready): string =>
-	JSON.stringify([kind, r.on, r.remote.host, r.remote.owner, r.remote.repo, r.login]);
-const groupOf = (key: string) => {
-	const [kind, , host, owner, repo, login] = JSON.parse(key) as string[];
-	return { kind: kind ?? "", repo: `${host}/${owner}/${repo}`.toLowerCase(), login: login ?? "" };
-};
+/**
+ * What a group's rows depend on: its machine, repository (`owner/repo`, lower case) and login (what an
+ * account can see); local branches also on the checkout. Kept groups are found again by these parts.
+ */
+interface GroupWhere {
+	kind: string;
+	on: string | null;
+	repo: string;
+	login: string;
+	cwd: string | null;
+}
+const where = (kind: string, r: Ready, cwd: string | null = null): GroupWhere => ({
+	kind,
+	on: r.on,
+	repo: `${r.remote.owner}/${r.remote.repo}`.toLowerCase(),
+	login: r.login,
+	cwd,
+});
+const groupKey = (w: GroupWhere): string => JSON.stringify([w.kind, w.on, w.repo, w.login, w.cwd]);
+function groupOf(key: string): GroupWhere {
+	const [kind, on, repo, login, cwd] = JSON.parse(key) as [string, string | null, string, string, string | null];
+	return { kind, on, repo, login, cwd };
+}
 
 /** Groups asked a page at a time: the first page kept for a minute, and the pages Load more adds to it. */
 function pagedGroups<K extends string, P extends Page<{ number: number }>>(
 	ask: (kind: K, r: Ready, after: string | null) => Promise<P>,
 ) {
-	const kept = facts<P>(64, 60_000, () => true);
+	const kept = new Facts<P>(64, 60_000);
 	return {
 		kept,
 		look: (kind: K, r: Ready, force = false): Promise<P> =>
-			kept.look(groupKey(kind, r), force, () => ask(kind, r, null)),
-		peek: (kind: K, r: Ready): P | undefined => kept.peek(groupKey(kind, r)),
+			kept.look(groupKey(where(kind, r)), force, () => ask(kind, r, null)),
+		peek: (kind: K, r: Ready): P | undefined => kept.peek(groupKey(where(kind, r))),
 		async more(kind: K, r: Ready, loaded: P): Promise<P> {
-			const key = groupKey(kind, r);
+			const key = groupKey(where(kind, r));
 			const both = appendPage(loaded, await ask(kind, r, loaded.cursor));
 			// Kept only if `loaded` is still what is kept: a ↻ in the meantime replaced it with newer rows.
 			if (kept.peek(key) === loaded) kept.put(key, both);
@@ -133,7 +103,7 @@ export const moreIssues = issueGroups.more;
  * repository shows it where it now belongs at once, and is asked again on the next look.
  */
 export function issueChanged(change: IssueChange): void {
-	const repo = `github.com/${change.repo}`.toLowerCase();
+	const repo = change.repo.toLowerCase();
 	issueGroups.kept.patch((key, group) => {
 		const g = groupOf(key);
 		return g.repo === repo ? applyChange(g.kind as GroupKind, group, change, g.login) : undefined;
@@ -142,11 +112,11 @@ export function issueChanged(change: IssueChange): void {
 
 // Local matches depend on the focused checkout too, and are asked again whenever looked at: its
 // branches are read each time, and only a changed snapshot asks GitHub again (ADR 0006).
-const localMatches = facts<{ signature: string; rows: Pull[] }>(64, 0, () => true);
+const localMatches = new Facts<{ signature: string; rows: Pull[] }>(64, 0);
 /** The page of a kept batch that was last shown: Load more grows it without another request. */
 const localShown = new WeakMap<Pull[], PullGroup>();
 
-const localKey = (r: Ready): string => JSON.stringify([groupKey("local", r), r.cwd]);
+const localKey = (r: Ready): string => groupKey(where("local", r, r.cwd));
 
 function showLocal(rows: Pull[], count: number): PullGroup {
 	const page = localPage(rows, count);
@@ -166,17 +136,18 @@ async function localGroup(r: Ready, force: boolean): Promise<PullGroup> {
 	return localShown.get(rows) ?? showLocal(rows, PAGE);
 }
 
-/** Submission invalidates search membership without fetching hidden or folded groups. */
-export function pullReviewed(repo: string, on: string | null): void {
+/**
+ * A PR of `repo` changed: kept groups are asked again on their next look, without fetching hidden or
+ * folded ones. A submitted review changes only what that machine's account sees (`on`); a merge, every one.
+ */
+export function pullsChanged(repo: string, on?: string | null): void {
 	const matches = (key: string) => {
-		const parts = JSON.parse(key) as unknown[];
-		return parts[1] === on && groupOf(key).repo === `github.com/${repo}`.toLowerCase();
+		const w = groupOf(key);
+		return w.repo === repo.toLowerCase() && (on === undefined || w.on === on);
 	};
 	pullGroups.kept.patch((key, group) => (matches(key) ? group : undefined));
-	// Local branch snapshots can stay identical while their review metadata changes.
-	localMatches.patch((key, value) =>
-		matches((JSON.parse(key) as string[])[0] ?? "") ? { ...value, signature: "" } : undefined,
-	);
+	// Local branch snapshots can stay identical while their PRs change.
+	localMatches.patch((key, value) => (matches(key) ? { ...value, signature: "" } : undefined));
 }
 
 /** A PR group's first page, and any pages Load more added. */

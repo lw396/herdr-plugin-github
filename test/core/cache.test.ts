@@ -26,8 +26,8 @@ describe("Cache", () => {
 	test("null is a value (no GitHub remote), not a miss", () => {
 		const cache = new Cache<string | null>(10);
 		cache.set("k", null, 0);
-		expect(cache.has("k")).toBe(true);
 		expect(cache.get("k")).toBeNull();
+		expect(cache.fresh("k", 60_000, 0)).toBe(true);
 	});
 
 	test("deleting one entry leaves other cached results intact", () => {
@@ -36,7 +36,6 @@ describe("Cache", () => {
 		cache.set("kept", "ready", 0);
 		cache.delete("failed");
 		cache.delete("missing");
-		expect(cache.has("failed")).toBe(false);
 		expect(cache.get("failed")).toBeUndefined();
 		expect(cache.fresh("failed", 1000, 0)).toBe(false);
 		expect(cache.get("kept")).toBe("ready");
@@ -48,6 +47,6 @@ describe("Cache", () => {
 		cache.set("b", 2, 0);
 		cache.get("a");
 		cache.set("c", 3, 0);
-		expect([cache.has("a"), cache.has("b"), cache.has("c")]).toEqual([true, false, true]);
+		expect([cache.get("a"), cache.get("b"), cache.get("c")]).toEqual([1, undefined, 3]);
 	});
 });

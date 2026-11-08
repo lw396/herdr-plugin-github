@@ -13,10 +13,6 @@ export class Cache<T> {
 		return [...this.entries.keys()];
 	}
 
-	has(key: string): boolean {
-		return this.entries.has(key);
-	}
-
 	/** The value, fresh or not; marks it recently used. */
 	get(key: string): T | undefined {
 		const entry = this.entries.get(key);

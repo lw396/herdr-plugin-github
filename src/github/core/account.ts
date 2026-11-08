@@ -10,6 +10,13 @@ export interface Account {
 	status: Status;
 }
 
+/** The footer's short word for a gh that cannot be used; describeAccount says what to do about it. */
+export const ACCOUNT_PROBLEM: Record<Extract<Status, { ok: false }>["reason"], string> = {
+	missing: "gh is not installed",
+	auth: "Not signed in to gh",
+	error: "gh is not working",
+};
+
 /** The sidebar's gh line: who is signed in where, or what to do on which machine. */
 export function describeAccount(account: Account): { ok: boolean; text: string } {
 	const { on, status } = account;
