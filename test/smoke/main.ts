@@ -1,13 +1,13 @@
 // Herdr smoke mod: runs real parser and reader paths inside Herdr's QuickJS (scripts/smoke.sh).
 import { HoverCard, h_flex, TextareaState } from "gpui-base";
 import { type AsyncContext, type Context, div, View } from "gpui-kit";
+import { Acknowledged } from "../../src/github/core/acknowledged.ts";
 import { parsePatch } from "../../src/github/core/diff.ts";
 import { parseComment } from "../../src/github/core/discussion.ts";
 import { parseFiles } from "../../src/github/core/files.ts";
 import { parseIssueDetail } from "../../src/github/core/issue-detail.ts";
 import { browserUrl, detailLink, readerMarkdown } from "../../src/github/core/markdown.ts";
 import { PREVIEW_CLOSE_MS, PREVIEW_OPEN_MS, parsePreview } from "../../src/github/core/preview.ts";
-import { PublishedComments } from "../../src/github/core/published-comments.ts";
 import { parsePullDetail } from "../../src/github/core/pull-detail.ts";
 import { pullTimeline } from "../../src/github/core/pull-timeline.ts";
 import { parseThreads, threadRow } from "../../src/github/core/review-threads.ts";
@@ -82,7 +82,7 @@ export default class Smoke extends View {
 			"3",
 			"thread RIGHT anchor in QuickJS",
 		);
-		const acknowledged = new PublishedComments();
+		const acknowledged = new Acknowledged();
 		acknowledged.add(parseComment(publishedComment, "https://github.com/lw396/herdr-plugin-github/pull/35"), {
 			path: "docs/pr-fixture.md",
 			side: "RIGHT",

@@ -4,10 +4,16 @@ import { type Context, div, type Element } from "gpui-kit";
 import { type DiffLine, parsePatch } from "../core/diff.ts";
 import type { ChangedFile } from "../core/files.ts";
 import { type ReviewThread, threadRow } from "../core/review-threads.ts";
-import { itemWindow } from "../core/viewport.ts";
+import { clampOffset, itemWindow, scrollbar } from "../core/viewport.ts";
 import { diffRow, ROW_HEIGHT } from "./diff-lines.ts";
-import { COMPOSER_HEIGHT, type ReviewThreads, THREAD_ESTIMATE } from "./review-threads.ts";
+import type { ReviewThreads } from "./review-threads.ts";
 import { colors, link } from "./ui.ts";
+
+/** A discussion card's height until it has been laid out once. */
+const CARD_ESTIMATE = 160;
+
+/** A changed file, or a path whose discussions remain after it left the changed-files list. */
+export type DiffSubject = ChangedFile | { path: string; url: string; missing: true };
 
 interface DiffItem {
 	key: string;
@@ -17,7 +23,7 @@ interface DiffItem {
 }
 
 export class FileDiff {
-	private file: ChangedFile | null = null;
+	private file: DiffSubject | null = null;
 	private rows: DiffLine[] = [];
 	private width = 0;
 	private offset = 0;
@@ -26,7 +32,8 @@ export class FileDiff {
 	private viewportHeight = 400;
 	private totalHeight = 0;
 	private threadHeights = new Map<string, number>();
-	private drag: { y: number; offset: number } | null = null;
+	/** A thumb drag: where the pointer and the thumb's top were when it started. */
+	private drag: { y: number; top: number } | null = null;
 
 	init(): void {
 		this.offset = 0;
@@ -37,17 +44,18 @@ export class FileDiff {
 	}
 
 	private scrollTo(next: number, cx: Context): void {
-		const offset = Math.max(0, Math.min(next, this.totalHeight - this.viewportHeight));
+		const offset = clampOffset(next, this.totalHeight, this.viewportHeight);
 		if (offset === this.offset) return;
 		this.offset = offset;
 		cx.notify();
 	}
 
-	render(file: ChangedFile, discussions?: ReviewThreads, commit?: string): Element {
+	render(file: DiffSubject, discussions?: ReviewThreads, commit?: string): Element {
 		const t = colors();
+		const listed = "missing" in file ? null : file;
 		if (this.file !== file) {
 			this.file = file;
-			this.rows = parsePatch(file.patch ?? "");
+			this.rows = parsePatch(listed?.patch ?? "");
 			this.width = this.rows.reduce((width, row) => Math.max(width, row.text.length * 16 + 152), 240);
 		}
 		const rows = this.rows;
@@ -66,7 +74,7 @@ export class FileDiff {
 			for (const thread of anchors.get(row) ?? []) {
 				items.push({
 					key: thread.id,
-					height: this.threadHeights.get(thread.id) ?? THREAD_ESTIMATE,
+					height: this.threadHeights.get(thread.id) ?? CARD_ESTIMATE,
 					render: () =>
 						discussions!.card(thread, row === null, cardWidth, (height, cx) => {
 							const measured = Math.ceil(height);
@@ -79,8 +87,7 @@ export class FileDiff {
 			}
 		};
 		rows.forEach((row, index) => {
-			const count = commit ? (discussions?.inlineDraftCount(file.path, row) ?? 0) : 0;
-			const height = ROW_HEIGHT + count * COMPOSER_HEIGHT;
+			const height = ROW_HEIGHT + (commit ? (discussions?.inlineHeight(file.path, row) ?? 0) : 0);
 			items.push({
 				key: `line-${index}`,
 				height,
@@ -108,13 +115,7 @@ export class FileDiff {
 		const visible = itemWindow(sizes, this.offset, this.viewportHeight);
 		this.offset = visible.offset;
 		this.totalHeight = visible.total;
-		const maxOffset = Math.max(0, visible.total - this.viewportHeight);
-		const thumbHeight = Math.min(
-			this.viewportHeight,
-			Math.max(28, this.viewportHeight ** 2 / Math.max(1, visible.total)),
-		);
-		const travel = this.viewportHeight - thumbHeight;
-		const thumbTop = maxOffset > 0 ? (this.offset / maxOffset) * travel : 0;
+		const bar = scrollbar(this.offset, visible.total, this.viewportHeight);
 		const id = `pull-diff-${file.path}`;
 		const header = v_flex()
 			.flex_none()
@@ -129,12 +130,15 @@ export class FileDiff {
 					.items_center()
 					.flex_wrap()
 					.child(div().min_w(0).font_medium().child(file.path))
-					.child(div().text_color(t.done).child(`+${file.additions}`))
-					.child(div().text_color(t.blocked).child(`−${file.deletions}`))
+					.when(listed !== null, (el) =>
+						el
+							.child(div().text_color(t.done).child(`+${listed?.additions}`))
+							.child(div().text_color(t.blocked).child(`−${listed?.deletions}`)),
+					)
 					.child(link(`${id}-browser`, file.url, "Open File on GitHub").text_size(12).text_color(t.accent)),
 			)
-			.when(file.previousPath !== null, (el) =>
-				el.child(div().text_size(12).text_color(t.dim).child(`Renamed from ${file.previousPath}`)),
+			.when(Boolean(listed?.previousPath), (el) =>
+				el.child(div().text_size(12).text_color(t.dim).child(`Renamed from ${listed?.previousPath}`)),
 			);
 		const body =
 			items.length > 0
@@ -163,8 +167,7 @@ export class FileDiff {
 							}
 						})
 						.on_mouse_move((event, cx) => {
-							if (this.drag && travel > 0)
-								this.scrollTo(this.drag.offset + ((event.position.y - this.drag.y) * maxOffset) / travel, cx);
+							if (this.drag) this.scrollTo(bar.offsetAt(this.drag.top + event.position.y - this.drag.y), cx);
 						})
 						.on_mouse_up("left", () => {
 							this.drag = null;
@@ -203,7 +206,7 @@ export class FileDiff {
 										),
 								),
 						)
-						.when(maxOffset > 0, (el) =>
+						.when(bar.max > 0, (el) =>
 							el.child(
 								div()
 									.id(`${id}-scrollbar`)
@@ -217,19 +220,20 @@ export class FileDiff {
 									.on_mouse_down("left", (event, cx) => {
 										cx.stop_propagation();
 										const y = event.local_position?.y;
-										if (y === undefined || travel <= 0) return;
-										if (y < thumbTop || y > thumbTop + thumbHeight)
-											this.scrollTo(((y - thumbHeight / 2) / travel) * maxOffset, cx);
-										this.drag = { y: event.position.y, offset: this.offset };
+										if (y === undefined) return;
+										// A press on the track centres the thumb there; dragging moves it from where it is.
+										const top = y < bar.top || y > bar.top + bar.thumb ? y - bar.thumb / 2 : bar.top;
+										this.scrollTo(bar.offsetAt(top), cx);
+										this.drag = { y: event.position.y, top };
 									})
-									.child(div().absolute().top(thumbTop).right(2).w(8).h(thumbHeight).rounded(4).bg(t.dim)),
+									.child(div().absolute().top(bar.top).right(2).w(8).h(bar.thumb).rounded(4).bg(t.dim)),
 							),
 						)
 				: div()
 						.p(20)
 						.text_color(t.dim)
 						.child(
-							file.additions === 0 && file.deletions === 0
+							listed?.additions === 0 && listed.deletions === 0
 								? "No textual changes in this file. Open it on GitHub to view the full file."
 								: "GitHub did not provide a patch for this file (it may be binary or too large). Open it on GitHub to view the changes.",
 						);
@@ -250,7 +254,7 @@ export class FileDiff {
 						.child("Inline comments are unavailable until pull request details finish loading."),
 				),
 			)
-			.when(!file.patch && file.status !== "unchanged" && items.length > 0, (el) =>
+			.when(listed !== null && !listed.patch && items.length > 0, (el) =>
 				el.child(
 					div()
 						.p(12)

@@ -60,22 +60,6 @@ export function parseThreads(
 	});
 }
 
-/** Acknowledged draft replies can arrive before the comments endpoint catches up. */
-export function mergeDraftThreads(remote: ReviewThread[], drafts: ReviewThread[]): ReviewThread[] {
-	const result = [...remote];
-	for (const draft of drafts) {
-		const index = result.findIndex((t) => t.root === draft.root);
-		const thread = result[index];
-		if (!thread) result.push(draft);
-		else
-			result[index] = {
-				...thread,
-				comments: [...thread.comments, ...draft.comments.filter((c) => !thread.comments.some((r) => r.id === c.id))],
-			};
-	}
-	return result;
-}
-
 /** A context row has two valid anchors, even though its new-comment target defaults to RIGHT. */
 export function threadRow(rows: DiffLine[], thread: Pick<ReviewThread, "side" | "line" | "outdated">): number | null {
 	if (thread.outdated || thread.line === null) return null;

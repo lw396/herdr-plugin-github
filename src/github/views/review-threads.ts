@@ -1,10 +1,10 @@
 // Existing published discussions, with per-thread drafts kept through refreshes.
 import { h_flex, Textarea, TextareaState, v_flex } from "gpui-base";
 import { type Context, div, type Element } from "gpui-kit";
+import { Acknowledged } from "../core/acknowledged.ts";
 import { type DetailRef, detailUrl } from "../core/detail.ts";
 import { commentTarget, type DiffLine } from "../core/diff.ts";
-import { PublishedComments } from "../core/published-comments.ts";
-import { mergeDraftThreads, type ReviewThread } from "../core/review-threads.ts";
+import type { ReviewThread } from "../core/review-threads.ts";
 import { Notices } from "../io/changes.ts";
 import { failureOf } from "../io/gh.ts";
 import {
@@ -20,8 +20,11 @@ import { type DetailHost, openLink, postCard } from "./detail.ts";
 import { diffSnippet } from "./diff-lines.ts";
 import { button, colors, link, stop } from "./ui.ts";
 
-export const THREAD_ESTIMATE = 160;
-export const COMPOSER_HEIGHT = 220;
+/** An inline comment editor's height below its diff row. */
+const COMPOSER_HEIGHT = 220;
+
+/** Inline drafts are kept per line and side of a file. */
+const draftKey = (path: string, side: "LEFT" | "RIGHT", line: number): string => JSON.stringify([path, side, line]);
 
 /** A draft must look like an input, not another published comment. */
 export function commentEditor(state: TextareaState, height: number): Element {
@@ -41,13 +44,11 @@ export function commentEditor(state: TextareaState, height: number): Element {
 
 export class ReviewThreads {
 	threads: ReviewThread[] = [];
-	readonly published = new PublishedComments();
+	readonly acknowledged = new Acknowledged();
 	loading = false;
 	failure: string | null = null;
 	private latest = 0;
 	private pending: PendingReview | null = null;
-	// Keyed by acknowledged comment ID (roots and replies), so each expires only when observed.
-	private localDrafts = new Map<number, ReviewThread>();
 	private summaryBox: TextareaState | null = null;
 	private summaryTouched = false;
 	private notices = new Notices();
@@ -100,10 +101,7 @@ export class ReviewThreads {
 				if (request === this.latest) {
 					this.pending = state.pending;
 					if (this.summaryBox && !this.summaryTouched) this.summaryBox.set_value(state.pending?.body ?? "");
-					if (!state.pending) this.localDrafts.clear();
-					const seen = new Set(threads.flatMap((t) => t.comments.map((c) => c.id)));
-					for (const id of seen) this.localDrafts.delete(id);
-					this.threads = this.published.threads(mergeDraftThreads(threads, [...this.localDrafts.values()]));
+					this.threads = this.acknowledged.threads(threads, state.pending !== null);
 				}
 			} catch (e) {
 				if (request === this.latest) this.failure = failureOf(e).message;
@@ -136,14 +134,14 @@ export class ReviewThreads {
 			.child(this.failure ?? (this.loading ? "Loading discussions…" : ""));
 	}
 
-	/** Count drafts without creating native elements; the viewport measures before describing visible rows. */
-	inlineDraftCount(path: string, row: DiffLine): number {
+	/** The height a row's open inline editors add, without creating native elements. */
+	inlineHeight(path: string, row: DiffLine): number {
 		let count = 0;
 		for (const side of ["LEFT", "RIGHT"] as const) {
 			const anchor = commentTarget(row, side);
-			if (anchor && this.drafts.has(JSON.stringify([path, side, anchor.line]))) count++;
+			if (anchor && this.drafts.has(draftKey(path, side, anchor.line))) count++;
 		}
-		return count;
+		return count * COMPOSER_HEIGHT;
 	}
 
 	/** Called only for visible rows, in the ordinary render snapshot (not a native list callback). */
@@ -161,7 +159,7 @@ export class ReviewThreads {
 		for (const side of ["LEFT", "RIGHT"] as const) {
 			const anchor = commentTarget(row, side);
 			if (!anchor) continue;
-			const key = JSON.stringify([path, side, anchor.line]);
+			const key = draftKey(path, side, anchor.line);
 			const draft = this.drafts.get(key);
 			const busy = this.writing.size > 0;
 			gutters[side === "LEFT" ? "left" : "right"] = button(
@@ -238,12 +236,12 @@ export class ReviewThreads {
 			if (start || state.pending) {
 				const result = await addPullReviewComment(this.ref.repo, this.ref.number, draft.target, body, this.on);
 				this.pending = result.pending;
-				this.localDrafts.set(result.thread.root, result.thread);
+				this.acknowledged.keep(result.thread);
 				this.threads.push(result.thread);
 			} else {
 				const comment = await addPullComment(this.ref.repo, this.ref.number, draft.target, body, this.on);
 				this.threads.push(
-					this.published.add(comment, {
+					this.acknowledged.add(comment, {
 						path: draft.target.path,
 						side: draft.target.side,
 						line: draft.target.line,
@@ -303,9 +301,8 @@ export class ReviewThreads {
 		const body = box.value();
 		this.write(cx, "summary", async () => {
 			const item = await submitPullReview(this.ref.repo, this.ref.number, commit, event, body, this.on);
-			this.threads = this.published.submitted(item, this.threads);
+			this.threads = this.acknowledged.submitted(item, this.threads);
 			this.pending = null;
-			this.localDrafts.clear();
 			if (box.value() === body) {
 				box.set_value("");
 				this.summaryTouched = false;
@@ -475,7 +472,7 @@ export class ReviewThreads {
 										body,
 										this.on,
 									);
-									if (comment.draft) this.localDrafts.set(comment.id, { ...thread, comments: [comment] });
+									this.acknowledged.keep(thread, comment);
 									if (!thread.comments.some((c) => c.id === comment.id)) thread.comments.push(comment);
 									if (box.value() === body) box.set_value("");
 								});

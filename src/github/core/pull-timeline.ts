@@ -34,6 +34,10 @@ export interface PullTimelineItem extends Comment {
 	discussion: { root: number; comment: Comment; path: string; snippet: string }[];
 }
 
+/** A reply can create a body-less COMMENTED review; its content already belongs to the original conversation. */
+export const replyOnlyReview = (commented: boolean, body: string | null, roots: number, replies: number): boolean =>
+	commented && !body?.trim() && roots === 0 && replies > 0;
+
 /** Separate endpoints are merged once; pending reviews remain private, not published activity. */
 export function pullTimeline(
 	comments: Comment[],
@@ -54,14 +58,8 @@ export function pullTimeline(
 		const roots = all
 			.filter((c) => !c.in_reply_to_id && c.pull_request_review_id === r.id)
 			.sort((a, b) => a.created_at.localeCompare(b.created_at) || a.id - b.id);
-		// A reply can create a body-less COMMENTED review; its content already belongs to the original conversation.
-		if (
-			r.state === "COMMENTED" &&
-			!r.body?.trim() &&
-			roots.length === 0 &&
-			all.some((c) => c.pull_request_review_id === r.id && c.in_reply_to_id)
-		)
-			continue;
+		const replies = all.filter((c) => c.pull_request_review_id === r.id && c.in_reply_to_id).length;
+		if (replyOnlyReview(r.state === "COMMENTED", r.body, roots.length, replies)) continue;
 		const discussion = roots
 			.flatMap((root) => [
 				root,

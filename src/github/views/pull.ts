@@ -2,7 +2,6 @@
 import { h_flex, v_flex } from "gpui-base";
 import { type Context, div, type Element } from "gpui-kit";
 import { type DetailRef, detailUrl } from "../core/detail.ts";
-import type { ChangedFile } from "../core/files.ts";
 import type { MergeMethod } from "../core/merge.ts";
 import type { Projects } from "../core/projects.ts";
 import type { PullDetail } from "../core/pull-detail.ts";
@@ -26,7 +25,7 @@ import {
 	readFailure,
 	stateBadge,
 } from "./detail.ts";
-import { FileDiff } from "./diff.ts";
+import { type DiffSubject, FileDiff } from "./diff.ts";
 import { ChangedFiles } from "./files.ts";
 import { timelineItem } from "./pull-timeline.ts";
 import { ReviewThreads } from "./review-threads.ts";
@@ -60,7 +59,7 @@ export class Pull {
 	private diff = new FileDiff();
 	private discussions: ReviewThreads | null = null;
 	private notices = new Notices();
-	private missingFile: ChangedFile | null = null;
+	private missingFile: Extract<DiffSubject, { missing: true }> | null = null;
 	private expandedActivity = new Set<string>();
 	private where: { on: string | null } | null = null;
 
@@ -204,22 +203,20 @@ export class Pull {
 			this.files?.files &&
 			this.discussions?.threads.some((thread) => thread.path === this.selected)
 		) {
-			if (this.missingFile?.path !== this.selected)
-				this.missingFile = {
-					path: this.selected,
-					previousPath: null,
-					status: "unchanged",
-					additions: 0,
-					deletions: 0,
-					patch: null,
-					viewed: false,
-					url: this.entry?.pull?.url ?? (this.ref ? detailUrl(this.ref) : ""),
-				};
+			const missing =
+				this.missingFile?.path === this.selected
+					? this.missingFile
+					: {
+							path: this.selected,
+							url: this.entry?.pull?.url ?? (this.ref ? detailUrl(this.ref) : ""),
+							missing: true as const,
+						};
+			this.missingFile = missing;
 			return v_flex()
 				.flex_1()
 				.min_h(0)
 				.child(quiet("This file is no longer in the changed-files list. Its discussions are shown below."))
-				.child(this.diff.render(this.missingFile, this.discussions));
+				.child(this.diff.render(missing, this.discussions));
 		}
 		const failure = this.files?.failure ?? this.discussions?.failure;
 		const message =
@@ -263,7 +260,7 @@ export class Pull {
 				this.mergeArea(pull),
 				// Discussion metadata is fetched once per PR; report its progress/failure once, not per thread.
 				...(this.discussions?.loading || this.discussions?.failure ? [this.discussions.status()] : []),
-				...(this.discussions?.published.timeline(pull.timeline) ?? pull.timeline).map((item) => {
+				...(this.discussions?.acknowledged.timeline(pull.timeline) ?? pull.timeline).map((item) => {
 					// Commit timeline events have no REST id; their fallback index can move during refresh.
 					const key = JSON.stringify([item.author, item.createdAt, item.body]);
 					return timelineItem(item, this.discussions, onLink, (cx, path, comment) => this.select(cx, path, comment), {

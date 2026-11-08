@@ -10522,6 +10522,7 @@ function parseReviewers(pull, reviews) {
 }
 
 // src/github/core/pull-timeline.ts
+var replyOnlyReview = (commented, body, roots, replies) => commented && !body?.trim() && roots === 0 && replies > 0;
 function pullTimeline(comments, events, reviews, inline, url) {
   const result = comments.map((c) => ({
     ...c,
@@ -10532,8 +10533,8 @@ function pullTimeline(comments, events, reviews, inline, url) {
   for (const r of reviews.filter(submitted)) {
     const all2 = inline;
     const roots = all2.filter((c) => !c.in_reply_to_id && c.pull_request_review_id === r.id).sort((a, b) => a.created_at.localeCompare(b.created_at) || a.id - b.id);
-    if (r.state === "COMMENTED" && !r.body?.trim() && roots.length === 0 && all2.some((c) => c.pull_request_review_id === r.id && c.in_reply_to_id))
-      continue;
+    const replies = all2.filter((c) => c.pull_request_review_id === r.id && c.in_reply_to_id).length;
+    if (replyOnlyReview(r.state === "COMMENTED", r.body, roots.length, replies)) continue;
     const discussion = roots.flatMap((root) => [
       root,
       ...all2.filter((c) => c.in_reply_to_id === root.id).sort((a, b) => a.created_at.localeCompare(b.created_at) || a.id - b.id)
@@ -10643,20 +10644,6 @@ function parseThreads(nodes, comments, url, drafts = []) {
       ).map((c) => draftIds.has(c.id) ? { ...c, draft: true } : c)
     };
   });
-}
-function mergeDraftThreads(remote2, drafts) {
-  const result = [...remote2];
-  for (const draft2 of drafts) {
-    const index2 = result.findIndex((t) => t.root === draft2.root);
-    const thread = result[index2];
-    if (!thread) result.push(draft2);
-    else
-      result[index2] = {
-        ...thread,
-        comments: [...thread.comments, ...draft2.comments.filter((c) => !thread.comments.some((r) => r.id === c.id))]
-      };
-  }
-  return result;
 }
 function threadRow(rows, thread) {
   if (thread.outdated || thread.line === null) return null;
@@ -12200,8 +12187,8 @@ import { h_flex as h_flex12, v_flex as v_flex11 } from "gpui-base";
 import { div as div15 } from "gpui-kit";
 
 // src/github/views/diff.ts
-import { h_flex as h_flex10, v_flex as v_flex9 } from "gpui-base";
-import { div as div13 } from "gpui-kit";
+import { h_flex as h_flex9, v_flex as v_flex8 } from "gpui-base";
+import { div as div12 } from "gpui-kit";
 
 // src/github/core/diff.ts
 function commentTarget(row, side) {
@@ -12260,16 +12247,29 @@ function parsePatch(patch) {
 }
 
 // src/github/core/viewport.ts
+var clampOffset = (offset, total, height) => Math.max(0, Math.min(offset, Math.max(0, total - height)));
 function itemWindow(sizes, requested, height) {
   const total = sizes.reduce((sum, size) => sum + size, 0);
-  const offset = Math.max(0, Math.min(requested, Math.max(0, total - height)));
+  const offset = clampOffset(requested, total, height);
   const from = Math.max(0, offset - 44);
   const to = offset + height + 44;
   let start = 0, top = 0;
-  while (start < sizes.length && top + sizes[start] <= from) top += sizes[start++];
+  while (start < sizes.length && top + (sizes[start] ?? 0) <= from) top += sizes[start++] ?? 0;
   let end = start, bottom = top;
-  while (end < sizes.length && bottom < to) bottom += sizes[end++];
+  while (end < sizes.length && bottom < to) bottom += sizes[end++] ?? 0;
   return { start, end, top, offset, total };
+}
+function scrollbar(offset, total, height) {
+  const max = Math.max(0, total - height);
+  const thumb = Math.min(height, Math.max(28, height ** 2 / Math.max(1, total)));
+  const travel = height - thumb;
+  return {
+    max,
+    thumb,
+    top: max > 0 ? offset / max * travel : 0,
+    /** The offset when the thumb's top is at `y`. */
+    offsetAt: (y) => travel > 0 ? clampOffset(y / travel * max, total, height) : 0
+  };
 }
 
 // src/github/views/diff-lines.ts
@@ -12291,15 +12291,270 @@ function diffRow(row, gutters) {
   ).child(div11().flex_none().whitespace_nowrap().child(row.text));
 }
 
-// src/github/views/review-threads.ts
-import { h_flex as h_flex9, Textarea as Textarea2, TextareaState as TextareaState2, v_flex as v_flex8 } from "gpui-base";
-import { div as div12 } from "gpui-kit";
+// src/github/views/diff.ts
+var CARD_ESTIMATE = 160;
+var FileDiff = class {
+  file = null;
+  rows = [];
+  width = 0;
+  offset = 0;
+  target = null;
+  viewportWidth = 320;
+  viewportHeight = 400;
+  totalHeight = 0;
+  threadHeights = /* @__PURE__ */ new Map();
+  /** A thumb drag: where the pointer and the thumb's top were when it started. */
+  drag = null;
+  init() {
+    this.offset = 0;
+  }
+  jump(comment) {
+    this.target = comment;
+    this.offset = 0;
+  }
+  scrollTo(next, cx) {
+    const offset = clampOffset(next, this.totalHeight, this.viewportHeight);
+    if (offset === this.offset) return;
+    this.offset = offset;
+    cx.notify();
+  }
+  render(file, discussions, commit) {
+    const t = colors();
+    const listed = "missing" in file ? null : file;
+    if (this.file !== file) {
+      this.file = file;
+      this.rows = parsePatch(listed?.patch ?? "");
+      this.width = this.rows.reduce((width, row) => Math.max(width, row.text.length * 16 + 152), 240);
+    }
+    const rows = this.rows;
+    const cardWidth = Math.max(240, this.viewportWidth - 12);
+    const items = [];
+    const threads = (discussions?.threads ?? []).filter((thread) => thread.path === file.path);
+    const anchors = /* @__PURE__ */ new Map();
+    for (const thread of threads) {
+      const row = threadRow(rows, thread);
+      const group = anchors.get(row) ?? [];
+      group.push(thread);
+      anchors.set(row, group);
+    }
+    const appendThreads = (row) => {
+      for (const thread of anchors.get(row) ?? []) {
+        items.push({
+          key: thread.id,
+          height: this.threadHeights.get(thread.id) ?? CARD_ESTIMATE,
+          render: () => discussions.card(thread, row === null, cardWidth, (height, cx) => {
+            const measured = Math.ceil(height);
+            if (measured <= 0 || this.threadHeights.get(thread.id) === measured) return;
+            this.threadHeights.set(thread.id, measured);
+            cx.notify();
+          }),
+          commentIds: thread.comments.map((c) => c.id)
+        });
+      }
+    };
+    rows.forEach((row, index2) => {
+      const height = ROW_HEIGHT + (commit ? discussions?.inlineHeight(file.path, row) ?? 0 : 0);
+      items.push({
+        key: `line-${index2}`,
+        height,
+        render: () => {
+          const comment = commit ? discussions?.inlineComposer(file.path, commit, row, cardWidth) : void 0;
+          return v_flex8().h(height).flex_none().child(diffRow(row, comment?.gutters)).children(comment?.editors ?? []);
+        }
+      });
+      appendThreads(index2);
+    });
+    appendThreads(null);
+    const sizes = items.map((item) => item.height);
+    if (this.target !== null) {
+      const index2 = items.findIndex((item) => item.commentIds?.includes(this.target));
+      if (index2 >= 0) {
+        const top = sizes.slice(0, index2).reduce((sum, height) => sum + height, 0);
+        this.offset = top - Math.max(0, (this.viewportHeight - sizes[index2]) / 2);
+        this.target = null;
+      }
+    }
+    const visible = itemWindow(sizes, this.offset, this.viewportHeight);
+    this.offset = visible.offset;
+    this.totalHeight = visible.total;
+    const bar = scrollbar(this.offset, visible.total, this.viewportHeight);
+    const id = `pull-diff-${file.path}`;
+    const header = v_flex8().flex_none().px(16).py(8).gap(6).border_b(1).border_color(t.border).child(
+      h_flex9().gap(10).items_center().flex_wrap().child(div12().min_w(0).font_medium().child(file.path)).when(
+        listed !== null,
+        (el) => el.child(div12().text_color(t.done).child(`+${listed?.additions}`)).child(div12().text_color(t.blocked).child(`\u2212${listed?.deletions}`))
+      ).child(link(`${id}-browser`, file.url, "Open File on GitHub").text_size(12).text_color(t.accent))
+    ).when(
+      Boolean(listed?.previousPath),
+      (el) => el.child(div12().text_size(12).text_color(t.dim).child(`Renamed from ${listed?.previousPath}`))
+    );
+    const body = items.length > 0 ? div12().id(`${id}-body`).flex_1().min_h(0).min_w(0).relative().overflow_hidden().on_size_change((size, cx) => {
+      if (size.width > 0 && size.height > 0 && (size.width !== this.viewportWidth || size.height !== this.viewportHeight)) {
+        this.viewportWidth = size.width;
+        this.viewportHeight = size.height;
+        cx.notify();
+      }
+    }).on_scroll_wheel((event, cx) => {
+      if (event.delta.y && Math.abs(event.delta.y) >= Math.abs(event.delta.x)) {
+        this.scrollTo(this.offset - event.delta.y, cx);
+        cx.stop_propagation();
+      }
+    }).on_mouse_move((event, cx) => {
+      if (this.drag) this.scrollTo(bar.offsetAt(this.drag.top + event.position.y - this.drag.y), cx);
+    }).on_mouse_up("left", () => {
+      this.drag = null;
+    }).on_hover((hovered) => {
+      if (!hovered) this.drag = null;
+    }).child(
+      div12().id(`${id}-horizontal`).absolute().top_0().bottom_0().left_0().right(12).overflow_x_scrollbar().child(
+        div12().relative().h_full().w(Math.max(this.width, cardWidth)).overflow_hidden().child(
+          v_flex8().absolute().top(visible.top - visible.offset).left_0().w_full().children(
+            items.slice(visible.start, visible.end).map(
+              (item) => div12().id(`${id}-${item.key}`).h(item.height).flex_none().child(item.render())
+            )
+          )
+        )
+      )
+    ).when(
+      bar.max > 0,
+      (el) => el.child(
+        div12().id(`${id}-scrollbar`).absolute().top_0().bottom_0().right_0().w(12).cursor_pointer().accessibility_label("Diff vertical scrollbar").on_mouse_down("left", (event, cx) => {
+          cx.stop_propagation();
+          const y = event.local_position?.y;
+          if (y === void 0) return;
+          const top = y < bar.top || y > bar.top + bar.thumb ? y - bar.thumb / 2 : bar.top;
+          this.scrollTo(bar.offsetAt(top), cx);
+          this.drag = { y: event.position.y, top };
+        }).child(div12().absolute().top(bar.top).right(2).w(8).h(bar.thumb).rounded(4).bg(t.dim))
+      )
+    ) : div12().p(20).text_color(t.dim).child(
+      listed?.additions === 0 && listed.deletions === 0 ? "No textual changes in this file. Open it on GitHub to view the full file." : "GitHub did not provide a patch for this file (it may be binary or too large). Open it on GitHub to view the changes."
+    );
+    return v_flex8().id(`${id}-viewport`).flex_1().min_h(0).min_w(0).overflow_hidden().child(header).when(Boolean(discussions), (el) => el.child(discussions.status())).when(
+      Boolean(discussions) && !commit,
+      (el) => el.child(
+        div12().px(16).text_size(12).text_color(t.dim).child("Inline comments are unavailable until pull request details finish loading.")
+      )
+    ).when(
+      listed !== null && !listed.patch && items.length > 0,
+      (el) => el.child(
+        div12().p(12).text_color(t.dim).child("GitHub did not provide a patch for this file. Discussions are shown below.")
+      )
+    ).child(body);
+  }
+};
 
-// src/github/core/published-comments.ts
-var PublishedComments = class {
-  pendingThreads = /* @__PURE__ */ new Map();
+// src/github/views/pull-timeline.ts
+import { h_flex as h_flex10, TextView as TextView2, v_flex as v_flex9 } from "gpui-base";
+import { div as div13 } from "gpui-kit";
+function timelineItem(item, discussions, onLink, open, activity) {
+  const t = colors();
+  if (item.kind === "event") {
+    return v_flex9().id(`pull-activity-${item.id}`).min_w(0).gap(6).px(16).py(8).text_size(12).child(
+      h_flex10().min_w(0).gap(8).items_center().child(div13().flex_none().text_color(t.dim).child("\u25C7")).child(div13().min_w(0).truncate().font_semibold().tooltip(item.author).child(item.author)).child(div13().flex_none().text_color(t.dim).child(item.verb)).child(div13().flex_1()).child(
+        div13().flex_none().text_color(t.dim).tooltip(item.createdAt).child(relativeTime(item.createdAt, Date.now()))
+      )
+    ).when(
+      Boolean(item.body.trim()) || Boolean(item.details),
+      (el) => el.child(
+        v_flex9().min_w(0).pl(20).gap(6).when(
+          Boolean(item.body.trim()),
+          (el2) => el2.child(
+            TextView2.markdown(`pull-activity-body-${item.id}`, item.markdown).selectable(true).scrollable(false).on_link_click(onLink)
+          )
+        ).when(
+          Boolean(item.details && activity),
+          (el2) => el2.child(
+            button(
+              `pull-activity-toggle-${item.id}`,
+              activity?.expanded ? "Hide" : "Show",
+              activity?.expanded ? "Hide Commit Details" : "Show Commit Details",
+              (_e, cx) => activity?.toggle(cx)
+            ).self_start().text_color(t.accent)
+          )
+        ).when(
+          Boolean(item.details && activity?.expanded),
+          (el2) => el2.child(
+            TextView2.markdown(`pull-activity-details-${item.id}`, item.details.markdown).selectable(true).scrollable(false).on_link_click(onLink)
+          )
+        )
+      )
+    );
+  }
+  if (item.kind === "comment") return postCard(`pull-comment-${item.id}`, item, item.verb, onLink);
+  const roots = item.discussion.filter((d) => d.root === d.comment.id);
+  return v_flex9().id(`pull-review-${item.id}`).min_w(0).w_full().border_1().border_color(t.border).rounded(8).overflow_hidden().child(
+    postCard(`pull-review-header-${item.id}`, item, item.verb, onLink, {
+      embedded: true,
+      headingOnly: !item.body.trim()
+    })
+  ).when(
+    roots.length > 0,
+    (el) => el.child(
+      v_flex9().min_w(0).p(12).gap(12).children(
+        roots.map((d) => {
+          const thread = discussions?.threads.find((thread2) => thread2.root === d.root);
+          if (thread && discussions)
+            return discussions.timeline(thread, d.snippet, (cx) => open(cx, d.path, d.root));
+          return v_flex9().min_w(0).border_1().border_color(t.border).rounded(6).overflow_hidden().child(
+            button(
+              `inline-jump-${d.root}`,
+              d.path,
+              "Open File Diff",
+              (_e, cx) => open(cx, d.path, d.root)
+            ).text_color(t.accent)
+          ).when(Boolean(d.snippet), (el2) => el2.child(diffSnippet(`inline-snippet-${d.root}`, d.snippet))).children(
+            item.discussion.filter((reply) => reply.root === d.root).map(
+              (reply, index2) => postCard(`inline-${reply.comment.id}`, reply.comment, "commented", onLink, {
+                embedded: true
+              }).when(index2 > 0, (el2) => el2.border_t(1).border_color(t.border))
+            )
+          );
+        })
+      )
+    )
+  );
+}
+
+// src/github/views/review-threads.ts
+import { h_flex as h_flex11, Textarea as Textarea2, TextareaState as TextareaState2, v_flex as v_flex10 } from "gpui-base";
+import { div as div14 } from "gpui-kit";
+
+// src/github/core/acknowledged.ts
+var observed = (c) => `${c.id}:${c.draft ? "draft" : "published"}`;
+var Acknowledged = class {
+  /** Thread shells holding acknowledged comments, keyed by the first such comment's id. */
+  threadsKept = /* @__PURE__ */ new Map();
   pendingTimeline = /* @__PURE__ */ new Map();
   activities = /* @__PURE__ */ new Map();
+  /** A published standalone comment starts its own discussion, and a placeholder review in the timeline. */
+  add(comment, target) {
+    const thread = {
+      ...target,
+      id: `comment-${comment.id}`,
+      root: comment.id,
+      resolved: false,
+      canResolve: false,
+      canUnresolve: false,
+      comments: [comment]
+    };
+    this.threadsKept.set(comment.id, thread);
+    this.pendingTimeline.set(comment.id, {
+      ...comment,
+      // Negative IDs keep local review placeholders distinct from GitHub's positive review IDs.
+      id: -comment.id,
+      body: "",
+      markdown: "",
+      kind: "review",
+      verb: "reviewed",
+      discussion: [{ root: comment.id, comment, path: target.path, snippet: "" }]
+    });
+    return thread;
+  }
+  /** A draft discussion, or a reply (draft or published) in `thread`. */
+  keep(thread, comment = thread.comments[0]) {
+    this.threadsKept.set(comment.id, { ...thread, comments: [comment] });
+  }
   /** Promote only this review's drafts; replies stay with their original timeline conversation. */
   submitted(item, threads) {
     const pending = threads.filter((t) => t.comments.some((c) => c.draft));
@@ -12314,40 +12569,22 @@ var PublishedComments = class {
       })
     }));
     const discussion = promoted.filter((t) => newRoots.has(t.root)).flatMap((t) => t.comments.map((comment) => ({ root: t.root, comment, path: t.path, snippet: "" })));
-    const replyOnly = item.kind === "review" && item.verb === "reviewed" && !item.body.trim() && !discussion.length && pending.length > 0;
-    this.activity(replyOnly ? null : { ...item, discussion }, promoted);
+    const replies = pending.length - newRoots.size;
+    const commented = item.kind === "review" && item.verb === "reviewed";
+    const omitted = replyOnlyReview(commented, item.body, newRoots.size, replies);
+    this.activity(omitted ? null : { ...item, discussion }, promoted);
     return threads.map((t) => promoted.find((p) => p.id === t.id) ?? t);
   }
   /** Keep an acknowledged submission visible while the review and diff endpoints catch up separately. */
   activity(item, threads = []) {
     if (item) this.activities.set(`${item.kind}-${item.id}`, item);
     for (const thread of threads) {
-      this.pendingThreads.set(thread.root, thread);
-      for (const comment of thread.comments) this.pendingTimeline.delete(comment.id);
+      for (const comment of thread.comments) {
+        this.threadsKept.delete(comment.id);
+        this.pendingTimeline.delete(comment.id);
+      }
+      this.threadsKept.set(thread.root, thread);
     }
-  }
-  add(comment, target) {
-    const thread = {
-      ...target,
-      id: `comment-${comment.id}`,
-      root: comment.id,
-      resolved: false,
-      canResolve: false,
-      canUnresolve: false,
-      comments: [comment]
-    };
-    this.pendingThreads.set(comment.id, thread);
-    this.pendingTimeline.set(comment.id, {
-      ...comment,
-      // Negative IDs keep local review placeholders distinct from GitHub's positive review IDs.
-      id: -comment.id,
-      body: "",
-      markdown: "",
-      kind: "review",
-      verb: "reviewed",
-      discussion: [{ root: comment.id, comment, path: target.path, snippet: "" }]
-    });
-    return thread;
   }
   /** Each endpoint releases only the writes it has actually observed. */
   timeline(remote2) {
@@ -12367,20 +12604,28 @@ var PublishedComments = class {
       (a, b) => a.createdAt.localeCompare(b.createdAt) || a.id - b.id
     );
   }
-  threads(remote2) {
-    const seen = new Set(remote2.flatMap((t) => t.comments.filter((c) => !c.draft).map((c) => c.id)));
-    for (const [root, thread] of this.pendingThreads) {
-      if (thread.comments.every((c) => seen.has(c.id))) this.pendingThreads.delete(root);
+  /**
+   * The diff's discussions: a read, plus every acknowledged comment it has not observed yet. Without a
+   * pending review (`drafts` false: submitted or deleted elsewhere), kept drafts are gone.
+   */
+  threads(remote2, drafts = true) {
+    const seen = new Set(remote2.flatMap((t) => t.comments.map(observed)));
+    const result = remote2.map((t) => ({ ...t }));
+    for (const [key, kept] of this.threadsKept) {
+      const comments = drafts ? kept.comments : kept.comments.filter((c) => !c.draft);
+      if (comments.every((c) => seen.has(observed(c)))) {
+        this.threadsKept.delete(key);
+        continue;
+      }
+      const into = result.find((t) => t.root === kept.root);
+      if (!into) {
+        result.push({ ...kept, comments });
+        continue;
+      }
+      const local = new Map(comments.map((c) => [c.id, c]));
+      const shown = into.comments.map((c) => local.get(c.id) ?? c);
+      into.comments = [...shown, ...comments.filter((c) => !shown.some((s) => s.id === c.id))];
     }
-    const result = remote2.map((thread) => {
-      const local = this.pendingThreads.get(thread.root);
-      return local ? {
-        ...thread,
-        comments: [...local.comments, ...thread.comments.filter((c) => !local.comments.some((l) => l.id === c.id))]
-      } : thread;
-    });
-    for (const local of this.pendingThreads.values())
-      if (!remote2.some((t) => t.root === local.root)) result.push(local);
     return result;
   }
 };
@@ -12523,21 +12768,19 @@ async function startPullReview(repo, number, commit, on) {
 }
 
 // src/github/views/review-threads.ts
-var THREAD_ESTIMATE = 160;
 var COMPOSER_HEIGHT = 220;
+var draftKey = (path, side, line) => JSON.stringify([path, side, line]);
 function commentEditor(state, height) {
   const t = colors();
-  return div12().h(height).flex_none().min_w(0).rounded(6).border_1().border_color(t.input).bg(t.background).p(8).on_mouse_down("left", stop).child(Textarea2.new(state).size_full().text_size(13).text_color(t.foreground));
+  return div14().h(height).flex_none().min_w(0).rounded(6).border_1().border_color(t.input).bg(t.background).p(8).on_mouse_down("left", stop).child(Textarea2.new(state).size_full().text_size(13).text_color(t.foreground));
 }
 var ReviewThreads = class {
   threads = [];
-  published = new PublishedComments();
+  acknowledged = new Acknowledged();
   loading = false;
   failure = null;
   latest = 0;
   pending = null;
-  // Keyed by acknowledged comment ID (roots and replies), so each expires only when observed.
-  localDrafts = /* @__PURE__ */ new Map();
   summaryBox = null;
   summaryTouched = false;
   notices = new Notices();
@@ -12587,10 +12830,7 @@ var ReviewThreads = class {
         if (request === this.latest) {
           this.pending = state.pending;
           if (this.summaryBox && !this.summaryTouched) this.summaryBox.set_value(state.pending?.body ?? "");
-          if (!state.pending) this.localDrafts.clear();
-          const seen = new Set(threads.flatMap((t) => t.comments.map((c) => c.id)));
-          for (const id of seen) this.localDrafts.delete(id);
-          this.threads = this.published.threads(mergeDraftThreads(threads, [...this.localDrafts.values()]));
+          this.threads = this.acknowledged.threads(threads, state.pending !== null);
         }
       } catch (e) {
         if (request === this.latest) this.failure = failureOf(e).message;
@@ -12611,16 +12851,16 @@ var ReviewThreads = class {
     }
   }
   status() {
-    return div12().text_size(12).text_color(this.failure ? colors().blocked : colors().dim).child(this.failure ?? (this.loading ? "Loading discussions\u2026" : ""));
+    return div14().text_size(12).text_color(this.failure ? colors().blocked : colors().dim).child(this.failure ?? (this.loading ? "Loading discussions\u2026" : ""));
   }
-  /** Count drafts without creating native elements; the viewport measures before describing visible rows. */
-  inlineDraftCount(path, row) {
+  /** The height a row's open inline editors add, without creating native elements. */
+  inlineHeight(path, row) {
     let count = 0;
     for (const side of ["LEFT", "RIGHT"]) {
       const anchor = commentTarget(row, side);
-      if (anchor && this.drafts.has(JSON.stringify([path, side, anchor.line]))) count++;
+      if (anchor && this.drafts.has(draftKey(path, side, anchor.line))) count++;
     }
-    return count;
+    return count * COMPOSER_HEIGHT;
   }
   /** Called only for visible rows, in the ordinary render snapshot (not a native list callback). */
   inlineComposer(path, commit, row, width) {
@@ -12629,7 +12869,7 @@ var ReviewThreads = class {
     for (const side of ["LEFT", "RIGHT"]) {
       const anchor = commentTarget(row, side);
       if (!anchor) continue;
-      const key = JSON.stringify([path, side, anchor.line]);
+      const key = draftKey(path, side, anchor.line);
       const draft2 = this.drafts.get(key);
       const busy = this.writing.size > 0;
       gutters[side === "LEFT" ? "left" : "right"] = button(
@@ -12648,10 +12888,10 @@ var ReviewThreads = class {
       if (!draft2) continue;
       const t = colors();
       editors.push(
-        v_flex8().w(width).h(COMPOSER_HEIGHT).p(12).gap(8).bg(t.surface).border_1().border_color(t.border).child(div12().text_size(12).text_color(t.dim).child(`${side} ${anchor.line}`)).child(commentEditor(draft2.box, 90)).child(
-          div12().text_size(12).text_color(t.blocked).child(this.failures.get(key) ?? "")
+        v_flex10().w(width).h(COMPOSER_HEIGHT).p(12).gap(8).bg(t.surface).border_1().border_color(t.border).child(div14().text_size(12).text_color(t.dim).child(`${side} ${anchor.line}`)).child(commentEditor(draft2.box, 90)).child(
+          div14().text_size(12).text_color(t.blocked).child(this.failures.get(key) ?? "")
         ).child(
-          h_flex9().gap(8).child(
+          h_flex11().gap(8).child(
             button(`post-inline-${key}`, busy ? "Saving\u2026" : "Add Comment", "Add Comment", (_e, cx) => {
               this.postInline(cx, key, false, commit);
             })
@@ -12688,12 +12928,12 @@ var ReviewThreads = class {
       if (start || state.pending) {
         const result = await addPullReviewComment(this.ref.repo, this.ref.number, draft2.target, body, this.on);
         this.pending = result.pending;
-        this.localDrafts.set(result.thread.root, result.thread);
+        this.acknowledged.keep(result.thread);
         this.threads.push(result.thread);
       } else {
         const comment = await addPullComment(this.ref.repo, this.ref.number, draft2.target, body, this.on);
         this.threads.push(
-          this.published.add(comment, {
+          this.acknowledged.add(comment, {
             path: draft2.target.path,
             side: draft2.target.side,
             line: draft2.target.line,
@@ -12707,14 +12947,14 @@ var ReviewThreads = class {
   /** The PR summary and inline drafts share one write lock and one GitHub pending review. */
   summary(commit) {
     const box = this.summaryBox;
-    if (!box) return div12().text_size(12).text_color(colors().dim).child("Loading review\u2026");
+    if (!box) return div14().text_size(12).text_color(colors().dim).child("Loading review\u2026");
     const busy = this.writing.size > 0;
-    return v_flex8().gap(8).child(
-      div12().font_semibold().child(this.pending ? "Pending review" : "Review")
+    return v_flex10().gap(8).child(
+      div14().font_semibold().child(this.pending ? "Pending review" : "Review")
     ).child(commentEditor(box, 120)).child(
-      div12().text_size(12).text_color(colors().blocked).child(this.failures.get("summary") ?? "")
+      div14().text_size(12).text_color(colors().blocked).child(this.failures.get("summary") ?? "")
     ).child(
-      h_flex9().gap(8).children(
+      h_flex11().gap(8).children(
         [
           ["COMMENT", "Comment"],
           ["APPROVE", "Approve"],
@@ -12733,9 +12973,8 @@ var ReviewThreads = class {
     const body = box.value();
     this.write(cx, "summary", async () => {
       const item = await submitPullReview(this.ref.repo, this.ref.number, commit, event, body, this.on);
-      this.threads = this.published.submitted(item, this.threads);
+      this.threads = this.acknowledged.submitted(item, this.threads);
       this.pending = null;
-      this.localDrafts.clear();
       if (box.value() === body) {
         box.set_value("");
         this.summaryTouched = false;
@@ -12750,12 +12989,12 @@ var ReviewThreads = class {
   timeline(thread, snippet, open) {
     const hidden = this.hiddenSnippets.has(thread.id);
     const t = colors();
-    return v_flex8().min_w(0).w_full().border_1().border_color(t.border).rounded(6).overflow_hidden().child(
-      h_flex9().gap(8).items_center().px(12).py(6).border_b(1).border_color(t.border).child(
+    return v_flex10().min_w(0).w_full().border_1().border_color(t.border).rounded(6).overflow_hidden().child(
+      h_flex11().gap(8).items_center().px(12).py(6).border_b(1).border_color(t.border).child(
         button(`timeline-file-${thread.id}`, thread.path, "Open File Diff", (_e, cx) => open(cx)).text_color(
           t.accent
         )
-      ).child(div12().flex_1()).when(
+      ).child(div14().flex_1()).when(
         Boolean(snippet),
         (el) => el.child(
           button(
@@ -12778,24 +13017,24 @@ var ReviewThreads = class {
     const box = this.boxes.get(thread.id);
     const busy = this.writing.size > 0;
     const url = `${detailUrl(this.ref)}#discussion_r${thread.root}`;
-    return v_flex8().flex_none().min_w(0).p(12).gap(8).when(virtual, (el) => el.border_1().border_color(t.border).bg(t.surface)).when(
+    return v_flex10().flex_none().min_w(0).p(12).gap(8).when(virtual, (el) => el.border_1().border_color(t.border).bg(t.surface)).when(
       virtual,
       (el) => el.child(
-        h_flex9().gap(10).items_center().child(
-          div12().font_medium().child(thread.resolved ? "Resolved" : "Discussion")
+        h_flex11().gap(10).items_center().child(
+          div14().font_medium().child(thread.resolved ? "Resolved" : "Discussion")
         ).child(
-          div12().text_size(12).text_color(t.dim).child(`${thread.side} ${thread.line ?? ""}`)
+          div14().text_size(12).text_color(t.dim).child(`${thread.side} ${thread.line ?? ""}`)
         ).child(link(`thread-browser-${thread.id}`, url, "Open on GitHub").text_size(12).text_color(t.accent))
       )
-    ).when(!virtual && thread.resolved, (el) => el.child(div12().text_size(12).text_color(t.done).child("Resolved"))).when(
+    ).when(!virtual && thread.resolved, (el) => el.child(div14().text_size(12).text_color(t.done).child("Resolved"))).when(
       unavailable,
       (el) => el.child(
-        div12().text_size(12).text_color(t.dim).child(
+        div14().text_size(12).text_color(t.dim).child(
           thread.outdated ? "Outdated \u2014 this discussion is no longer in the current diff." : "This discussion is not attached to a line in the available diff."
         )
       )
     ).child(
-      v_flex8().id(`${scope}-thread-comments-${thread.id}`).when(virtual, (el) => el.flex_none().max_h(240).overflow_y_scrollbar()).children(
+      v_flex10().id(`${scope}-thread-comments-${thread.id}`).when(virtual, (el) => el.flex_none().max_h(240).overflow_y_scrollbar()).children(
         thread.comments.map(
           (c, index2) => postCard(
             `${scope}-comment-${c.id}`,
@@ -12809,15 +13048,15 @@ var ReviewThreads = class {
     ).when(
       Boolean(box),
       (el) => el.child(
-        v_flex8().flex_none().min_w(0).border_t(1).border_color(t.border).pt(12).child(commentEditor(box, 80))
+        v_flex10().flex_none().min_w(0).border_t(1).border_color(t.border).pt(12).child(commentEditor(box, 80))
       )
     ).when(
       this.failures.has(thread.id),
       (el) => el.child(
-        div12().text_size(12).text_color(t.blocked).child(this.failures.get(thread.id) ?? "")
+        div14().text_size(12).text_color(t.blocked).child(this.failures.get(thread.id) ?? "")
       )
     ).child(
-      h_flex9().gap(8).child(
+      h_flex11().gap(8).child(
         button(
           `${scope}-reply-${thread.id}`,
           busy ? "Saving\u2026" : box ? "Comment" : "Reply",
@@ -12842,7 +13081,7 @@ var ReviewThreads = class {
                 body,
                 this.on
               );
-              if (comment.draft) this.localDrafts.set(comment.id, { ...thread, comments: [comment] });
+              this.acknowledged.keep(thread, comment);
               if (!thread.comments.some((c) => c.id === comment.id)) thread.comments.push(comment);
               if (box.value() === body) box.set_value("");
             });
@@ -12904,233 +13143,6 @@ var ReviewThreads = class {
     });
   }
 };
-
-// src/github/views/diff.ts
-var FileDiff = class {
-  file = null;
-  rows = [];
-  width = 0;
-  offset = 0;
-  target = null;
-  viewportWidth = 320;
-  viewportHeight = 400;
-  totalHeight = 0;
-  threadHeights = /* @__PURE__ */ new Map();
-  drag = null;
-  init() {
-    this.offset = 0;
-  }
-  jump(comment) {
-    this.target = comment;
-    this.offset = 0;
-  }
-  scrollTo(next, cx) {
-    const offset = Math.max(0, Math.min(next, this.totalHeight - this.viewportHeight));
-    if (offset === this.offset) return;
-    this.offset = offset;
-    cx.notify();
-  }
-  render(file, discussions, commit) {
-    const t = colors();
-    if (this.file !== file) {
-      this.file = file;
-      this.rows = parsePatch(file.patch ?? "");
-      this.width = this.rows.reduce((width, row) => Math.max(width, row.text.length * 16 + 152), 240);
-    }
-    const rows = this.rows;
-    const cardWidth = Math.max(240, this.viewportWidth - 12);
-    const items = [];
-    const threads = (discussions?.threads ?? []).filter((thread) => thread.path === file.path);
-    const anchors = /* @__PURE__ */ new Map();
-    for (const thread of threads) {
-      const row = threadRow(rows, thread);
-      const group = anchors.get(row) ?? [];
-      group.push(thread);
-      anchors.set(row, group);
-    }
-    const appendThreads = (row) => {
-      for (const thread of anchors.get(row) ?? []) {
-        items.push({
-          key: thread.id,
-          height: this.threadHeights.get(thread.id) ?? THREAD_ESTIMATE,
-          render: () => discussions.card(thread, row === null, cardWidth, (height, cx) => {
-            const measured = Math.ceil(height);
-            if (measured <= 0 || this.threadHeights.get(thread.id) === measured) return;
-            this.threadHeights.set(thread.id, measured);
-            cx.notify();
-          }),
-          commentIds: thread.comments.map((c) => c.id)
-        });
-      }
-    };
-    rows.forEach((row, index2) => {
-      const count = commit ? discussions?.inlineDraftCount(file.path, row) ?? 0 : 0;
-      const height = ROW_HEIGHT + count * COMPOSER_HEIGHT;
-      items.push({
-        key: `line-${index2}`,
-        height,
-        render: () => {
-          const comment = commit ? discussions?.inlineComposer(file.path, commit, row, cardWidth) : void 0;
-          return v_flex9().h(height).flex_none().child(diffRow(row, comment?.gutters)).children(comment?.editors ?? []);
-        }
-      });
-      appendThreads(index2);
-    });
-    appendThreads(null);
-    const sizes = items.map((item) => item.height);
-    if (this.target !== null) {
-      const index2 = items.findIndex((item) => item.commentIds?.includes(this.target));
-      if (index2 >= 0) {
-        const top = sizes.slice(0, index2).reduce((sum, height) => sum + height, 0);
-        this.offset = top - Math.max(0, (this.viewportHeight - sizes[index2]) / 2);
-        this.target = null;
-      }
-    }
-    const visible = itemWindow(sizes, this.offset, this.viewportHeight);
-    this.offset = visible.offset;
-    this.totalHeight = visible.total;
-    const maxOffset = Math.max(0, visible.total - this.viewportHeight);
-    const thumbHeight = Math.min(
-      this.viewportHeight,
-      Math.max(28, this.viewportHeight ** 2 / Math.max(1, visible.total))
-    );
-    const travel = this.viewportHeight - thumbHeight;
-    const thumbTop = maxOffset > 0 ? this.offset / maxOffset * travel : 0;
-    const id = `pull-diff-${file.path}`;
-    const header = v_flex9().flex_none().px(16).py(8).gap(6).border_b(1).border_color(t.border).child(
-      h_flex10().gap(10).items_center().flex_wrap().child(div13().min_w(0).font_medium().child(file.path)).child(div13().text_color(t.done).child(`+${file.additions}`)).child(div13().text_color(t.blocked).child(`\u2212${file.deletions}`)).child(link(`${id}-browser`, file.url, "Open File on GitHub").text_size(12).text_color(t.accent))
-    ).when(
-      file.previousPath !== null,
-      (el) => el.child(div13().text_size(12).text_color(t.dim).child(`Renamed from ${file.previousPath}`))
-    );
-    const body = items.length > 0 ? div13().id(`${id}-body`).flex_1().min_h(0).min_w(0).relative().overflow_hidden().on_size_change((size, cx) => {
-      if (size.width > 0 && size.height > 0 && (size.width !== this.viewportWidth || size.height !== this.viewportHeight)) {
-        this.viewportWidth = size.width;
-        this.viewportHeight = size.height;
-        cx.notify();
-      }
-    }).on_scroll_wheel((event, cx) => {
-      if (event.delta.y && Math.abs(event.delta.y) >= Math.abs(event.delta.x)) {
-        this.scrollTo(this.offset - event.delta.y, cx);
-        cx.stop_propagation();
-      }
-    }).on_mouse_move((event, cx) => {
-      if (this.drag && travel > 0)
-        this.scrollTo(this.drag.offset + (event.position.y - this.drag.y) * maxOffset / travel, cx);
-    }).on_mouse_up("left", () => {
-      this.drag = null;
-    }).on_hover((hovered) => {
-      if (!hovered) this.drag = null;
-    }).child(
-      div13().id(`${id}-horizontal`).absolute().top_0().bottom_0().left_0().right(12).overflow_x_scrollbar().child(
-        div13().relative().h_full().w(Math.max(this.width, cardWidth)).overflow_hidden().child(
-          v_flex9().absolute().top(visible.top - visible.offset).left_0().w_full().children(
-            items.slice(visible.start, visible.end).map(
-              (item) => div13().id(`${id}-${item.key}`).h(item.height).flex_none().child(item.render())
-            )
-          )
-        )
-      )
-    ).when(
-      maxOffset > 0,
-      (el) => el.child(
-        div13().id(`${id}-scrollbar`).absolute().top_0().bottom_0().right_0().w(12).cursor_pointer().accessibility_label("Diff vertical scrollbar").on_mouse_down("left", (event, cx) => {
-          cx.stop_propagation();
-          const y = event.local_position?.y;
-          if (y === void 0 || travel <= 0) return;
-          if (y < thumbTop || y > thumbTop + thumbHeight)
-            this.scrollTo((y - thumbHeight / 2) / travel * maxOffset, cx);
-          this.drag = { y: event.position.y, offset: this.offset };
-        }).child(div13().absolute().top(thumbTop).right(2).w(8).h(thumbHeight).rounded(4).bg(t.dim))
-      )
-    ) : div13().p(20).text_color(t.dim).child(
-      file.additions === 0 && file.deletions === 0 ? "No textual changes in this file. Open it on GitHub to view the full file." : "GitHub did not provide a patch for this file (it may be binary or too large). Open it on GitHub to view the changes."
-    );
-    return v_flex9().id(`${id}-viewport`).flex_1().min_h(0).min_w(0).overflow_hidden().child(header).when(Boolean(discussions), (el) => el.child(discussions.status())).when(
-      Boolean(discussions) && !commit,
-      (el) => el.child(
-        div13().px(16).text_size(12).text_color(t.dim).child("Inline comments are unavailable until pull request details finish loading.")
-      )
-    ).when(
-      !file.patch && file.status !== "unchanged" && items.length > 0,
-      (el) => el.child(
-        div13().p(12).text_color(t.dim).child("GitHub did not provide a patch for this file. Discussions are shown below.")
-      )
-    ).child(body);
-  }
-};
-
-// src/github/views/pull-timeline.ts
-import { h_flex as h_flex11, TextView as TextView2, v_flex as v_flex10 } from "gpui-base";
-import { div as div14 } from "gpui-kit";
-function timelineItem(item, discussions, onLink, open, activity) {
-  const t = colors();
-  if (item.kind === "event") {
-    return v_flex10().id(`pull-activity-${item.id}`).min_w(0).gap(6).px(16).py(8).text_size(12).child(
-      h_flex11().min_w(0).gap(8).items_center().child(div14().flex_none().text_color(t.dim).child("\u25C7")).child(div14().min_w(0).truncate().font_semibold().tooltip(item.author).child(item.author)).child(div14().flex_none().text_color(t.dim).child(item.verb)).child(div14().flex_1()).child(
-        div14().flex_none().text_color(t.dim).tooltip(item.createdAt).child(relativeTime(item.createdAt, Date.now()))
-      )
-    ).when(
-      Boolean(item.body.trim()) || Boolean(item.details),
-      (el) => el.child(
-        v_flex10().min_w(0).pl(20).gap(6).when(
-          Boolean(item.body.trim()),
-          (el2) => el2.child(
-            TextView2.markdown(`pull-activity-body-${item.id}`, item.markdown).selectable(true).scrollable(false).on_link_click(onLink)
-          )
-        ).when(
-          Boolean(item.details && activity),
-          (el2) => el2.child(
-            button(
-              `pull-activity-toggle-${item.id}`,
-              activity?.expanded ? "Hide" : "Show",
-              activity?.expanded ? "Hide Commit Details" : "Show Commit Details",
-              (_e, cx) => activity?.toggle(cx)
-            ).self_start().text_color(t.accent)
-          )
-        ).when(
-          Boolean(item.details && activity?.expanded),
-          (el2) => el2.child(
-            TextView2.markdown(`pull-activity-details-${item.id}`, item.details.markdown).selectable(true).scrollable(false).on_link_click(onLink)
-          )
-        )
-      )
-    );
-  }
-  if (item.kind === "comment") return postCard(`pull-comment-${item.id}`, item, item.verb, onLink);
-  const roots = item.discussion.filter((d) => d.root === d.comment.id);
-  return v_flex10().id(`pull-review-${item.id}`).min_w(0).w_full().border_1().border_color(t.border).rounded(8).overflow_hidden().child(
-    postCard(`pull-review-header-${item.id}`, item, item.verb, onLink, {
-      embedded: true,
-      headingOnly: !item.body.trim()
-    })
-  ).when(
-    roots.length > 0,
-    (el) => el.child(
-      v_flex10().min_w(0).p(12).gap(12).children(
-        roots.map((d) => {
-          const thread = discussions?.threads.find((thread2) => thread2.root === d.root);
-          if (thread && discussions)
-            return discussions.timeline(thread, d.snippet, (cx) => open(cx, d.path, d.root));
-          return v_flex10().min_w(0).border_1().border_color(t.border).rounded(6).overflow_hidden().child(
-            button(
-              `inline-jump-${d.root}`,
-              d.path,
-              "Open File Diff",
-              (_e, cx) => open(cx, d.path, d.root)
-            ).text_color(t.accent)
-          ).when(Boolean(d.snippet), (el2) => el2.child(diffSnippet(`inline-snippet-${d.root}`, d.snippet))).children(
-            item.discussion.filter((reply) => reply.root === d.root).map(
-              (reply, index2) => postCard(`inline-${reply.comment.id}`, reply.comment, "commented", onLink, {
-                embedded: true
-              }).when(index2 > 0, (el2) => el2.border_t(1).border_color(t.border))
-            )
-          );
-        })
-      )
-    )
-  );
-}
 
 // src/github/views/pull.ts
 var REVIEWS = {
@@ -13265,18 +13277,13 @@ var Pull = class {
         )
       ).child(this.diff.render(file, this.discussions ?? void 0, this.entry?.pull?.headSha));
     if (this.selected && this.files?.files && this.discussions?.threads.some((thread) => thread.path === this.selected)) {
-      if (this.missingFile?.path !== this.selected)
-        this.missingFile = {
-          path: this.selected,
-          previousPath: null,
-          status: "unchanged",
-          additions: 0,
-          deletions: 0,
-          patch: null,
-          viewed: false,
-          url: this.entry?.pull?.url ?? (this.ref ? detailUrl(this.ref) : "")
-        };
-      return v_flex11().flex_1().min_h(0).child(quiet("This file is no longer in the changed-files list. Its discussions are shown below.")).child(this.diff.render(this.missingFile, this.discussions));
+      const missing = this.missingFile?.path === this.selected ? this.missingFile : {
+        path: this.selected,
+        url: this.entry?.pull?.url ?? (this.ref ? detailUrl(this.ref) : ""),
+        missing: true
+      };
+      this.missingFile = missing;
+      return v_flex11().flex_1().min_h(0).child(quiet("This file is no longer in the changed-files list. Its discussions are shown below.")).child(this.diff.render(missing, this.discussions));
     }
     const failure = this.files?.failure ?? this.discussions?.failure;
     const message = failure ?? (this.files?.loading ? "Loading changed files\u2026" : "This file is not in the changed-files list. Choose another file in the GitHub sidebar or refresh.");
@@ -13308,7 +13315,7 @@ var Pull = class {
         this.mergeArea(pull),
         // Discussion metadata is fetched once per PR; report its progress/failure once, not per thread.
         ...this.discussions?.loading || this.discussions?.failure ? [this.discussions.status()] : [],
-        ...(this.discussions?.published.timeline(pull.timeline) ?? pull.timeline).map((item) => {
+        ...(this.discussions?.acknowledged.timeline(pull.timeline) ?? pull.timeline).map((item) => {
           const key = JSON.stringify([item.author, item.createdAt, item.body]);
           return timelineItem(item, this.discussions, onLink, (cx, path, comment) => this.select(cx, path, comment), {
             expanded: this.expandedActivity.has(key),
