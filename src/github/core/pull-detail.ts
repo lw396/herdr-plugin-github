@@ -4,8 +4,8 @@ import { parseComments } from "./discussion.ts";
 import { type Item, parseItem, type RestItem } from "./item.ts";
 import { type MergeInfo, mergeInfo, type RestMergePull } from "./merge.ts";
 import { type PullTimelineItem, pullTimeline } from "./pull-timeline.ts";
-import { type PullState, pullState } from "./pulls.ts";
 import { parseReviewers, type RestReview, type Reviewer } from "./reviewers.ts";
+import { type PullState, pullState } from "./state.ts";
 
 export interface PullDetail extends Item {
 	state: PullState;

@@ -30,7 +30,8 @@ import { ChangedFiles } from "./files.ts";
 import { loadProjects, readFailure } from "./item-load.ts";
 import { timelineItem } from "./pull-timeline.ts";
 import { ReviewThreads } from "./review-threads.ts";
-import { actionButton, button, colors, link, PULL_STATES } from "./ui.ts";
+import { PULL_STATES } from "./state.ts";
+import { actionButton, button, colors, link } from "./ui.ts";
 
 interface Loaded {
 	pull?: PullDetail;

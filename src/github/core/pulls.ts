@@ -3,13 +3,7 @@
 import type { Query } from "./gh.ts";
 import { PAGE, type Page } from "./page.ts";
 import type { RemoteRepo } from "./remote.ts";
-
-export type PullState = "open" | "draft" | "merged" | "closed";
-
-/** Draft styling applies only to open PRs; merged and closed always take precedence. */
-export function pullState(state: Exclude<PullState, "draft">, draft: boolean): PullState {
-	return state === "open" && draft ? "draft" : state;
-}
+import { type PullState, pullState } from "./state.ts";
 
 export interface Pull {
 	number: number;

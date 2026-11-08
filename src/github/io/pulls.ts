@@ -9,14 +9,13 @@ import {
 	type Pull,
 	type PullGroup,
 	type PullGroupKind,
-	type PullState,
 	parseLocalPulls,
 	parsePullGroup,
 	pullGroupQuery,
-	pullState,
 } from "../core/pulls.ts";
 import type { RemoteRepo } from "../core/remote.ts";
 import { parseThreads, type ReviewThread, type ThreadNode } from "../core/review-threads.ts";
+import { type PullState, pullState } from "../core/state.ts";
 import { written } from "./changes.ts";
 import { api, changes, eachPage, GhError, graphql, mutate } from "./gh.ts";
 import type { LocalBranches } from "./git.ts";

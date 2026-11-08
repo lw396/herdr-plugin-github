@@ -2,10 +2,11 @@
 
 import { div, svg } from "gpui-kit";
 import type { Pull, PullCategory, PullGroup } from "../core/pulls.ts";
-import * as known from "../io/known.ts";
+import * as kept from "../io/pull-groups.ts";
 import { ChangedFiles } from "./files.ts";
 import { GroupList, type ListHost } from "./groups.ts";
-import { button, colors, PULL_STATES } from "./ui.ts";
+import { PULL_STATES } from "./state.ts";
+import { button, colors } from "./ui.ts";
 
 /** What the extension says in an empty category. */
 const EMPTY = "0 pull requests in this category";
@@ -39,9 +40,9 @@ export function pullList(host: ListHost): GroupList<PullCategory, Pull, PullGrou
 		],
 		// As the extension starts: only All Open; the searches wait until their group is unfolded.
 		expanded: ["all"],
-		peek: known.peekPullGroup,
-		ask: known.pullGroup,
-		more: known.morePulls,
+		peek: kept.peekPullGroup,
+		ask: kept.pullGroup,
+		more: kept.morePulls,
 		disclosure: (pull, key) => {
 			const state = disclosure(pull, key);
 			return button(

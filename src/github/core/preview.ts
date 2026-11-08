@@ -2,7 +2,7 @@
 import { type DetailKind, type DetailRef, detailKey } from "./detail.ts";
 import { type Label, parseLabel } from "./labels.ts";
 import { markdownSummary } from "./markdown.ts";
-import { type PullState, pullState } from "./pulls.ts";
+import { type PullState, pullState } from "./state.ts";
 
 /** Fetch a little before the native card opens; slow remote machines can still show a loading state. */
 export const PREVIEW_DWELL_MS = 200;

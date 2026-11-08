@@ -9,7 +9,7 @@ import type { Failure } from "../core/gh.ts";
 import type { Page } from "../core/page.ts";
 import { previewKey } from "../core/preview.ts";
 import * as gh from "../io/gh.ts";
-import type { Ready } from "../io/known.ts";
+import type { Ready } from "../io/groups.ts";
 import { RowPreviews } from "./preview.ts";
 import { button, colors, spinner, stop } from "./ui.ts";
 

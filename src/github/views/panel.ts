@@ -10,12 +10,16 @@ import { ConditionalPoll } from "../core/polling.ts";
 import type { RemoteRepo } from "../core/remote.ts";
 import { footerStatus, listNotice, noRepository, POLL_SECONDS } from "../core/sidebar.ts";
 import { Notices } from "../io/changes.ts";
-import { location, sidebarVisible } from "../io/context.ts";
+import { location } from "../io/context.ts";
 import { DetailTabs } from "../io/detail-tabs.ts";
 import * as gh from "../io/gh.ts";
+import type { Ready } from "../io/groups.ts";
+import { issueChanged } from "../io/issue-groups.ts";
 import { listChanges } from "../io/issues.ts";
-import * as known from "../io/known.ts";
+import * as place from "../io/place.ts";
+import { pullsChanged } from "../io/pull-groups.ts";
 import { pullListChanges } from "../io/pulls.ts";
+import { sidebarVisible } from "../io/visible.ts";
 import type { ListHost } from "./groups.ts";
 import { issueList } from "./issues.ts";
 import { pullList } from "./pulls.ts";
@@ -116,7 +120,7 @@ export class Panel implements Role {
 	}
 
 	/** The gh account's login on the folder's machine and the remote, once both are known and usable. */
-	private ready(): known.Ready | null {
+	private ready(): Ready | null {
 		const status = this.account?.status;
 		return this.remote && status?.ok && this.account
 			? { remote: this.remote, login: status.user, on: this.account.on, cwd: location().cwd }
@@ -138,8 +142,8 @@ export class Panel implements Role {
 		this.context = context;
 		this.poll.sync(context, true);
 		// Never the previous place's facts: this place's known ones, or "…" until they arrive.
-		this.account = known.peekAccount(where.on);
-		this.remote = known.peekRemote(where);
+		this.account = place.peekAccount(where.on);
+		this.remote = place.peekRemote(where);
 		this.failure = undefined;
 		this.checkFailed = false;
 		this.issues.show();
@@ -149,10 +153,10 @@ export class Panel implements Role {
 			try {
 				// account() never rejects: show its status even when git fails there.
 				const [, remote] = await Promise.all([
-					known.account(where.on, force).then((a) => {
+					place.account(where.on, force).then((a) => {
 						if (current()) this.account = a;
 					}),
-					known.remote(where, force),
+					place.remote(where, force),
 				]);
 				if (!current()) return;
 				this.remote = remote;
@@ -180,7 +184,7 @@ export class Panel implements Role {
 			// A merge changes every account's lists; a submitted review only what that machine's account sees.
 			if (!n.pull && !n.review) continue;
 			const on = n.pull ? undefined : n.review?.on;
-			known.pullsChanged(n.repo, on);
+			pullsChanged(n.repo, on);
 			shownPullsChanged ||=
 				ready !== null &&
 				(on === undefined || on === ready.on) &&
@@ -189,7 +193,7 @@ export class Panel implements Role {
 		if (shownPullsChanged && this.isVisible() && this.tab === "prs") this.pulls.load(cx, true);
 		const changes = notices.flatMap((n) => (n.state ? [n.state] : []));
 		if (changes.length === 0) return;
-		changes.forEach(known.issueChanged);
+		changes.forEach(issueChanged);
 		this.issues.show();
 		this.issues.load(cx);
 	}

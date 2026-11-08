@@ -3,7 +3,7 @@
 import { div } from "gpui-kit";
 import type { GroupKind, Issue, IssueGroup } from "../core/issues.ts";
 import { relativeTime } from "../core/time.ts";
-import * as known from "../io/known.ts";
+import * as kept from "../io/issue-groups.ts";
 import { GroupList, type ListHost } from "./groups.ts";
 import { colors } from "./ui.ts";
 
@@ -18,9 +18,9 @@ export function issueList(host: ListHost, failed: () => void): GroupList<GroupKi
 			{ kind: "closed", title: "Closed", empty: "No closed issues." },
 		],
 		expanded: ["assigned"],
-		peek: known.peekIssueGroup,
-		ask: known.issueGroup,
-		more: known.moreIssues,
+		peek: kept.peekIssueGroup,
+		ask: kept.issueGroup,
+		more: kept.moreIssues,
 		failed,
 		cells: (issue) => [
 			div().flex_none().text_color(colors().dim).child(`#${issue.number}`),

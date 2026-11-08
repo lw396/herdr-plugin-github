@@ -12,10 +12,11 @@ import {
 	previewKey,
 } from "../core/preview.ts";
 import { failureOf } from "../io/gh.ts";
-import type { Ready } from "../io/known.ts";
+import type { Ready } from "../io/groups.ts";
 import { Previews } from "../io/preview.ts";
 import { labels } from "./detail.ts";
-import { colors, PULL_STATES, spinner, stop } from "./ui.ts";
+import { PULL_STATES } from "./state.ts";
+import { colors, spinner, stop } from "./ui.ts";
 
 export function previewCard(ref: DetailRef, preview: Preview | undefined, failure?: string): Element {
 	const t = colors();

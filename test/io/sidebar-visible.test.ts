@@ -1,6 +1,6 @@
 import { afterEach, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
-import { SIDEBAR_SLOT, sidebarVisible } from "../../src/github/io/context.ts";
+import { SIDEBAR_SLOT, sidebarVisible } from "../../src/github/io/visible.ts";
 import { reset, screen } from "../fake-herdr.ts";
 
 afterEach(reset);

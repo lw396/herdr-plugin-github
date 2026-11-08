@@ -3,12 +3,12 @@ import { readFileSync } from "node:fs";
 import { graphqlArgs } from "../../src/github/core/gh.ts";
 import { localPullsQuery } from "../../src/github/core/pulls.ts";
 import type { RemoteRepo } from "../../src/github/core/remote.ts";
-import * as known from "../../src/github/io/known.ts";
+import * as kept from "../../src/github/io/pull-groups.ts";
 import { execCalls, machine, reset } from "../fake-herdr.ts";
 
 afterEach(() => {
 	reset();
-	known.clear();
+	kept.clear();
 });
 
 const remote = { remote: "origin", host: "github.com", owner: "lw396", repo: "herdr-plugin-github" };
@@ -43,7 +43,7 @@ test("local branches are batch-matched on their machine; a branch without a PR i
 		[remotes]: { stdout: "origin\thttps://github.com/lw396/herdr-plugin-github.git (fetch)\n" },
 		[asked]: { stdout: fixture },
 	});
-	const page = await known.pullGroup("local", local(remote));
+	const page = await kept.pullGroup("local", local(remote));
 	expect(page.rows.map((p) => [p.number, p.state])).toEqual([
 		[36, "draft"],
 		[35, "open"],
@@ -65,7 +65,7 @@ test("a fork only matches its own heads, even when another fork has a newer same
 		[asked.replace("-f owner=lw396", "-f owner=parent")]: { stdout: JSON.stringify(reply) },
 	});
 	expect(
-		(await known.pullGroup("local", local({ ...remote, remote: "upstream", owner: "parent" }))).rows.map(
+		(await kept.pullGroup("local", local({ ...remote, remote: "upstream", owner: "parent" }))).rows.map(
 			(p) => p.number,
 		),
 	).toEqual([36, 35]);
@@ -81,7 +81,7 @@ test("a fork remote need not be named origin", async () => {
 		[asked.replace("-f owner=lw396", "-f owner=parent")]: { stdout: fixture },
 	});
 	expect(
-		(await known.pullGroup("local", local({ ...remote, remote: "upstream", owner: "parent" }))).rows.map(
+		(await kept.pullGroup("local", local({ ...remote, remote: "upstream", owner: "parent" }))).rows.map(
 			(p) => p.number,
 		),
 	).toEqual([36, 35]);
@@ -102,7 +102,7 @@ test("the newest PR per branch can be closed or merged, not the older open PR", 
 		[remotes]: { stdout: "origin\thttps://github.com/lw396/herdr-plugin-github.git (fetch)\n" },
 		[asked]: { stdout: JSON.stringify(reply) },
 	});
-	expect((await known.pullGroup("local", local(remote))).rows.map((p) => [p.number, p.state])).toEqual([
+	expect((await kept.pullGroup("local", local(remote))).rows.map((p) => [p.number, p.state])).toEqual([
 		[80, "merged"],
 		[36, "closed"],
 	]);
@@ -118,9 +118,7 @@ test("a live merged-PR reply selects the latest PR for a reused branch", async (
 			stdout: readFileSync(new URL("../fixtures/pulls-local-merged-cli.json", import.meta.url), "utf8"),
 		},
 	});
-	expect((await known.pullGroup("local", local(cli))).rows.map((p) => [p.number, p.state])).toEqual([
-		[14976, "merged"],
-	]);
+	expect((await kept.pullGroup("local", local(cli))).rows.map((p) => [p.number, p.state])).toEqual([[14976, "merged"]]);
 });
 
 test("only foreign or deleted head repositories means no local PRs", async () => {
@@ -132,12 +130,12 @@ test("only foreign or deleted head repositories means no local PRs", async () =>
 		[remotes]: { stdout: "origin\thttps://github.com/lw396/herdr-plugin-github.git (fetch)\n" },
 		[asked]: { stdout: JSON.stringify(reply) },
 	});
-	expect((await known.pullGroup("local", local(remote))).rows).toEqual([]);
+	expect((await kept.pullGroup("local", local(remote))).rows).toEqual([]);
 });
 
 test("no local branches needs no GitHub query", async () => {
 	machine("center", { [branches]: { stdout: "" } });
-	expect(await known.pullGroup("local", local(remote))).toEqual({ total: 0, more: false, cursor: null, rows: [] });
+	expect(await kept.pullGroup("local", local(remote))).toEqual({ total: 0, more: false, cursor: null, rows: [] });
 	expect(execCalls().some((c) => c.command === "gh")).toBe(false);
 });
 
@@ -161,15 +159,15 @@ test("local groups page 30 matches from one batch and keep each checkout separat
 			stdout: JSON.stringify({ data: { repository } }),
 		},
 	});
-	const first = await known.pullGroup("local", local(remote));
+	const first = await kept.pullGroup("local", local(remote));
 	expect(first).toMatchObject({ total: 31, more: true, cursor: "30" });
 	expect(first.rows).toHaveLength(30);
-	const more = await known.morePulls("local", local(remote), first);
+	const more = await kept.morePulls("local", local(remote), first);
 	expect(more).toMatchObject({ total: 31, more: false, cursor: null });
 	expect(more.rows).toHaveLength(31);
-	expect(await known.pullGroup("local", local(remote))).toBe(more);
-	expect(known.peekPullGroup("local", { ...local(remote), cwd: "/w/other" })).toBeUndefined();
-	expect(known.peekPullGroup("local", local(remote, "other-account"))).toBeUndefined();
+	expect(await kept.pullGroup("local", local(remote))).toBe(more);
+	expect(kept.peekPullGroup("local", { ...local(remote), cwd: "/w/other" })).toBeUndefined();
+	expect(kept.peekPullGroup("local", local(remote, "other-account"))).toBeUndefined();
 	expect(execCalls().filter((c) => c.command === "gh")).toHaveLength(1);
 });
 
@@ -182,11 +180,11 @@ test("unchanged local branch checks reuse the batch; explicit refresh still re-a
 			[remotes]: { stdout: "origin\thttps://github.com/lw396/herdr-plugin-github.git (fetch)\n" },
 			[asked]: { stdout: fixture },
 		});
-		const first = await known.pullGroup("local", local(remote));
+		const first = await kept.pullGroup("local", local(remote));
 		now += 60_001;
-		expect(await known.pullGroup("local", local(remote))).toBe(first);
+		expect(await kept.pullGroup("local", local(remote))).toBe(first);
 		expect(execCalls().filter((c) => c.command === "gh")).toHaveLength(1);
-		await known.pullGroup("local", local(remote), true);
+		await kept.pullGroup("local", local(remote), true);
 		expect(execCalls().filter((c) => c.command === "gh")).toHaveLength(2);
 		const request = localPullsQuery(remote, ["master", "test/pr-fixture-a"]);
 		const reply = JSON.parse(fixture);
@@ -196,7 +194,7 @@ test("unchanged local branch checks reuse the batch; explicit refresh still re-a
 			[remotes]: { stdout: "origin\thttps://github.com/lw396/herdr-plugin-github.git (fetch)\n" },
 			[`~$ gh ${graphqlArgs(request).join(" ")}`]: { stdout: JSON.stringify(reply) },
 		});
-		expect((await known.pullGroup("local", local(remote))).rows.map((p) => p.number)).toEqual([35]);
+		expect((await kept.pullGroup("local", local(remote))).rows.map((p) => p.number)).toEqual([35]);
 		expect(execCalls().filter((c) => c.command === "gh")).toHaveLength(3);
 	} finally {
 		clock.mockRestore();
@@ -205,6 +203,6 @@ test("unchanged local branch checks reuse the batch; explicit refresh still re-a
 
 test("a missing remote git never falls back to this computer", async () => {
 	machine("center", {});
-	await expect(known.pullGroup("local", local(remote))).rejects.toThrow("cannot start git");
+	await expect(kept.pullGroup("local", local(remote))).rejects.toThrow("cannot start git");
 	expect(execCalls().every((c) => c.on === "center")).toBe(true);
 });
