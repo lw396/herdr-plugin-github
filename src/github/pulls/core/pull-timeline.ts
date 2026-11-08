@@ -1,5 +1,6 @@
 import { activityText, parseActivity } from "../../detail/core/activity.ts";
 import { type Comment, login, parseComment } from "../../detail/core/discussion.ts";
+import type { Label } from "../../detail/core/labels.ts";
 import { readerMarkdown } from "../../detail/core/markdown.ts";
 import { type RestReview, submitted } from "./reviewers.ts";
 
@@ -11,7 +12,7 @@ interface Event {
 	sha?: string;
 	message?: string;
 	author?: { name: string; date: string };
-	label?: { name: string };
+	label?: { name: string; color?: string };
 	assignee?: { login: string };
 	commit_id?: string;
 }
@@ -31,6 +32,8 @@ export interface PullTimelineItem extends Omit<Comment, "id"> {
 	kind: "comment" | "review" | "event";
 	verb: string;
 	reviewState?: string;
+	/** Labels added or removed by a label event, shown as chips rather than text. */
+	labels?: Label[];
 	/** Commit message after the subject, hidden until explicitly expanded. */
 	details?: { body: string; markdown: string };
 	discussion: { root: number; comment: Comment; path: string; snippet: string }[];
@@ -49,7 +52,8 @@ export function timelineOrder(a: PullTimelineItem, b: PullTimelineItem): number 
 export const replyOnlyReview = (commented: boolean, body: string | null, roots: number, replies: number): boolean =>
 	commented && !body?.trim() && roots === 0 && replies > 0;
 
-/** Separate endpoints are merged once; pending reviews remain private, not published activity. */
+/** Separate endpoints are merged once; pending reviews remain private, not published activity.
+ * Adjacent same-time label changes by one person are grouped, as in the issue timeline. */
 export function pullTimeline(
 	comments: Comment[],
 	events: unknown[],
@@ -102,10 +106,11 @@ export function pullTimeline(
 		let verb = "";
 		let body = "";
 		let details: PullTimelineItem["details"];
+		let labels: Label[] | undefined;
 		const activity = parseActivity([e])[0];
 		if (activity) {
 			verb = activityText(activity);
-			body = "labels" in activity ? activity.labels.map((l) => l.name).join(", ") : "";
+			if ("labels" in activity) labels = activity.labels;
 		} else if (e.event === "committed") {
 			verb = "committed";
 			const [subject = "", ...lines] = (e.message ?? "").trim().split(/\r?\n/);
@@ -130,9 +135,23 @@ export function pullTimeline(
 			reactions: [],
 			kind: "event",
 			verb,
+			...(labels ? { labels } : {}),
 			...(details ? { details } : {}),
 			discussion: [],
 		});
 	}
-	return result.sort(timelineOrder);
+	const shown: PullTimelineItem[] = [];
+	for (const item of result.sort(timelineOrder)) {
+		const previous = shown.at(-1);
+		if (
+			item.labels &&
+			previous?.labels &&
+			item.verb === previous.verb &&
+			item.author === previous.author &&
+			item.createdAt === previous.createdAt
+		) {
+			shown[shown.length - 1] = { ...previous, labels: [...previous.labels, ...item.labels] };
+		} else shown.push(item);
+	}
+	return shown;
 }

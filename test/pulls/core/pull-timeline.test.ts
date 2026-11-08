@@ -105,10 +105,39 @@ test("label, assignment, force-push and merge events sort together, without dupl
 		"https://github.com/a/b/pull/1",
 	);
 	expect(items.map((x) => [x.verb, x.body])).toEqual([
-		["added", "ready"],
+		["added", ""],
 		["assigned dev", ""],
 		["force-pushed the branch", "abcdefg"],
 		["merged this", "1234567"],
+	]);
+});
+
+test("label events show colored labels, grouped per person and second like GitHub's timeline", () => {
+	// cli/cli#13340: the triage bot's label changes, two seconds apart.
+	const bot = { login: "github-actions[bot]" };
+	const label = (id: number, event: string, created_at: string, name: string, color: string) => ({
+		id,
+		event,
+		created_at,
+		actor: bot,
+		label: { name, color },
+	});
+	const items = pullTimeline(
+		[],
+		[
+			label(1, "labeled", "2026-05-04T05:10:11Z", "external", "2700AF"),
+			label(2, "labeled", "2026-05-04T05:10:11Z", "needs-triage", "D6393F"),
+			label(3, "labeled", "2026-05-04T05:10:13Z", "unmet-requirements", "ee2329"),
+			label(4, "unlabeled", "2026-05-04T05:10:13Z", "needs-triage", "D6393F"),
+		],
+		[],
+		[],
+		"https://github.com/cli/cli/pull/13340",
+	);
+	expect(items.map((x) => [x.verb, x.body, x.labels?.map((l) => `${l.name} ${l.color}`)])).toEqual([
+		["added", "", ["external #2700af", "needs-triage #d6393f"]],
+		["added", "", ["unmet-requirements #ee2329"]],
+		["removed", "", ["needs-triage #d6393f"]],
 	]);
 });
 

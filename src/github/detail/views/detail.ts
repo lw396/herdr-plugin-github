@@ -217,6 +217,26 @@ export function detailDocument(
 		.child(wide ? h_flex().gap(24).items_start().child(posts).child(side) : v_flex().gap(20).child(side).child(posts));
 }
 
+/** Consecutive one-line activity rows stay together; the timeline's wider gap separates them from cards. */
+export function activityRuns(rows: { activity: boolean; element: Element }[]): Element[] {
+	const result: Element[] = [];
+	let run: Element[] = [];
+	const flush = () => {
+		if (run.length === 1) result.push(run[0]!);
+		else if (run.length > 1) result.push(v_flex().min_w(0).children(run));
+		run = [];
+	};
+	for (const row of rows) {
+		if (row.activity) run.push(row.element);
+		else {
+			flush();
+			result.push(row.element);
+		}
+	}
+	flush();
+	return result;
+}
+
 export function stateBadge(label: string, color: Color, icon?: string): Element {
 	return h_flex()
 		.gap(6)

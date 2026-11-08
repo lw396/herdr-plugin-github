@@ -1,6 +1,6 @@
 import { h_flex, TextView, v_flex } from "gpui-base";
 import { type Context, div, type Element } from "gpui-kit";
-import { postCard } from "../../detail/views/detail.ts";
+import { labelChip, postCard } from "../../detail/views/detail.ts";
 import { relativeTime } from "../../shared/core/time.ts";
 import { button, colors } from "../../shared/views/ui.ts";
 import { type PullTimelineItem, timelineKey } from "../core/pull-timeline.ts";
@@ -17,59 +17,71 @@ export function timelineItem(
 	const t = colors();
 	if (item.kind === "event") {
 		const key = timelineKey(item);
+		const body = item.body.trim();
+		const labels = item.labels ?? [];
+		// One line, as in the issue timeline: who, what, the labels or commit subject, and when.
+		const row = h_flex()
+			.min_w(0)
+			.gap(8)
+			.items_center()
+			.flex_wrap()
+			.child(div().flex_none().text_color(t.dim).child("◇"))
+			.child(div().flex_none().font_semibold().child(item.author))
+			.child(div().flex_none().text_color(t.dim).child(item.verb))
+			.when(labels.length > 0, (el) =>
+				el.children(labels.map(labelChip)).child(
+					div()
+						.flex_none()
+						.text_color(t.dim)
+						.child(labels.length === 1 ? "label" : "labels"),
+				),
+			)
+			.child(
+				div()
+					.flex_1()
+					.min_w(0)
+					.when(Boolean(body), (el) =>
+						el.child(
+							TextView.markdown(`pull-activity-body-${key}`, item.markdown)
+								.selectable(true)
+								.scrollable(false)
+								.on_link_click(onLink),
+						),
+					),
+			)
+			.when(Boolean(item.details && activity), (el) =>
+				el.child(
+					button(
+						`pull-activity-toggle-${key}`,
+						activity?.expanded ? "Hide" : "Show",
+						activity?.expanded ? "Hide Commit Details" : "Show Commit Details",
+						(_e, cx) => activity?.toggle(cx),
+					)
+						.flex_none()
+						.text_color(t.accent),
+				),
+			)
+			.child(
+				div().flex_none().text_color(t.dim).tooltip(item.createdAt).child(relativeTime(item.createdAt, Date.now())),
+			);
 		return v_flex()
 			.id(`pull-activity-${key}`)
 			.min_w(0)
 			.gap(6)
 			.px(16)
-			.py(8)
+			.py(4)
 			.text_size(12)
-			.child(
-				h_flex()
-					.min_w(0)
-					.gap(8)
-					.items_center()
-					.child(div().flex_none().text_color(t.dim).child("◇"))
-					.child(div().min_w(0).truncate().font_semibold().tooltip(item.author).child(item.author))
-					.child(div().flex_none().text_color(t.dim).child(item.verb))
-					.child(div().flex_1())
-					.child(
-						div().flex_none().text_color(t.dim).tooltip(item.createdAt).child(relativeTime(item.createdAt, Date.now())),
-					),
-			)
-			.when(Boolean(item.body.trim()) || Boolean(item.details), (el) =>
+			.child(row)
+			.when(Boolean(item.details && activity?.expanded), (el) =>
 				el.child(
 					v_flex()
 						.min_w(0)
 						.pl(20)
-						.gap(6)
-						.when(Boolean(item.body.trim()), (el) =>
-							el.child(
-								TextView.markdown(`pull-activity-body-${key}`, item.markdown)
-									.selectable(true)
-									.scrollable(false)
-									.on_link_click(onLink),
-							),
-						)
-						.when(Boolean(item.details && activity), (el) =>
-							el.child(
-								button(
-									`pull-activity-toggle-${key}`,
-									activity?.expanded ? "Hide" : "Show",
-									activity?.expanded ? "Hide Commit Details" : "Show Commit Details",
-									(_e, cx) => activity?.toggle(cx),
-								)
-									.self_start()
-									.text_color(t.accent),
-							),
-						)
-						.when(Boolean(item.details && activity?.expanded), (el) =>
-							el.child(
-								TextView.markdown(`pull-activity-details-${key}`, item.details!.markdown)
-									.selectable(true)
-									.scrollable(false)
-									.on_link_click(onLink),
-							),
+						.child(
+							TextView.markdown(`pull-activity-details-${key}`, item.details!.markdown)
+								.selectable(true)
+								.scrollable(false)
+								.on_link_click(onLink),
 						),
 				),
 			);

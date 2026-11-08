@@ -10360,6 +10360,24 @@ function detailDocument(layout2, heading, timeline, sections, metadata) {
   const side = metadata.render(layout2, sections);
   return v_flex().gap(18).child(h_flex2().gap(10).pb(4).items_center().flex_wrap().children(heading)).child(wide ? h_flex2().gap(24).items_start().child(posts).child(side) : v_flex().gap(20).child(side).child(posts));
 }
+function activityRuns(rows) {
+  const result = [];
+  let run4 = [];
+  const flush = () => {
+    if (run4.length === 1) result.push(run4[0]);
+    else if (run4.length > 1) result.push(v_flex().min_w(0).children(run4));
+    run4 = [];
+  };
+  for (const row of rows) {
+    if (row.activity) run4.push(row.element);
+    else {
+      flush();
+      result.push(row.element);
+    }
+  }
+  flush();
+  return result;
+}
 function stateBadge(label, color, icon2) {
   return h_flex2().gap(6).items_center().px(10).py(4).rounded(14).bg(`${color}26`).text_size(13).font_semibold().text_color(color).when(icon2 !== void 0, (el) => el.child(svg3(icon2 ?? "").size(14))).child(label);
 }
@@ -11045,10 +11063,11 @@ function pullTimeline(comments, events, reviews, inline, url) {
     let verb = "";
     let body = "";
     let details;
+    let labels2;
     const activity = parseActivity([e])[0];
     if (activity) {
       verb = activityText(activity);
-      body = "labels" in activity ? activity.labels.map((l) => l.name).join(", ") : "";
+      if ("labels" in activity) labels2 = activity.labels;
     } else if (e.event === "committed") {
       verb = "committed";
       const [subject = "", ...lines] = (e.message ?? "").trim().split(/\r?\n/);
@@ -11073,11 +11092,19 @@ function pullTimeline(comments, events, reviews, inline, url) {
       reactions: [],
       kind: "event",
       verb,
+      ...labels2 ? { labels: labels2 } : {},
       ...details ? { details } : {},
       discussion: []
     });
   }
-  return result.sort(timelineOrder);
+  const shown = [];
+  for (const item of result.sort(timelineOrder)) {
+    const previous2 = shown.at(-1);
+    if (item.labels && previous2?.labels && item.verb === previous2.verb && item.author === previous2.author && item.createdAt === previous2.createdAt) {
+      shown[shown.length - 1] = { ...previous2, labels: [...previous2.labels, ...item.labels] };
+    } else shown.push(item);
+  }
+  return shown;
 }
 
 // src/github/pulls/core/pull-detail.ts
@@ -12271,8 +12298,11 @@ ${detailKey(this.ref)}` : null;
       ],
       [
         postCard("issue-body", issue, "opened this issue", onLink),
-        ...issueTimeline(issue.comments, issue.activities).map(
-          (row) => row.type === "comment" ? postCard(`comment-${row.comment.id}`, row.comment, "commented", onLink) : this.activity(row.activity)
+        ...activityRuns(
+          issueTimeline(issue.comments, issue.activities).map((row) => ({
+            activity: row.type === "activity",
+            element: row.type === "comment" ? postCard(`comment-${row.comment.id}`, row.comment, "commented", onLink) : this.activity(row.activity)
+          }))
         ),
         this.composer(issue)
       ],
@@ -12606,33 +12636,38 @@ function timelineItem(item, discussions, onLink, open, activity) {
   const t = colors();
   if (item.kind === "event") {
     const key = timelineKey(item);
-    return v_flex9().id(`pull-activity-${key}`).min_w(0).gap(6).px(16).py(8).text_size(12).child(
-      h_flex10().min_w(0).gap(8).items_center().child(div13().flex_none().text_color(t.dim).child("\u25C7")).child(div13().min_w(0).truncate().font_semibold().tooltip(item.author).child(item.author)).child(div13().flex_none().text_color(t.dim).child(item.verb)).child(div13().flex_1()).child(
-        div13().flex_none().text_color(t.dim).tooltip(item.createdAt).child(relativeTime(item.createdAt, Date.now()))
+    const body = item.body.trim();
+    const labels2 = item.labels ?? [];
+    const row = h_flex10().min_w(0).gap(8).items_center().flex_wrap().child(div13().flex_none().text_color(t.dim).child("\u25C7")).child(div13().flex_none().font_semibold().child(item.author)).child(div13().flex_none().text_color(t.dim).child(item.verb)).when(
+      labels2.length > 0,
+      (el) => el.children(labels2.map(labelChip)).child(
+        div13().flex_none().text_color(t.dim).child(labels2.length === 1 ? "label" : "labels")
+      )
+    ).child(
+      div13().flex_1().min_w(0).when(
+        Boolean(body),
+        (el) => el.child(
+          TextView2.markdown(`pull-activity-body-${key}`, item.markdown).selectable(true).scrollable(false).on_link_click(onLink)
+        )
       )
     ).when(
-      Boolean(item.body.trim()) || Boolean(item.details),
+      Boolean(item.details && activity),
       (el) => el.child(
-        v_flex9().min_w(0).pl(20).gap(6).when(
-          Boolean(item.body.trim()),
-          (el2) => el2.child(
-            TextView2.markdown(`pull-activity-body-${key}`, item.markdown).selectable(true).scrollable(false).on_link_click(onLink)
-          )
-        ).when(
-          Boolean(item.details && activity),
-          (el2) => el2.child(
-            button(
-              `pull-activity-toggle-${key}`,
-              activity?.expanded ? "Hide" : "Show",
-              activity?.expanded ? "Hide Commit Details" : "Show Commit Details",
-              (_e, cx) => activity?.toggle(cx)
-            ).self_start().text_color(t.accent)
-          )
-        ).when(
-          Boolean(item.details && activity?.expanded),
-          (el2) => el2.child(
-            TextView2.markdown(`pull-activity-details-${key}`, item.details.markdown).selectable(true).scrollable(false).on_link_click(onLink)
-          )
+        button(
+          `pull-activity-toggle-${key}`,
+          activity?.expanded ? "Hide" : "Show",
+          activity?.expanded ? "Hide Commit Details" : "Show Commit Details",
+          (_e, cx) => activity?.toggle(cx)
+        ).flex_none().text_color(t.accent)
+      )
+    ).child(
+      div13().flex_none().text_color(t.dim).tooltip(item.createdAt).child(relativeTime(item.createdAt, Date.now()))
+    );
+    return v_flex9().id(`pull-activity-${key}`).min_w(0).gap(6).px(16).py(4).text_size(12).child(row).when(
+      Boolean(item.details && activity?.expanded),
+      (el) => el.child(
+        v_flex9().min_w(0).pl(20).child(
+          TextView2.markdown(`pull-activity-details-${key}`, item.details.markdown).selectable(true).scrollable(false).on_link_click(onLink)
         )
       )
     );
@@ -13503,17 +13538,23 @@ ${detailKey(this.ref)}` : null,
         postCard("pull-body", pull, "opened this pull request", onLink),
         // Discussion metadata is fetched once per PR; report its progress/failure once, not per thread.
         ...this.discussions?.loading || this.discussions?.failure ? [this.discussions.status()] : [],
-        ...(this.discussions?.acknowledged.timeline(pull.timeline) ?? pull.timeline).map((item) => {
-          const key = timelineKey(item);
-          return timelineItem(item, this.discussions, onLink, (cx, path, comment) => this.select(cx, path, comment), {
-            expanded: this.expandedActivity.has(key),
-            toggle: (cx) => {
-              if (this.expandedActivity.has(key)) this.expandedActivity.delete(key);
-              else this.expandedActivity.add(key);
-              cx.notify();
-            }
-          });
-        }),
+        ...activityRuns(
+          (this.discussions?.acknowledged.timeline(pull.timeline) ?? pull.timeline).map((item) => {
+            const key = timelineKey(item);
+            const open = (cx, path, comment) => this.select(cx, path, comment);
+            return {
+              activity: item.kind === "event",
+              element: timelineItem(item, this.discussions, onLink, open, {
+                expanded: this.expandedActivity.has(key),
+                toggle: (cx) => {
+                  if (this.expandedActivity.has(key)) this.expandedActivity.delete(key);
+                  else this.expandedActivity.add(key);
+                  cx.notify();
+                }
+              })
+            };
+          })
+        ),
         this.statusCard(pull),
         ...this.discussions ? [this.discussions.summary(pull.headSha, this.stateActions(pull))] : [this.stateActions(pull)]
       ],

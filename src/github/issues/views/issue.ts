@@ -6,6 +6,7 @@ import type { Projects } from "../../detail/core/projects.ts";
 import { type Notice, Notices } from "../../detail/io/changes.ts";
 import { detailLocation } from "../../detail/io/detail-tabs.ts";
 import {
+	activityRuns,
 	type DetailHost,
 	type DetailLayout,
 	DetailMetadata,
@@ -247,10 +248,14 @@ export class Issue {
 			],
 			[
 				postCard("issue-body", issue, "opened this issue", onLink),
-				...issueTimeline(issue.comments, issue.activities).map((row) =>
-					row.type === "comment"
-						? postCard(`comment-${row.comment.id}`, row.comment, "commented", onLink)
-						: this.activity(row.activity),
+				...activityRuns(
+					issueTimeline(issue.comments, issue.activities).map((row) => ({
+						activity: row.type === "activity",
+						element:
+							row.type === "comment"
+								? postCard(`comment-${row.comment.id}`, row.comment, "commented", onLink)
+								: this.activity(row.activity),
+					})),
 				),
 				this.composer(issue),
 			],

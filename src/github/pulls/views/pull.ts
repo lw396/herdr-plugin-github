@@ -5,6 +5,7 @@ import type { Projects } from "../../detail/core/projects.ts";
 import { Notices } from "../../detail/io/changes.ts";
 import { detailLocation } from "../../detail/io/detail-tabs.ts";
 import {
+	activityRuns,
 	type DetailHost,
 	type DetailLayout,
 	DetailMetadata,
@@ -295,17 +296,23 @@ export class Pull {
 				postCard("pull-body", pull, "opened this pull request", onLink),
 				// Discussion metadata is fetched once per PR; report its progress/failure once, not per thread.
 				...(this.discussions?.loading || this.discussions?.failure ? [this.discussions.status()] : []),
-				...(this.discussions?.acknowledged.timeline(pull.timeline) ?? pull.timeline).map((item) => {
-					const key = timelineKey(item);
-					return timelineItem(item, this.discussions, onLink, (cx, path, comment) => this.select(cx, path, comment), {
-						expanded: this.expandedActivity.has(key),
-						toggle: (cx) => {
-							if (this.expandedActivity.has(key)) this.expandedActivity.delete(key);
-							else this.expandedActivity.add(key);
-							cx.notify();
-						},
-					});
-				}),
+				...activityRuns(
+					(this.discussions?.acknowledged.timeline(pull.timeline) ?? pull.timeline).map((item) => {
+						const key = timelineKey(item);
+						const open = (cx: Context, path: string, comment: number) => this.select(cx, path, comment);
+						return {
+							activity: item.kind === "event",
+							element: timelineItem(item, this.discussions, onLink, open, {
+								expanded: this.expandedActivity.has(key),
+								toggle: (cx) => {
+									if (this.expandedActivity.has(key)) this.expandedActivity.delete(key);
+									else this.expandedActivity.add(key);
+									cx.notify();
+								},
+							}),
+						};
+					}),
+				),
 				this.statusCard(pull),
 				...(this.discussions
 					? [this.discussions.summary(pull.headSha, this.stateActions(pull))]
