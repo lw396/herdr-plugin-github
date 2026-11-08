@@ -7,6 +7,7 @@ import reply from "../fixtures/pull-plugin-35-review-reply.json";
 import started from "../fixtures/pull-plugin-35-review-start.json";
 import submitted from "../fixtures/pull-plugin-35-review-submit.json";
 import added from "../fixtures/pull-plugin-35-review-thread.json";
+import discussionComment from "../fixtures/pull-plugin-36-discussion-comment.json";
 
 const ADD_THREAD =
 	"mutation($review:ID!,$path:String!,$side:DiffSide!,$line:Int!,$body:String!){addPullRequestReviewThread(input:{pullRequestReviewId:$review,path:$path,side:$side,line:$line,body:$body}){thread{id path diffSide line isOutdated isResolved viewerCanResolve viewerCanUnresolve comments(first:1){nodes{databaseId body createdAt author{login}}}}}}";
@@ -75,23 +76,24 @@ for (const event of ["COMMENT", "APPROVE", "REQUEST_CHANGES"] as const) {
 	});
 }
 
-test("Comment without a pending review posts a normal PR discussion comment", async () => {
+test("Comment without a pending review returns the published discussion comment and notifies readers", async () => {
+	const notices = new Notices();
+	const body = "Fixture for #32: ordinary PR discussion comment (test only).";
 	machine("center", {
-		[stateCommand]: { stdout: emptyState() },
-		[`~$ gh api repos/${repo}/issues/35/comments -X POST -f body=Summary`]: {
-			stdout: JSON.stringify({
-				id: 123,
-				body: "Summary",
-				created_at: "2026-11-08T00:00:00Z",
-				user: { login: "lw396" },
-			}),
+		[stateCommand.replace("number=35", "number=36")]: {
+			stdout: emptyState("PR_kwDOVkv4288AAAABNfEFwA"),
+		},
+		[`~$ gh api repos/${repo}/issues/36/comments -X POST -f body=${body}`]: {
+			stdout: JSON.stringify(discussionComment),
 		},
 	});
-	expect(await reviews.submitPullReview(repo, 35, commit, "COMMENT", "Summary", "center")).toMatchObject({
-		id: 123,
+	expect(await reviews.submitPullReview(repo, 36, commit, "COMMENT", body, "center")).toMatchObject({
+		id: discussionComment.id,
 		kind: "comment",
-		body: "Summary",
+		body,
+		author: "lw396",
 	});
+	expect(notices.take()).toEqual([{ repo, number: 36, threads: { on: "center" }, review: { on: "center" } }]);
 });
 
 for (const event of ["APPROVE", "REQUEST_CHANGES"] as const) {
@@ -157,12 +159,12 @@ for (const operation of ["start", "add", "submit"] as const) {
 	}
 }
 
-function emptyState(): string {
+function emptyState(id = "PR_kwDOVkv4288AAAABNfEEsw"): string {
 	return JSON.stringify({
 		data: {
 			repository: {
 				pullRequest: {
-					id: "PR_kwDOVkv4288AAAABNfEEsw",
+					id,
 					reviews: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } },
 				},
 			},

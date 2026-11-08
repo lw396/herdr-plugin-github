@@ -1,0 +1,1 @@
+{"message":"Validation Failed","errors":[{"resource":"PullRequest","code":"custom","field":"state","message":"state cannot be changed. The test/pr-fixture-a and test/pr-fixture-draft branches have been deleted."}],"documentation_url":"https://docs.github.com/rest/pulls/pulls#update-a-pull-request","status":"422"}

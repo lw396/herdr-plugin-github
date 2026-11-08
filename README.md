@@ -16,7 +16,7 @@ The mod uses GitHub CLI (`gh`) on the machine hosting the repository, so local a
 - **Discussion reader** — read Markdown descriptions, comments, and reaction counts in individual cards.
 - **Automatic discussion refresh** — check the visible issue tab every 10 seconds using ETags; keep unsent comments through refreshes, stop polling hidden tabs, and refresh immediately when shown again.
 - **Issue and PR links** — links to the repository's issues and PRs open the appropriate reader in the same tab, with **←** to go back across both kinds; `#123` references open as issue links. Other links open in your browser.
-- **Comment, close and reopen** — post a new comment (⌘/Ctrl+Enter) or close and reopen an issue from its tab; the sidebar's groups update at once.
+- **Comment, close and reopen** — post a new comment (⌘/Ctrl+Enter for issues) or close and reopen an issue or PR from its tab; mark a draft PR **Ready for Review**. The sidebar's groups and other readers update immediately after PR state changes; failed comments keep unsent text.
 - **Issue and PR metadata** — view colored labels, assignees, linked Projects, and milestones. PR descriptions also show reviewers with their review states and the source and target branches.
 - **Activity timeline** — see label and assignment changes between comments in chronological order. PR descriptions also include reviews with grouped inline discussions, colored code snippets with Show/Hide controls, and reply/resolve actions without leaving the timeline. Commits, force-pushes, merges, and close/reopen events use compact rows rather than empty comment cards. Commit rows show the SHA and subject, with Show/Hide controls for the remaining message; authors and timestamps stay in a separate heading.
 - **Changed files and unified diff** — browse a compact directory tree or flat list, with change-type badges. Expand a PR in the GitHub sidebar and select a file to view its diff in the same PR tab; **Description** switches back. The file tree stays in the sidebar, not above the reader. Diffs show old/new line numbers and colored additions/deletions using viewport-windowed rows. Files without a GitHub patch show an explanation; every file can be opened on GitHub.
@@ -56,7 +56,7 @@ Focus a terminal in your repository, select **GitHub** in the sidebar, and click
 
 ## Current scope
 
-Issues can be read, commented on, closed and reopened. Pull requests can be listed, their descriptions and comments read, and their changed files viewed as unified diffs with standalone inline comments or pending reviews submitted with Comment, Approve, or Request Changes. Creating or editing issues and pull requests is left to the browser or to `gh`.
+Issues can be read, commented on, closed and reopened. Pull requests can be listed, commented on, closed and reopened, and drafts marked ready for review. Their descriptions and comments can be read, and their changed files viewed as unified diffs with standalone inline comments or pending reviews submitted with Comment, Approve, or Request Changes. Creating or editing issues and pull requests is left to the browser or to `gh`.
 
 Images are shown as browser links rather than loaded automatically. Open issue and PR contents are session-only: after restarting Herdr or hot-reloading the mod, empty detail panes close automatically after a short wait. Select the item from the sidebar to open it again.
 

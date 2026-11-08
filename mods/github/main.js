@@ -10678,6 +10678,33 @@ async function readPull(repo, number, on) {
   ]);
   return parsePullDetail({ pull, issue, repository, comments, reviews, events, inline, checkRuns, statuses });
 }
+async function setPullState(repo, number, state, on) {
+  return written({ repo, number, pull: true }, async () => {
+    const raw = await api(`repos/${repo}/pulls/${number}`, {
+      on,
+      method: "PATCH",
+      rawFields: { state }
+    });
+    if (raw?.state !== state) throw new Error("GitHub did not return the updated pull request.");
+    return pullState(raw.merged ? "merged" : raw.state, raw.draft);
+  });
+}
+async function readyPull(repo, number, on) {
+  const id = await pullId(repo, number, on);
+  return written({ repo, number, pull: true }, async () => {
+    const data = await mutate(
+      {
+        query: "mutation($id:ID!){markPullRequestReadyForReview(input:{pullRequestId:$id}){pullRequest{id state isDraft}}}",
+        variables: { id }
+      },
+      on
+    );
+    const pull = data?.markPullRequestReadyForReview?.pullRequest;
+    if (pull?.id !== id || pull.isDraft !== false || pull.state !== "OPEN")
+      throw new Error("GitHub did not return the ready pull request.");
+    return "open";
+  });
+}
 async function mergePull(repo, number, method, sha, on) {
   await written({ repo, number, pull: true }, async () => {
     const result = await api(`repos/${repo}/pulls/${number}/merge`, {
@@ -13162,6 +13189,7 @@ var Pull = class {
   confirming = false;
   writing = false;
   writeFailure = "";
+  stateFailure = "";
   ref = null;
   entry = null;
   files = null;
@@ -13183,6 +13211,7 @@ var Pull = class {
     this.method = null;
     this.confirming = false;
     this.writeFailure = "";
+    this.stateFailure = "";
     this.metadata.expanded = false;
     this.ref = ref;
     this.entry = null;
@@ -13233,7 +13262,9 @@ var Pull = class {
   }
   render(cx, layout2) {
     const on = detailLocation(this.host.reader)?.on;
-    if (this.notices.take().some((n) => n.repo === this.ref?.repo && n.number === this.ref.number && n.threads?.on === on && n.threads))
+    if (this.notices.take().some(
+      (n) => n.repo === this.ref?.repo && n.number === this.ref.number && (n.pull || n.threads && n.threads.on === on)
+    ))
       this.load(cx, false);
     this.files?.sync(cx);
     this.discussions?.sync(cx);
@@ -13329,6 +13360,7 @@ var Pull = class {
             (c) => c.url ? link(c.id, c.url, `${c.name} \xB7 ${c.status} \xB7 ${c.duration}`).text_color(t.accent) : quiet(`${c.name} \xB7 ${c.status} \xB7 ${c.duration}`)
           )
         ),
+        this.stateActions(pull),
         ...this.discussions ? [this.discussions.summary(pull.headSha)] : []
       ],
       {
@@ -13339,6 +13371,39 @@ var Pull = class {
       },
       this.metadata
     );
+  }
+  stateActions(pull) {
+    const area = v_flex11().gap(8);
+    if (pull.state === "merged") return area;
+    if (this.stateFailure) area.child(div15().text_color(colors().blocked).child(this.stateFailure));
+    if (this.writing) return area;
+    const act = (cx, ready) => {
+      const ref = this.ref;
+      const on = this.entry?.on;
+      if (!ref || on === void 0 || this.writing) return;
+      this.writing = true;
+      this.stateFailure = "";
+      cx.spawn(async (cx2) => {
+        try {
+          const state = ready ? await readyPull(ref.repo, ref.number, on) : await setPullState(ref.repo, ref.number, pull.state === "closed" ? "open" : "closed", on);
+          if (this.ref === ref) {
+            if (this.entry?.pull) this.entry.pull.state = state;
+            this.confirming = false;
+            this.load(cx2);
+          }
+        } catch (e) {
+          if (this.ref === ref) this.stateFailure = failureOf(e).message;
+        } finally {
+          this.writing = false;
+          cx2.notify();
+        }
+      });
+      cx.notify();
+    };
+    if (pull.state === "draft")
+      area.child(button("pull-ready", "Ready for Review", "Ready for Review", (_e, cx) => act(cx, true)));
+    const label = pull.state === "closed" ? "Reopen Pull Request" : "Close Pull Request";
+    return area.child(button("pull-state", label, label, (_e, cx) => act(cx, false)));
   }
   mergeArea(pull) {
     const info = pull.merge;
@@ -13371,7 +13436,7 @@ var Pull = class {
     if (this.writing) return area.child(quiet("Updating pull request\u2026"));
     if (info.deletable)
       area.child(button("delete-branch", "Delete branch", "Delete remote branch", (_e, cx) => act(cx, true)));
-    if (!info.reason) {
+    if (!info.reason && pull.state === "open" && !this.entry?.loading) {
       for (const method of info.methods)
         area.child(
           button(

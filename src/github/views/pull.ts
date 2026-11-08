@@ -9,7 +9,7 @@ import type { ReviewState } from "../core/reviewers.ts";
 import { Notices } from "../io/changes.ts";
 import { detailLocation } from "../io/detail-tabs.ts";
 import * as gh from "../io/gh.ts";
-import { deletePullBranch, mergePull, readPull } from "../io/pulls.ts";
+import { deletePullBranch, mergePull, readPull, readyPull, setPullState } from "../io/pulls.ts";
 import {
 	type DetailHost,
 	type DetailLayout,
@@ -53,6 +53,7 @@ export class Pull {
 	private confirming = false;
 	private writing = false;
 	private writeFailure = "";
+	private stateFailure = "";
 	ref: DetailRef | null = null;
 	entry: Loaded | null = null;
 	files: ChangedFiles | null = null;
@@ -77,6 +78,7 @@ export class Pull {
 		this.method = null;
 		this.confirming = false;
 		this.writeFailure = "";
+		this.stateFailure = "";
 		this.metadata.expanded = false;
 		this.ref = ref;
 		this.entry = null;
@@ -134,7 +136,10 @@ export class Pull {
 		if (
 			this.notices
 				.take()
-				.some((n) => n.repo === this.ref?.repo && n.number === this.ref.number && n.threads?.on === on && n.threads)
+				.some(
+					(n) =>
+						n.repo === this.ref?.repo && n.number === this.ref.number && (n.pull || (n.threads && n.threads.on === on)),
+				)
 		)
 			this.load(cx, false);
 		this.files?.sync(cx);
@@ -277,6 +282,7 @@ export class Pull {
 								: quiet(`${c.name} · ${c.status} · ${c.duration}`),
 						),
 					),
+				this.stateActions(pull),
 				...(this.discussions ? [this.discussions.summary(pull.headSha)] : []),
 			],
 			{
@@ -287,6 +293,44 @@ export class Pull {
 			},
 			this.metadata,
 		);
+	}
+
+	private stateActions(pull: PullDetail): Element {
+		const area = v_flex().gap(8);
+		if (pull.state === "merged") return area;
+		if (this.stateFailure) area.child(div().text_color(colors().blocked).child(this.stateFailure));
+		// The merge area already reports the shared write lock's progress.
+		if (this.writing) return area;
+		const act = (cx: Context, ready: boolean) => {
+			const ref = this.ref;
+			const on = this.entry?.on;
+			if (!ref || on === undefined || this.writing) return;
+			this.writing = true;
+			this.stateFailure = "";
+			cx.spawn(async (cx) => {
+				try {
+					const state = ready
+						? await readyPull(ref.repo, ref.number, on)
+						: await setPullState(ref.repo, ref.number, pull.state === "closed" ? "open" : "closed", on);
+					if (this.ref === ref) {
+						if (this.entry?.pull) this.entry.pull.state = state;
+						// A state transition invalidates any earlier merge confirmation.
+						this.confirming = false;
+						this.load(cx);
+					}
+				} catch (e) {
+					if (this.ref === ref) this.stateFailure = gh.failureOf(e).message;
+				} finally {
+					this.writing = false;
+					cx.notify();
+				}
+			});
+			cx.notify();
+		};
+		if (pull.state === "draft")
+			area.child(button("pull-ready", "Ready for Review", "Ready for Review", (_e, cx) => act(cx, true)));
+		const label = pull.state === "closed" ? "Reopen Pull Request" : "Close Pull Request";
+		return area.child(button("pull-state", label, label, (_e, cx) => act(cx, false)));
 	}
 
 	private mergeArea(pull: PullDetail): Element {
@@ -321,7 +365,8 @@ export class Pull {
 		if (this.writing) return area.child(quiet("Updating pull request…"));
 		if (info.deletable)
 			area.child(button("delete-branch", "Delete branch", "Delete remote branch", (_e, cx) => act(cx, true)));
-		if (!info.reason) {
+		// Retained metadata can predate a state write until the refresh finishes.
+		if (!info.reason && pull.state === "open" && !this.entry?.loading) {
 			for (const method of info.methods)
 				area.child(
 					button(
