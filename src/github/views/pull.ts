@@ -1,16 +1,17 @@
 // A PR reader switches between its published discussion and a changed file's read-only unified diff.
 import { h_flex, v_flex } from "gpui-base";
-import { type Context, div, type Element } from "gpui-kit";
+import { type AsyncContext, type Context, div, type Element } from "gpui-kit";
 import { checkSummary } from "../core/checks.ts";
-import { type DetailRef, detailUrl } from "../core/detail.ts";
+import { type DetailRef, detailKey, detailUrl } from "../core/detail.ts";
 import { type MergeMethod, selectedMergeMethod } from "../core/merge.ts";
+import { ConditionalPoll } from "../core/polling.ts";
 import type { Projects } from "../core/projects.ts";
 import type { PullDetail } from "../core/pull-detail.ts";
 import type { ReviewState } from "../core/reviewers.ts";
 import { Notices } from "../io/changes.ts";
 import { detailLocation } from "../io/detail-tabs.ts";
 import * as gh from "../io/gh.ts";
-import { deletePullBranch, mergePull, readPull, readyPull, setPullState } from "../io/pulls.ts";
+import { deletePullBranch, mergePull, pullChanges, readPull, readyPull, setPullState } from "../io/pulls.ts";
 import {
 	type DetailHost,
 	type DetailLayout,
@@ -67,8 +68,59 @@ export class Pull {
 	private missingFile: Extract<DiffSubject, { missing: true }> | null = null;
 	private expandedActivity = new Set<string>();
 
-	init(): void {
+	private polling = new ConditionalPoll();
+	private validators = new Map<string, string | null>();
+
+	init(cx: AsyncContext): void {
 		this.diff.init();
+		cx.timer.every(10_000, (cx) => {
+			const shown = this.syncPolling();
+			if (!this.writing && !this.entry?.loading) this.check(cx, shown);
+		});
+	}
+
+	private syncPolling(): boolean {
+		const place = detailLocation(this.host.reader);
+		return this.polling.sync(
+			this.ref && place ? `${place.on}\n${place.pane}\n${detailKey(this.ref)}` : null,
+			Boolean(place?.visible) && this.host.active("pr"),
+		);
+	}
+
+	private check(cx: Context, force = false): void {
+		this.syncPolling();
+		const request = this.polling.begin(force);
+		const ref = this.ref;
+		const place = detailLocation(this.host.reader);
+		if (!request || !ref || !place) return;
+		cx.spawn(async (cx) => {
+			let completed: import("../core/gh.ts").Change | undefined;
+			try {
+				const change = await pullChanges(ref.repo, ref.number, request.etag, place.on);
+				this.syncPolling();
+				if (!this.polling.current(request)) return;
+				// PR validators are not assumed to cover discussions or commit checks.
+				const paths = [`issues/${ref.number}`, `pulls/${ref.number}/reviews`, `pulls/${ref.number}/comments`];
+				const sha = this.entry?.pull?.headSha;
+				if (sha) paths.push(`commits/${sha}/check-runs`, `commits/${sha}/statuses`);
+				const replies = await Promise.all(
+					paths.map(async (path) => ({
+						path,
+						change: await gh.changes(`repos/${ref.repo}/${path}`, this.validators.get(path) ?? null, place.on),
+					})),
+				);
+				if (!detailLocation(this.host.reader)?.visible) this.syncPolling();
+				if (!this.polling.current(request)) return;
+				const changed = change.changed || replies.some((r) => r.change.changed);
+				if (force || changed) this.load(cx);
+				for (const reply of replies) if (reply.change.changed) this.validators.set(reply.path, reply.change.etag);
+				completed = change;
+			} catch {
+				// Keep the discussion and drafts on transient failures; retry next tick.
+			} finally {
+				this.polling.finish(request, completed);
+			}
+		});
 	}
 	private readonly host: DetailHost;
 	private metadata = new DetailMetadata();
@@ -86,6 +138,8 @@ export class Pull {
 		this.stateFailure = "";
 		this.metadata.expanded = false;
 		this.ref = ref;
+		this.validators.clear();
+		this.polling.invalidate();
 		this.entry = null;
 		this.files = null;
 		this.discussions = null;
@@ -126,7 +180,11 @@ export class Pull {
 				entry.on = place.on;
 				loadProjects(cx, ref, place.on, entry, current);
 			} catch (e) {
-				if (current()) entry.failure = readFailure(ref, e);
+				if (current()) {
+					entry.failure = readFailure(ref, e);
+					this.polling.invalidate();
+					this.validators.clear();
+				}
 			} finally {
 				if (current()) {
 					entry.loading = false;
@@ -137,6 +195,7 @@ export class Pull {
 	}
 
 	render(cx: Context, layout: DetailLayout): Element[] {
+		if (this.syncPolling()) this.check(cx, true);
 		const on = detailLocation(this.host.reader)?.on;
 		if (
 			this.notices

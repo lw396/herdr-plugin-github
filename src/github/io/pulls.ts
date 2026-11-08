@@ -18,8 +18,14 @@ import {
 import type { RemoteRepo } from "../core/remote.ts";
 import { parseThreads, type ReviewThread, type ThreadNode } from "../core/review-threads.ts";
 import { written } from "./changes.ts";
-import { api, eachPage, GhError, graphql, mutate } from "./gh.ts";
+import { api, changes, eachPage, GhError, graphql, mutate } from "./gh.ts";
 import type { LocalBranches } from "./git.ts";
+
+export const pullListChanges = (repo: string, etag: string | null, on: string | null) =>
+	changes(`repos/${repo}/pulls?state=all&sort=updated&per_page=1`, etag, on);
+
+export const pullChanges = (repo: string, number: number, etag: string | null, on: string | null) =>
+	changes(`repos/${repo}/pulls/${number}`, etag, on);
 
 /** One page of a group, asked with the gh on `on`, whose account is `login` (for the searches). */
 export async function pullPage(
