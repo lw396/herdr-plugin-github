@@ -13,36 +13,66 @@ export function timelineItem(
 	discussions: ReviewThreads | null,
 	onLink: (url: string, cx: Context) => void,
 	open: (cx: Context, path: string, comment: number) => void,
+	activity?: { expanded: boolean; toggle: (cx: Context) => void },
 ): Element {
 	const t = colors();
 	if (item.kind === "event") {
-		return h_flex()
+		return v_flex()
 			.id(`pull-activity-${item.id}`)
 			.min_w(0)
-			.gap(8)
+			.gap(6)
 			.px(16)
-			.py(6)
-			.items_center()
-			.flex_wrap()
+			.py(8)
 			.text_size(12)
-			.child(div().text_color(t.dim).child("◇"))
-			.child(div().font_semibold().child(item.author))
-			.child(div().text_color(t.dim).child(item.verb))
-			.when(Boolean(item.body.trim()), (el) =>
+			.child(
+				h_flex()
+					.min_w(0)
+					.gap(8)
+					.items_center()
+					.child(div().flex_none().text_color(t.dim).child("◇"))
+					.child(div().min_w(0).truncate().font_semibold().tooltip(item.author).child(item.author))
+					.child(div().flex_none().text_color(t.dim).child(item.verb))
+					.child(div().flex_1())
+					.child(
+						div().flex_none().text_color(t.dim).tooltip(item.createdAt).child(relativeTime(item.createdAt, Date.now())),
+					),
+			)
+			.when(Boolean(item.body.trim()) || Boolean(item.details), (el) =>
 				el.child(
-					div()
+					v_flex()
 						.min_w(0)
-						.flex_1()
-						.child(
-							TextView.markdown(`pull-activity-body-${item.id}`, item.markdown)
-								.selectable(true)
-								.scrollable(false)
-								.on_link_click(onLink),
+						.pl(20)
+						.gap(6)
+						.when(Boolean(item.body.trim()), (el) =>
+							el.child(
+								TextView.markdown(`pull-activity-body-${item.id}`, item.markdown)
+									.selectable(true)
+									.scrollable(false)
+									.on_link_click(onLink),
+							),
+						)
+						.when(Boolean(item.details && activity), (el) =>
+							el.child(
+								button(
+									`pull-activity-toggle-${item.id}`,
+									activity?.expanded ? "Hide" : "Show",
+									activity?.expanded ? "Hide Commit Details" : "Show Commit Details",
+									(_e, cx) => activity?.toggle(cx),
+								)
+									.self_start()
+									.text_color(t.accent),
+							),
+						)
+						.when(Boolean(item.details && activity?.expanded), (el) =>
+							el.child(
+								TextView.markdown(`pull-activity-details-${item.id}`, item.details!.markdown)
+									.selectable(true)
+									.scrollable(false)
+									.on_link_click(onLink),
+							),
 						),
 				),
-			)
-			.when(!item.body.trim(), (el) => el.child(div().flex_1()))
-			.child(div().text_color(t.dim).tooltip(item.createdAt).child(relativeTime(item.createdAt, Date.now())));
+			);
 	}
 	if (item.kind === "comment") return postCard(`pull-comment-${item.id}`, item, item.verb, onLink);
 	const roots = item.discussion.filter((d) => d.root === d.comment.id);
@@ -87,8 +117,10 @@ export function timelineItem(
 								.children(
 									item.discussion
 										.filter((reply) => reply.root === d.root)
-										.map((reply) =>
-											postCard(`inline-${reply.comment.id}`, reply.comment, "commented", onLink, { embedded: true }),
+										.map((reply, index) =>
+											postCard(`inline-${reply.comment.id}`, reply.comment, "commented", onLink, {
+												embedded: true,
+											}).when(index > 0, (el) => el.border_t(1).border_color(t.border)),
 										),
 								);
 						}),

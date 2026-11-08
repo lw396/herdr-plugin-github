@@ -228,6 +228,7 @@ export function stateBadge(label: string, color: Color, icon?: string): Element 
 
 export type Post = Pick<Comment, "author" | "createdAt" | "markdown"> & { reactions?: Comment["reactions"] };
 
+/** Embedded posts keep their heading and body together; the caller separates neighboring posts. */
 export function postCard(
 	id: string,
 	post: Post,
@@ -239,13 +240,12 @@ export function postCard(
 	const reactions = post.reactions ?? [];
 	const heading = h_flex()
 		.px(16)
-		.py(10)
+		.pt(10)
+		.pb(options.embedded ? 4 : 10)
 		.gap(8)
 		.items_center()
 		.flex_wrap()
-		.when(!options.embedded, (el) => el.bg(t.raised))
-		.border_b(1)
-		.border_color(t.border)
+		.when(!options.embedded, (el) => el.bg(t.raised).border_b(1).border_color(t.border))
 		.text_size(12)
 		.child(div().font_semibold().child(post.author))
 		.child(div().text_color(t.dim).child(verb))
@@ -264,7 +264,8 @@ export function postCard(
 				v_flex()
 					.min_w(0)
 					.px(16)
-					.py(16)
+					.pt(options.embedded ? 4 : 16)
+					.pb(options.embedded ? 12 : 16)
 					.gap(12)
 					.child(text)
 					.when(reactions.length > 0, (el) =>

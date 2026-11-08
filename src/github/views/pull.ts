@@ -58,6 +58,7 @@ export class Pull {
 	private discussions: ReviewThreads | null = null;
 	private notices = new Notices();
 	private missingFile: ChangedFile | null = null;
+	private expandedActivity = new Set<string>();
 
 	init(): void {
 		this.diff.init();
@@ -76,6 +77,7 @@ export class Pull {
 		this.files = null;
 		this.discussions = null;
 		this.missingFile = null;
+		this.expandedActivity.clear();
 		this.diff.jump(null);
 		this.selected = null;
 		this.load(cx);
@@ -255,12 +257,22 @@ export class Pull {
 				postCard("pull-body", pull, "opened this pull request", onLink),
 				// Discussion metadata is fetched once per PR; report its progress/failure once, not per thread.
 				...(this.discussions?.loading || this.discussions?.failure ? [this.discussions.status()] : []),
-				...(this.discussions?.published.timeline(pull.timeline ?? []) ?? pull.timeline ?? []).map((item) =>
-					timelineItem(item, this.discussions, onLink, (cx, path, comment) => this.select(cx, path, comment)),
-				),
+				...(this.discussions?.published.timeline(pull.timeline ?? []) ?? pull.timeline ?? []).map((item) => {
+					// Commit timeline events have no REST id; their fallback index can move during refresh.
+					const key = JSON.stringify([item.author, item.createdAt, item.body]);
+					return timelineItem(item, this.discussions, onLink, (cx, path, comment) => this.select(cx, path, comment), {
+						expanded: this.expandedActivity.has(key),
+						toggle: (cx) => {
+							if (this.expandedActivity.has(key)) this.expandedActivity.delete(key);
+							else this.expandedActivity.add(key);
+							cx.notify();
+						},
+					});
+				}),
 				v_flex()
 					.gap(10)
 					.child(div().font_semibold().child("Checks"))
+					.when(!pull.checks?.length, (el) => el.child(quiet("No checks reported")))
 					.children(
 						(pull.checks ?? []).map((c) =>
 							c.url

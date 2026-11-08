@@ -10441,13 +10441,17 @@ function pullTimeline(comments, events, reviews, inline, url) {
   for (const e of events) {
     let verb = "";
     let body = "";
+    let details;
     const activity = parseActivity([e])[0];
     if (activity) {
       verb = activityText(activity);
       body = "labels" in activity ? activity.labels.map((l) => l.name).join(", ") : "";
     } else if (e.event === "committed") {
       verb = "committed";
-      body = `${e.sha?.slice(0, 7) ?? ""} ${e.message ?? ""}`;
+      const [subject = "", ...lines] = (e.message ?? "").trim().split(/\r?\n/);
+      body = `${e.sha?.slice(0, 7) ?? ""} ${subject}`.trim();
+      const rest = lines.join("\n").trim();
+      if (rest) details = { body: rest, markdown: readerMarkdown(rest, url) };
     } else if (e.event === "head_ref_force_pushed") {
       verb = "force-pushed the branch";
       body = e.commit_id?.slice(0, 7) ?? "";
@@ -10466,6 +10470,7 @@ function pullTimeline(comments, events, reviews, inline, url) {
       reactions: [],
       kind: "event",
       verb,
+      ...details ? { details } : {},
       discussion: []
     });
   }
@@ -10962,12 +10967,12 @@ function stateBadge(label, color, icon2) {
 function postCard(id, post, verb, onLink, options = {}) {
   const t = colors();
   const reactions = post.reactions ?? [];
-  const heading = h_flex2().px(16).py(10).gap(8).items_center().flex_wrap().when(!options.embedded, (el) => el.bg(t.raised)).border_b(1).border_color(t.border).text_size(12).child(div3().font_semibold().child(post.author)).child(div3().text_color(t.dim).child(verb)).child(div3().flex_1()).child(div3().text_color(t.dim).tooltip(post.createdAt).child(relativeTime(post.createdAt, Date.now())));
+  const heading = h_flex2().px(16).pt(10).pb(options.embedded ? 4 : 10).gap(8).items_center().flex_wrap().when(!options.embedded, (el) => el.bg(t.raised).border_b(1).border_color(t.border)).text_size(12).child(div3().font_semibold().child(post.author)).child(div3().text_color(t.dim).child(verb)).child(div3().flex_1()).child(div3().text_color(t.dim).tooltip(post.createdAt).child(relativeTime(post.createdAt, Date.now())));
   const text3 = TextView.markdown(id, post.markdown).selectable(true).scrollable(false).on_link_click(onLink);
   return v_flex().id(`${id}-card`).min_w(0).w_full().overflow_hidden().when(!options.embedded, (el) => el.rounded(8).border_1().border_color(t.border).bg(t.background)).child(heading).when(
     !options.headingOnly,
     (el) => el.child(
-      v_flex().min_w(0).px(16).py(16).gap(12).child(text3).when(
+      v_flex().min_w(0).px(16).pt(options.embedded ? 4 : 16).pb(options.embedded ? 12 : 16).gap(12).child(text3).when(
         reactions.length > 0,
         (el2) => el2.child(
           h_flex2().gap(6).flex_wrap().children(reactions.map((r) => chip(`${r.emoji} ${r.count}`, t.border, t.raised)))
@@ -12196,6 +12201,10 @@ var PublishedComments = class {
 // src/github/views/review-threads.ts
 var THREAD_HEIGHT = 340;
 var COMPOSER_HEIGHT = 220;
+function commentEditor(state, height) {
+  const t = colors();
+  return div12().h(height).flex_none().min_w(0).rounded(6).border_1().border_color(t.input).bg(t.background).p(8).on_mouse_down("left", stop).child(Textarea2.new(state).size_full().text_size(13).text_color(t.foreground));
+}
 var ReviewThreads = class {
   threads = [];
   published = new PublishedComments();
@@ -12276,7 +12285,7 @@ var ReviewThreads = class {
       if (!draft) continue;
       const t = colors();
       editors.push(
-        v_flex8().w(width).h(COMPOSER_HEIGHT).p(12).gap(8).bg(t.surface).border_1().border_color(t.border).child(div12().text_size(12).text_color(t.dim).child(`${side} ${anchor.line}`)).child(div12().h(90).on_mouse_down("left", stop).child(Textarea2.new(draft.box).w_full())).child(
+        v_flex8().w(width).h(COMPOSER_HEIGHT).p(12).gap(8).bg(t.surface).border_1().border_color(t.border).child(div12().text_size(12).text_color(t.dim).child(`${side} ${anchor.line}`)).child(commentEditor(draft.box, 90)).child(
           div12().text_size(12).text_color(t.blocked).child(this.failures.get(key) ?? "")
         ).child(
           h_flex9().gap(8).child(
@@ -12362,20 +12371,22 @@ var ReviewThreads = class {
         )
       )
     ).child(
-      v_flex8().id(`${scope}-thread-comments-${thread.id}`).when(virtual, (el) => el.flex_1().min_h(0).overflow_y_scrollbar()).gap(8).children(
+      v_flex8().id(`${scope}-thread-comments-${thread.id}`).when(virtual, (el) => el.flex_1().min_h(0).overflow_y_scrollbar()).children(
         thread.comments.map(
-          (c) => postCard(
+          (c, index2) => postCard(
             `${scope}-comment-${c.id}`,
             c,
             "commented",
             (url2, cx) => openLink(cx, this.host, url2, `https://github.com/${this.ref.repo}/pull/${this.ref.number}`),
-            { embedded: !virtual }
-          )
+            { embedded: true }
+          ).when(index2 > 0, (el) => el.border_t(1).border_color(t.border))
         )
       )
     ).when(
       Boolean(box),
-      (el) => el.child(div12().h(66).on_mouse_down("left", stop).child(Textarea2.new(box).w_full().text_size(13)))
+      (el) => el.child(
+        v_flex8().flex_none().min_w(0).border_t(1).border_color(t.border).pt(12).child(commentEditor(box, 80))
+      )
     ).when(
       this.failures.has(thread.id),
       (el) => el.child(
@@ -12548,17 +12559,39 @@ var FileDiff = class {
 // src/github/views/pull-timeline.ts
 import { h_flex as h_flex11, TextView as TextView2, v_flex as v_flex10 } from "gpui-base";
 import { div as div14 } from "gpui-kit";
-function timelineItem(item, discussions, onLink, open) {
+function timelineItem(item, discussions, onLink, open, activity) {
   const t = colors();
   if (item.kind === "event") {
-    return h_flex11().id(`pull-activity-${item.id}`).min_w(0).gap(8).px(16).py(6).items_center().flex_wrap().text_size(12).child(div14().text_color(t.dim).child("\u25C7")).child(div14().font_semibold().child(item.author)).child(div14().text_color(t.dim).child(item.verb)).when(
-      Boolean(item.body.trim()),
+    return v_flex10().id(`pull-activity-${item.id}`).min_w(0).gap(6).px(16).py(8).text_size(12).child(
+      h_flex11().min_w(0).gap(8).items_center().child(div14().flex_none().text_color(t.dim).child("\u25C7")).child(div14().min_w(0).truncate().font_semibold().tooltip(item.author).child(item.author)).child(div14().flex_none().text_color(t.dim).child(item.verb)).child(div14().flex_1()).child(
+        div14().flex_none().text_color(t.dim).tooltip(item.createdAt).child(relativeTime(item.createdAt, Date.now()))
+      )
+    ).when(
+      Boolean(item.body.trim()) || Boolean(item.details),
       (el) => el.child(
-        div14().min_w(0).flex_1().child(
-          TextView2.markdown(`pull-activity-body-${item.id}`, item.markdown).selectable(true).scrollable(false).on_link_click(onLink)
+        v_flex10().min_w(0).pl(20).gap(6).when(
+          Boolean(item.body.trim()),
+          (el2) => el2.child(
+            TextView2.markdown(`pull-activity-body-${item.id}`, item.markdown).selectable(true).scrollable(false).on_link_click(onLink)
+          )
+        ).when(
+          Boolean(item.details && activity),
+          (el2) => el2.child(
+            button(
+              `pull-activity-toggle-${item.id}`,
+              activity?.expanded ? "Hide" : "Show",
+              activity?.expanded ? "Hide Commit Details" : "Show Commit Details",
+              (_e, cx) => activity?.toggle(cx)
+            ).self_start().text_color(t.accent)
+          )
+        ).when(
+          Boolean(item.details && activity?.expanded),
+          (el2) => el2.child(
+            TextView2.markdown(`pull-activity-details-${item.id}`, item.details.markdown).selectable(true).scrollable(false).on_link_click(onLink)
+          )
         )
       )
-    ).when(!item.body.trim(), (el) => el.child(div14().flex_1())).child(div14().text_color(t.dim).tooltip(item.createdAt).child(relativeTime(item.createdAt, Date.now())));
+    );
   }
   if (item.kind === "comment") return postCard(`pull-comment-${item.id}`, item, item.verb, onLink);
   const roots = item.discussion.filter((d) => d.root === d.comment.id);
@@ -12584,7 +12617,9 @@ function timelineItem(item, discussions, onLink, open) {
             ).text_color(t.accent)
           ).when(Boolean(d.snippet), (el2) => el2.child(diffSnippet(`inline-snippet-${d.root}`, d.snippet))).children(
             item.discussion.filter((reply) => reply.root === d.root).map(
-              (reply) => postCard(`inline-${reply.comment.id}`, reply.comment, "commented", onLink, { embedded: true })
+              (reply, index2) => postCard(`inline-${reply.comment.id}`, reply.comment, "commented", onLink, {
+                embedded: true
+              }).when(index2 > 0, (el2) => el2.border_t(1).border_color(t.border))
             )
           );
         })
@@ -12610,6 +12645,7 @@ var Pull = class {
   discussions = null;
   notices = new Notices();
   missingFile = null;
+  expandedActivity = /* @__PURE__ */ new Set();
   init() {
     this.diff.init();
   }
@@ -12625,6 +12661,7 @@ var Pull = class {
     this.files = null;
     this.discussions = null;
     this.missingFile = null;
+    this.expandedActivity.clear();
     this.diff.jump(null);
     this.selected = null;
     this.load(cx);
@@ -12761,10 +12798,18 @@ var Pull = class {
         postCard("pull-body", pull, "opened this pull request", onLink),
         // Discussion metadata is fetched once per PR; report its progress/failure once, not per thread.
         ...this.discussions?.loading || this.discussions?.failure ? [this.discussions.status()] : [],
-        ...(this.discussions?.published.timeline(pull.timeline ?? []) ?? pull.timeline ?? []).map(
-          (item) => timelineItem(item, this.discussions, onLink, (cx, path, comment) => this.select(cx, path, comment))
-        ),
-        v_flex11().gap(10).child(div15().font_semibold().child("Checks")).children(
+        ...(this.discussions?.published.timeline(pull.timeline ?? []) ?? pull.timeline ?? []).map((item) => {
+          const key = JSON.stringify([item.author, item.createdAt, item.body]);
+          return timelineItem(item, this.discussions, onLink, (cx, path, comment) => this.select(cx, path, comment), {
+            expanded: this.expandedActivity.has(key),
+            toggle: (cx) => {
+              if (this.expandedActivity.has(key)) this.expandedActivity.delete(key);
+              else this.expandedActivity.add(key);
+              cx.notify();
+            }
+          });
+        }),
+        v_flex11().gap(10).child(div15().font_semibold().child("Checks")).when(!pull.checks?.length, (el) => el.child(quiet("No checks reported"))).children(
           (pull.checks ?? []).map(
             (c) => c.url ? link(c.id, c.url, `${c.name} \xB7 ${c.status} \xB7 ${c.duration}`).text_color(t.accent) : quiet(`${c.name} \xB7 ${c.status} \xB7 ${c.duration}`)
           )

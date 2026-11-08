@@ -1,5 +1,5 @@
 // Herdr smoke mod: runs real parser and reader paths inside Herdr's QuickJS (scripts/smoke.sh).
-import { HoverCard, h_flex } from "gpui-base";
+import { HoverCard, h_flex, TextareaState } from "gpui-base";
 import { type AsyncContext, type Context, div, View } from "gpui-kit";
 import { parsePatch } from "../../src/github/core/diff.ts";
 import { parseComment } from "../../src/github/core/discussion.ts";
@@ -17,7 +17,7 @@ import { ChangedFiles } from "../../src/github/views/files.ts";
 import { previewCard } from "../../src/github/views/preview.ts";
 import { timelineItem } from "../../src/github/views/pull-timeline.ts";
 import { Reader } from "../../src/github/views/reader.ts";
-import { ReviewThreads } from "../../src/github/views/review-threads.ts";
+import { commentEditor, ReviewThreads } from "../../src/github/views/review-threads.ts";
 import issue from "../fixtures/issue-plugin-13.json";
 import pull from "../fixtures/pull-cli-14974.json";
 import pullComments from "../fixtures/pull-cli-14974-comments.json";
@@ -44,8 +44,10 @@ export default class Smoke extends View {
 	files: ChangedFiles | null = null;
 	threadDiff = new FileDiff();
 	discussions: ReviewThreads | null = null;
+	replyDraft: TextareaState | null = null;
 
 	init(_props: unknown, cx: AsyncContext): void {
+		this.replyDraft = TextareaState.new({ placeholder: "Reply…" });
 		// The readers' own init: the issue page's comment box (TextareaState) must be creatable in QuickJS.
 		const pr = new Reader();
 		const issues = new Reader();
@@ -199,6 +201,7 @@ export default class Smoke extends View {
 			.children(this.readers.map((reader) => div().flex_1().child(reader.render(cx))))
 			.children(this.metadataSamples())
 			.child(this.files?.render(cx) ?? div())
+			.child(commentEditor(this.replyDraft!, 80))
 			.child(
 				this.threadDiff.render(
 					this.files!.files!.find((file) => file.path === "docs/pr-fixture.md")!,
@@ -222,8 +225,15 @@ export default class Smoke extends View {
 							id: 90000001,
 							event: "committed",
 							sha: "abcdef1",
-							message: "Fix #29 — [details](https://example.com/review)",
+							message: "Fix #29 — [details](https://example.com/review)\n\nCo-authored-by: Valian <dev@example.com>",
 							author: { name: "smoke", date: "2026-11-07T00:00:00Z" },
+						},
+						{
+							id: 90000002,
+							event: "committed",
+							sha: "1234567",
+							message: "Expanded commit\n\nDetails with #29 and [a link](https://example.com/review).",
+							author: { name: "smoke", date: "2026-11-07T00:00:01Z" },
 						},
 					],
 					review36.flat(),
@@ -235,6 +245,7 @@ export default class Smoke extends View {
 						null,
 						() => {},
 						() => {},
+						{ expanded: item.id === 90000002, toggle: () => {} },
 					),
 				),
 			)

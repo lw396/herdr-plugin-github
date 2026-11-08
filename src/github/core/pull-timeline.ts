@@ -35,6 +35,8 @@ interface Inline {
 export interface PullTimelineItem extends Comment {
 	kind: "comment" | "review" | "event";
 	verb: string;
+	/** Commit message after the subject, hidden until explicitly expanded. */
+	details?: { body: string; markdown: string };
 	discussion: { root: number; comment: Comment; path: string; snippet: string }[];
 }
 
@@ -96,13 +98,17 @@ export function pullTimeline(
 	for (const e of events as Event[]) {
 		let verb = "";
 		let body = "";
+		let details: PullTimelineItem["details"];
 		const activity = parseActivity([e])[0];
 		if (activity) {
 			verb = activityText(activity);
 			body = "labels" in activity ? activity.labels.map((l) => l.name).join(", ") : "";
 		} else if (e.event === "committed") {
 			verb = "committed";
-			body = `${e.sha?.slice(0, 7) ?? ""} ${e.message ?? ""}`;
+			const [subject = "", ...lines] = (e.message ?? "").trim().split(/\r?\n/);
+			body = `${e.sha?.slice(0, 7) ?? ""} ${subject}`.trim();
+			const rest = lines.join("\n").trim();
+			if (rest) details = { body: rest, markdown: readerMarkdown(rest, url) };
 		} else if (e.event === "head_ref_force_pushed") {
 			verb = "force-pushed the branch";
 			body = e.commit_id?.slice(0, 7) ?? "";
@@ -121,6 +127,7 @@ export function pullTimeline(
 			reactions: [],
 			kind: "event",
 			verb,
+			...(details ? { details } : {}),
 			discussion: [],
 		});
 	}

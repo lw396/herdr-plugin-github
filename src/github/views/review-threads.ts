@@ -21,6 +21,22 @@ import { button, colors, link, stop } from "./ui.ts";
 export const THREAD_HEIGHT = 340;
 export const COMPOSER_HEIGHT = 220;
 
+/** A draft must look like an input, not another published comment. */
+export function commentEditor(state: TextareaState, height: number): Element {
+	const t = colors();
+	return div()
+		.h(height)
+		.flex_none()
+		.min_w(0)
+		.rounded(6)
+		.border_1()
+		.border_color(t.input)
+		.bg(t.background)
+		.p(8)
+		.on_mouse_down("left", stop)
+		.child(Textarea.new(state).size_full().text_size(13).text_color(t.foreground));
+}
+
 export class ReviewThreads {
 	threads: ReviewThread[] = [];
 	readonly published = new PublishedComments();
@@ -131,7 +147,7 @@ export class ReviewThreads {
 					.border_1()
 					.border_color(t.border)
 					.child(div().text_size(12).text_color(t.dim).child(`${side} ${anchor.line}`))
-					.child(div().h(90).on_mouse_down("left", stop).child(Textarea.new(draft.box).w_full()))
+					.child(commentEditor(draft.box, 90))
 					.child(
 						div()
 							.text_size(12)
@@ -274,22 +290,23 @@ export class ReviewThreads {
 				v_flex()
 					.id(`${scope}-thread-comments-${thread.id}`)
 					.when(virtual, (el) => el.flex_1().min_h(0).overflow_y_scrollbar())
-					.gap(8)
 					.children(
-						thread.comments.map((c) =>
+						thread.comments.map((c, index) =>
 							postCard(
 								`${scope}-comment-${c.id}`,
 								c,
 								"commented",
 								(url, cx) =>
 									openLink(cx, this.host, url, `https://github.com/${this.ref.repo}/pull/${this.ref.number}`),
-								{ embedded: !virtual },
-							),
+								{ embedded: true },
+							).when(index > 0, (el) => el.border_t(1).border_color(t.border)),
 						),
 					),
 			)
 			.when(Boolean(box), (el) =>
-				el.child(div().h(66).on_mouse_down("left", stop).child(Textarea.new(box!).w_full().text_size(13))),
+				el.child(
+					v_flex().flex_none().min_w(0).border_t(1).border_color(t.border).pt(12).child(commentEditor(box!, 80)),
+				),
 			)
 			.when(this.failures.has(thread.id), (el) =>
 				el.child(
