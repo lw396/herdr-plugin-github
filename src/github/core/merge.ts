@@ -2,6 +2,12 @@ import { checkHolds, type PullCheck } from "./checks.ts";
 import type { Reviewer } from "./reviewers.ts";
 
 export type MergeMethod = "merge" | "squash" | "rebase";
+
+/** Use the first allowed method, as in VS Code; retain an explicit choice only while it is allowed. */
+export function selectedMergeMethod(methods: MergeMethod[], selected: MergeMethod | null): MergeMethod | null {
+	if (selected && methods.includes(selected)) return selected;
+	return methods[0] ?? null;
+}
 export interface MergeInfo {
 	methods: MergeMethod[];
 	reason: string | null;
@@ -53,7 +59,7 @@ function reason(p: RestMergePull, methods: MergeMethod[], reviewers: Reviewer[],
 	return REASONS[state] ?? (p.mergeable === true ? `Merging is blocked: ${state}` : CHECKING);
 }
 
-/** `repository` carries which merge methods it allows (`allow_<method>_merge`). */
+/** REST calls merge commits `allow_merge_commit`, unlike squash/rebase's `allow_*_merge`. */
 export function mergeInfo(
 	p: RestMergePull,
 	repository: Record<string, unknown>,
@@ -61,7 +67,7 @@ export function mergeInfo(
 	checks: PullCheck[] = [],
 ): MergeInfo {
 	const methods = (["merge", "squash", "rebase"] as MergeMethod[]).filter(
-		(m) => repository[`allow_${m}_merge`] === true,
+		(m) => repository[m === "merge" ? "allow_merge_commit" : `allow_${m}_merge`] === true,
 	);
 	return {
 		methods,

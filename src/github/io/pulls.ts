@@ -9,9 +9,11 @@ import {
 	type Pull,
 	type PullGroup,
 	type PullGroupKind,
+	type PullState,
 	parseLocalPulls,
 	parsePullGroup,
 	pullGroupQuery,
+	pullState,
 } from "../core/pulls.ts";
 import type { RemoteRepo } from "../core/remote.ts";
 import { parseThreads, type ReviewThread, type ThreadNode } from "../core/review-threads.ts";
@@ -54,6 +56,44 @@ export async function readPull(repo: string, number: number, on: string | null):
 		list(`repos/${repo}/commits/${sha}/statuses`),
 	]);
 	return parsePullDetail({ pull, issue, repository, comments, reviews, events, inline, checkRuns, statuses });
+}
+
+/** Close/reopen through the PR endpoint: reopening a draft keeps it a draft. */
+export async function setPullState(
+	repo: string,
+	number: number,
+	state: "open" | "closed",
+	on: string | null,
+): Promise<PullState> {
+	return written({ repo, number, pull: true }, async () => {
+		const raw = (await api(`repos/${repo}/pulls/${number}`, {
+			on,
+			method: "PATCH",
+			rawFields: { state },
+		})) as { state: "open" | "closed"; merged: boolean; draft: boolean };
+		if (raw?.state !== state) throw new Error("GitHub did not return the updated pull request.");
+		return pullState(raw.merged ? "merged" : raw.state, raw.draft);
+	});
+}
+
+export async function readyPull(repo: string, number: number, on: string | null): Promise<PullState> {
+	const id = await pullId(repo, number, on);
+	return written({ repo, number, pull: true }, async (): Promise<PullState> => {
+		const data = await mutate<{
+			markPullRequestReadyForReview: { pullRequest: { id: string; state: string; isDraft: boolean } };
+		}>(
+			{
+				query:
+					"mutation($id:ID!){markPullRequestReadyForReview(input:{pullRequestId:$id}){pullRequest{id state isDraft}}}",
+				variables: { id },
+			},
+			on,
+		);
+		const pull = data?.markPullRequestReadyForReview?.pullRequest;
+		if (pull?.id !== id || pull.isDraft !== false || pull.state !== "OPEN")
+			throw new Error("GitHub did not return the ready pull request.");
+		return "open";
+	});
 }
 
 export async function mergePull(

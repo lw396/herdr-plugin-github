@@ -14,6 +14,7 @@ import { div as div2, image, svg as svg2 } from "gpui-kit";
 import { home, panes, props, run } from "herdr";
 
 // src/github/views/ui.ts
+import { Button } from "gpui-base";
 import { div, svg } from "gpui-kit";
 import { theme } from "herdr";
 var colors = () => theme();
@@ -35,6 +36,13 @@ var PULL_STATES = {
   closed: { icon: "mods/github/assets/git-pull-request-closed.svg", color: (t) => t.blocked, label: "Closed" }
 };
 var square = (el) => el.size(36).flex_none().flex().items_center().justify_center();
+function actionButton(id, label, act, primary = false, disabled = false) {
+  const t = colors();
+  return Button.new(id).px(12).py(6).rounded(4).border_1().border_color(primary ? t.solid : t.input).bg(primary ? t.solid : t.raised).text_color(primary ? t.solid_foreground : t.foreground).text_size(13).font_medium().cursor_pointer().accessibility_label(label).disabled(disabled).opacity(disabled ? 0.5 : 1).hover((s) => s.bg(primary ? t.solid : t.hover)).on_mouse_down("left", stop).on_click((e, cx) => {
+    cx.stop_propagation();
+    if (!disabled) act(e, cx);
+  }).child(label);
+}
 function button(id, label, tip, act) {
   const t = colors();
   return div().id(id).px(6).py(2).rounded(6).text_size(12).text_color(t.dim).cursor_pointer().hover((s) => s.bg(t.hover).text_color(t.foreground)).tooltip(tip).accessibility_label(tip).on_mouse_down("left", stop).on_click((e, cx) => {
@@ -10463,9 +10471,29 @@ function parseChecks(pages, statuses) {
   }
   return checks;
 }
+function checkSummary(checks) {
+  if (!checks.length) return { label: "No checks reported", tone: "dim", icon: "\u25CB" };
+  const counts = { failed: 0, pending: 0, successful: 0, other: 0 };
+  for (const { status: status2 } of checks) {
+    if (/^(failure|error|timed_out|cancelled|action_required|startup_failure|stale)$/.test(status2)) counts.failed++;
+    else if (/^(pending|queued|in_progress|waiting|requested)$/.test(status2)) counts.pending++;
+    else if (status2 === "success") counts.successful++;
+    else counts.other++;
+  }
+  const label = Object.entries(counts).filter(([, count]) => count > 0).map(([kind, count]) => `${count} ${kind} check${count === 1 ? "" : "s"}`).join(", ");
+  return {
+    label,
+    tone: counts.failed ? "blocked" : counts.pending ? "working" : counts.other ? "dim" : "done",
+    icon: counts.failed ? "\xD7" : counts.pending || counts.other ? "\u25CB" : "\u2713"
+  };
+}
 var checkHolds = (check) => /fail|pending|queued|progress|error/i.test(check.status);
 
 // src/github/core/merge.ts
+function selectedMergeMethod(methods, selected) {
+  if (selected && methods.includes(selected)) return selected;
+  return methods[0] ?? null;
+}
 var CHECKS = "Checks have not passed";
 var BLOCKED = "Merging is blocked by branch protection rules (required checks or reviews)";
 var CHECKING = "Checking mergeability\u2026";
@@ -10497,7 +10525,7 @@ function reason(p, methods, reviewers, checks) {
 }
 function mergeInfo(p, repository, reviewers = [], checks = []) {
   const methods = ["merge", "squash", "rebase"].filter(
-    (m) => repository[`allow_${m}_merge`] === true
+    (m) => repository[m === "merge" ? "allow_merge_commit" : `allow_${m}_merge`] === true
   );
   return {
     methods,
@@ -10679,6 +10707,33 @@ async function readPull(repo, number, on) {
     list2(`repos/${repo}/commits/${sha}/statuses`)
   ]);
   return parsePullDetail({ pull, issue, repository, comments, reviews, events, inline, checkRuns, statuses });
+}
+async function setPullState(repo, number, state, on) {
+  return written({ repo, number, pull: true }, async () => {
+    const raw = await api(`repos/${repo}/pulls/${number}`, {
+      on,
+      method: "PATCH",
+      rawFields: { state }
+    });
+    if (raw?.state !== state) throw new Error("GitHub did not return the updated pull request.");
+    return pullState(raw.merged ? "merged" : raw.state, raw.draft);
+  });
+}
+async function readyPull(repo, number, on) {
+  const id = await pullId(repo, number, on);
+  return written({ repo, number, pull: true }, async () => {
+    const data = await mutate(
+      {
+        query: "mutation($id:ID!){markPullRequestReadyForReview(input:{pullRequestId:$id}){pullRequest{id state isDraft}}}",
+        variables: { id }
+      },
+      on
+    );
+    const pull = data?.markPullRequestReadyForReview?.pullRequest;
+    if (pull?.id !== id || pull.isDraft !== false || pull.state !== "OPEN")
+      throw new Error("GitHub did not return the ready pull request.");
+    return "open";
+  });
 }
 async function mergePull(repo, number, method, sha, on) {
   await written({ repo, number, pull: true }, async () => {
@@ -12959,26 +13014,31 @@ var ReviewThreads = class {
     });
   }
   /** The PR summary and inline drafts share one write lock and one GitHub pending review. */
-  summary(commit) {
+  summary(commit, stateAction = div14()) {
     const box = this.summaryBox;
-    if (!box) return div14().text_size(12).text_color(colors().dim).child("Loading review\u2026");
+    if (!box)
+      return v_flex10().gap(12).child(div14().text_size(12).text_color(colors().dim).child("Loading review\u2026")).child(stateAction);
     const busy = this.writing.size > 0;
-    return v_flex10().gap(8).child(
-      div14().font_semibold().child(this.pending ? "Pending review" : "Review")
-    ).child(commentEditor(box, 120)).child(
-      div14().text_size(12).text_color(colors().blocked).child(this.failures.get("summary") ?? "")
+    const options = [
+      { value: "COMMENT", label: "Comment" },
+      { value: "APPROVE", label: "Approve" },
+      { value: "REQUEST_CHANGES", label: "Request Changes" }
+    ];
+    return v_flex10().gap(12).pt(12).when(Boolean(this.pending), (el) => el.child(div14().font_semibold().child("Pending review"))).child(commentEditor(box, 128)).when(
+      this.failures.has("summary"),
+      (el) => el.child(div14().text_size(12).text_color(colors().blocked).child(this.failures.get("summary")))
     ).child(
-      h_flex11().gap(8).children(
-        [
-          ["COMMENT", "Comment"],
-          ["APPROVE", "Approve"],
-          ["REQUEST_CHANGES", "Request Changes"]
-        ].map(
-          ([event, label]) => button(`submit-review-${event}`, busy ? "Saving\u2026" : label, label, (_e, cx) => {
-            if (busy || event === "REQUEST_CHANGES" && !box.value().trim() || event === "COMMENT" && !this.pending && !box.value().trim())
-              return;
-            this.submit(cx, commit, event, box);
-          }).opacity(busy ? 0.5 : 1)
+      h_flex11().gap(8).items_center().flex_wrap().child(stateAction).child(div14().flex_1()).child(
+        h_flex11().gap(8).items_center().flex_wrap().children(
+          options.filter((o) => o.value === "COMMENT" || this.pending).map(
+            ({ value: event, label }) => actionButton(
+              `submit-review-${event}`,
+              busy ? "Saving\u2026" : label,
+              (_e, cx) => this.submit(cx, commit, event, box),
+              event === "COMMENT",
+              busy || !box.value().trim() && (event === "REQUEST_CHANGES" || event === "COMMENT" && !this.pending)
+            )
+          )
         )
       )
     );
@@ -13167,9 +13227,12 @@ var REVIEWS = {
 };
 var Pull = class {
   method = null;
-  confirming = false;
+  methodOptions = false;
+  checksExpanded = false;
+  confirming = null;
   writing = false;
   writeFailure = "";
+  stateFailure = "";
   ref = null;
   entry = null;
   files = null;
@@ -13237,8 +13300,11 @@ ${detailKey(this.ref)}` : null,
   }
   show(cx, ref) {
     this.method = null;
-    this.confirming = false;
+    this.methodOptions = false;
+    this.checksExpanded = false;
+    this.confirming = null;
     this.writeFailure = "";
+    this.stateFailure = "";
     this.metadata.expanded = false;
     this.ref = ref;
     this.validators.clear();
@@ -13296,7 +13362,9 @@ ${detailKey(this.ref)}` : null,
   render(cx, layout2) {
     if (this.syncPolling()) this.check(cx, true);
     const on = detailLocation(this.host.reader)?.on;
-    if (this.notices.take().some((n) => n.repo === this.ref?.repo && n.number === this.ref.number && n.threads?.on === on && n.threads))
+    if (this.notices.take().some(
+      (n) => n.repo === this.ref?.repo && n.number === this.ref.number && (n.pull || n.threads && n.threads.on === on)
+    ))
       this.load(cx, false);
     this.files?.sync(cx);
     this.discussions?.sync(cx);
@@ -13373,7 +13441,6 @@ ${detailKey(this.ref)}` : null,
       ],
       [
         postCard("pull-body", pull, "opened this pull request", onLink),
-        this.mergeArea(pull),
         // Discussion metadata is fetched once per PR; report its progress/failure once, not per thread.
         ...this.discussions?.loading || this.discussions?.failure ? [this.discussions.status()] : [],
         ...(this.discussions?.acknowledged.timeline(pull.timeline) ?? pull.timeline).map((item) => {
@@ -13387,12 +13454,8 @@ ${detailKey(this.ref)}` : null,
             }
           });
         }),
-        v_flex11().gap(10).child(div15().font_semibold().child("Checks")).when(!pull.checks.length, (el) => el.child(quiet("No checks reported"))).children(
-          pull.checks.map(
-            (c) => c.url ? link(c.id, c.url, `${c.name} \xB7 ${c.status} \xB7 ${c.duration}`).text_color(t.accent) : quiet(`${c.name} \xB7 ${c.status} \xB7 ${c.duration}`)
-          )
-        ),
-        ...this.discussions ? [this.discussions.summary(pull.headSha)] : []
+        this.statusCard(pull),
+        ...this.discussions ? [this.discussions.summary(pull.headSha, this.stateActions(pull))] : [this.stateActions(pull)]
       ],
       {
         item: pull,
@@ -13403,23 +13466,88 @@ ${detailKey(this.ref)}` : null,
       this.metadata
     );
   }
+  changeState(cx, pull, ready) {
+    const ref = this.ref;
+    const on = this.entry?.on;
+    if (!ref || on === void 0 || this.writing) return;
+    this.writing = true;
+    this.stateFailure = "";
+    cx.spawn(async (cx2) => {
+      try {
+        const state = ready ? await readyPull(ref.repo, ref.number, on) : await setPullState(ref.repo, ref.number, pull.state === "closed" ? "open" : "closed", on);
+        if (this.ref === ref) {
+          if (this.entry?.pull) this.entry.pull.state = state;
+          this.confirming = null;
+          this.load(cx2);
+        }
+      } catch (e) {
+        if (this.ref === ref) this.stateFailure = failureOf(e).message;
+      } finally {
+        this.writing = false;
+        cx2.notify();
+      }
+    });
+    cx.notify();
+  }
+  stateActions(pull) {
+    if (pull.state === "merged") return div15();
+    const label = pull.state === "closed" ? "Reopen Pull Request" : "Close Pull Request";
+    return actionButton("pull-state", label, (_e, cx) => this.changeState(cx, pull, false), false, this.writing);
+  }
+  statusCard(pull) {
+    const t = colors();
+    const summary = checkSummary(pull.checks);
+    return v_flex11().w_full().min_w(0).border_1().border_color(t.border).rounded(6).overflow_hidden().child(
+      v_flex11().px(16).py(12).gap(10).child(
+        button(
+          "pull-checks-toggle",
+          h_flex12().w_full().gap(10).items_center().child(div15().text_color(t[summary.tone]).child(summary.icon)).child(div15().flex_1().child(summary.label)).when(pull.checks.length > 0, (el) => el.child(div15().child(this.checksExpanded ? "\u2304" : "\u203A"))),
+          "Show or hide checks",
+          (_e, cx) => {
+            this.checksExpanded = !this.checksExpanded;
+            cx.notify();
+          }
+        ).w_full().p(0).text_color(t.foreground).text_size(13)
+      ).when(
+        this.checksExpanded,
+        (el) => el.children(
+          pull.checks.map(
+            (c) => c.url ? link(c.id, c.url, `${c.name} \xB7 ${c.status} \xB7 ${c.duration}`).text_size(12).text_color(t.accent) : quiet(`${c.name} \xB7 ${c.status} \xB7 ${c.duration}`)
+          )
+        )
+      )
+    ).child(this.mergeArea(pull));
+  }
   mergeArea(pull) {
     const info = pull.merge;
-    const area = v_flex11().gap(10).child(div15().font_semibold().child("Merge"));
-    area.child(quiet(info.reason ?? "This branch has no conflicts with the base branch"));
-    if (this.writeFailure) area.child(quiet(this.writeFailure));
+    const method = selectedMergeMethod(info.methods, this.method);
+    const t = colors();
+    const reason2 = pull.state === "draft" ? "This pull request is still a work in progress." : pull.state === "closed" ? "This pull request is closed." : pull.state === "merged" ? "Pull request successfully merged." : info.reason ?? "This branch has no conflicts with the base branch.";
+    const area = v_flex11().border_t(1).border_color(t.border).child(
+      h_flex12().px(16).py(12).gap(10).items_center().child(
+        div15().text_color(!info.reason || pull.state === "merged" ? t.done : t.dim).child(!info.reason || pull.state === "merged" ? "\u2713" : "\u25CB")
+      ).child(div15().text_size(13).child(reason2))
+    );
+    for (const failure of [this.writeFailure, this.stateFailure])
+      if (failure) area.child(div15().px(16).py(8).text_size(12).text_color(t.blocked).child(failure));
+    const actions = h_flex12().px(16).py(16).gap(8).items_center().flex_wrap().border_t(1).border_color(t.border);
     const act = (cx, remove) => {
       const ref = this.ref, on = this.entry?.on;
       if (!ref || on === void 0 || this.writing) return;
       this.writing = true;
+      this.writeFailure = "";
+      cx.notify();
       cx.spawn(async (cx2) => {
         try {
           if (remove) {
             await deletePullBranch(ref.repo, ref.number, info, on);
             info.deletable = false;
-          } else await mergePull(ref.repo, ref.number, this.method ?? info.methods[0], info.sha, on);
+          } else {
+            if (!method) return;
+            await mergePull(ref.repo, ref.number, method, info.sha, on);
+          }
           if (this.ref === ref) {
-            this.confirming = false;
+            this.confirming = null;
             this.writeFailure = "";
             if (!remove) this.load(cx2);
           }
@@ -13433,41 +13561,68 @@ ${detailKey(this.ref)}` : null,
     };
     if (this.writing) return area.child(quiet("Updating pull request\u2026"));
     if (info.deletable)
-      area.child(button("delete-branch", "Delete branch", "Delete remote branch", (_e, cx) => act(cx, true)));
-    if (!info.reason) {
-      for (const method of info.methods)
-        area.child(
-          button(
-            `method-${method}`,
-            `${(this.method ?? info.methods[0]) === method ? "\u25CF" : "\u25CB"} ${method === "merge" ? "Create a merge commit" : method === "squash" ? "Squash and merge" : "Rebase and merge"}`,
-            "Merge method",
-            (_e, cx) => {
-              this.method = method;
-              this.confirming = false;
-              cx.notify();
-            }
-          )
-        );
-      area.child(
-        button(
+      return area.child(actions.child(actionButton("delete-branch", "Delete branch", (_e, cx) => act(cx, true))));
+    if (pull.state === "draft")
+      return area.child(
+        actions.child(actionButton("pull-ready", "Ready for Review", (_e, cx) => this.changeState(cx, pull, true), true)).child(quiet("Draft pull requests cannot be merged."))
+      );
+    if (!info.reason && method && pull.state === "open" && !this.entry?.loading) {
+      const options = info.methods.map((value) => ({
+        value,
+        label: value === "merge" ? "Create Merge Commit" : value === "squash" ? "Squash and Merge" : "Rebase and Merge"
+      }));
+      const label = options.find((o) => o.value === method).label;
+      actions.child(
+        actionButton(
           "merge-confirm",
-          this.confirming ? "Confirm Merge" : "Merge Pull Request",
-          "Merge pull request",
+          this.confirming === method ? `Confirm ${label}` : "Merge Pull Request",
           (_e, cx) => {
-            if (this.confirming) act(cx, false);
+            if (this.confirming === method) act(cx, false);
             else {
-              this.confirming = true;
+              this.confirming = method;
               cx.notify();
             }
-          }
+          },
+          true
+        )
+      ).child(div15().text_size(13).text_color(t.dim).child(`using method ${label}`)).when(
+        options.length > 1,
+        (el) => el.child(
+          button(
+            "merge-change-method",
+            this.methodOptions ? "Hide methods" : "Change method\u2026",
+            "Change merge method",
+            (_e, cx) => {
+              this.methodOptions = !this.methodOptions;
+              cx.notify();
+            }
+          ).text_color(t.accent)
         )
       );
       if (this.confirming)
-        area.child(
-          button("merge-cancel", "Cancel", "Cancel merge", (_e, cx) => {
-            this.confirming = false;
+        actions.child(
+          actionButton("merge-cancel", "Cancel", (_e, cx) => {
+            this.confirming = null;
             cx.notify();
           })
+        );
+      area.child(actions);
+      if (this.methodOptions && options.length > 1)
+        area.child(
+          h_flex12().px(16).pb(16).gap(8).flex_wrap().children(
+            options.map(
+              (option) => actionButton(
+                `merge-method-${option.value}`,
+                `${option.value === method ? "\u2713 " : ""}${option.label}`,
+                (_e, cx) => {
+                  this.method = option.value;
+                  this.confirming = null;
+                  this.methodOptions = false;
+                  cx.notify();
+                }
+              ).border_color(option.value === method ? t.accent : t.input).text_color(option.value === method ? t.accent : t.foreground)
+            )
+          )
         );
     }
     return area;

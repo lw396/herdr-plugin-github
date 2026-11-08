@@ -1,5 +1,28 @@
 import { expect, test } from "bun:test";
-import { parseChecks } from "../../src/github/core/checks.ts";
+import { checkSummary, parseChecks } from "../../src/github/core/checks.ts";
+
+test("a passing check is summarized like the VS Code status card", () => {
+	expect(checkSummary([{ status: "success" }])).toEqual({ label: "1 successful check", tone: "done", icon: "✓" });
+});
+
+test("empty, pending, failed and skipped checks never show a successful summary", () => {
+	expect(checkSummary([])).toEqual({ label: "No checks reported", tone: "dim", icon: "○" });
+	expect(checkSummary([{ status: "success" }, { status: "in_progress" }])).toEqual({
+		label: "1 pending check, 1 successful check",
+		tone: "working",
+		icon: "○",
+	});
+	expect(checkSummary([{ status: "timed_out" }, { status: "action_required" }, { status: "pending" }])).toEqual({
+		label: "2 failed checks, 1 pending check",
+		tone: "blocked",
+		icon: "×",
+	});
+	expect(checkSummary([{ status: "skipped" }, { status: "neutral" }])).toEqual({
+		label: "2 other checks",
+		tone: "dim",
+		icon: "○",
+	});
+});
 
 test("checks include duration and browser target", () => {
 	expect(
