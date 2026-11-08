@@ -10657,6 +10657,8 @@ function threadRow(rows, thread) {
 }
 
 // src/github/io/pulls.ts
+var pullListChanges = (repo, etag, on) => changes(`repos/${repo}/pulls?state=all&sort=updated&per_page=1`, etag, on);
+var pullChanges = (repo, number, etag, on) => changes(`repos/${repo}/pulls/${number}`, etag, on);
 async function pullPage(kind, remote2, login2, on, after) {
   return parsePullGroup(await graphql(pullGroupQuery(kind, remote2, login2, after), on));
 }
@@ -11681,7 +11683,11 @@ var Panel = class {
       const current = () => run4 === this.latest && this.poll.current(request);
       let change;
       try {
-        change = await listChanges(`${r.remote.owner}/${r.remote.repo}`, request.etag, r.on);
+        change = await (this.tab === "prs" ? pullListChanges : listChanges)(
+          `${r.remote.owner}/${r.remote.repo}`,
+          request.etag,
+          r.on
+        );
         if (!current()) return;
         this.checkedAt = Date.now();
         this.checkFailed = false;
@@ -11689,8 +11695,8 @@ var Panel = class {
         if (current()) this.checkFailed = true;
       } finally {
         if (current()) {
-          if (change?.changed || refresh) this.issues.load(cx2, true);
-          if (refresh && this.tab === "prs") this.pulls.load(cx2, refresh === "asked");
+          if (this.tab === "issues" && (change?.changed || refresh)) this.issues.load(cx2, true);
+          if ((change?.changed || refresh) && this.tab === "prs") this.pulls.load(cx2, true);
           cx2.notify();
         }
         this.poll.finish(request, change);
@@ -11832,6 +11838,8 @@ var Panel = class {
       TABS.map(
         ({ id, label }) => div9().id(`gh-tab-${id}`).px(8).py(3).rounded(6).text_size(12).font_medium().cursor_pointer().text_color(this.tab === id ? t.foreground : t.muted).when(this.tab === id, (el) => el.bg(t.hover)).when(this.tab !== id, (el) => el.hover((s) => s.bg(t.hover))).accessibility_label(label).on_mouse_down("left", stop).on_click((_e, cx) => {
           this.tab = id;
+          this.poll.invalidate();
+          this.check(cx, "shown");
           this.openFailure = null;
           if (id === "prs") this.pulls.load(cx);
           cx.notify();
@@ -13171,8 +13179,56 @@ var Pull = class {
   notices = new Notices();
   missingFile = null;
   expandedActivity = /* @__PURE__ */ new Set();
-  init() {
+  polling = new ConditionalPoll();
+  validators = /* @__PURE__ */ new Map();
+  init(cx) {
     this.diff.init();
+    cx.timer.every(1e4, (cx2) => {
+      const shown = this.syncPolling();
+      if (!this.writing && !this.entry?.loading) this.check(cx2, shown);
+    });
+  }
+  syncPolling() {
+    const place = detailLocation(this.host.reader);
+    return this.polling.sync(
+      this.ref && place ? `${place.on}
+${place.pane}
+${detailKey(this.ref)}` : null,
+      Boolean(place?.visible) && this.host.active("pr")
+    );
+  }
+  check(cx, force = false) {
+    this.syncPolling();
+    const request = this.polling.begin(force);
+    const ref = this.ref;
+    const place = detailLocation(this.host.reader);
+    if (!request || !ref || !place) return;
+    cx.spawn(async (cx2) => {
+      let completed;
+      try {
+        const change = await pullChanges(ref.repo, ref.number, request.etag, place.on);
+        this.syncPolling();
+        if (!this.polling.current(request)) return;
+        const paths = [`issues/${ref.number}`, `pulls/${ref.number}/reviews`, `pulls/${ref.number}/comments`];
+        const sha = this.entry?.pull?.headSha;
+        if (sha) paths.push(`commits/${sha}/check-runs`, `commits/${sha}/statuses`);
+        const replies = await Promise.all(
+          paths.map(async (path) => ({
+            path,
+            change: await changes(`repos/${ref.repo}/${path}`, this.validators.get(path) ?? null, place.on)
+          }))
+        );
+        if (!detailLocation(this.host.reader)?.visible) this.syncPolling();
+        if (!this.polling.current(request)) return;
+        const changed = change.changed || replies.some((r) => r.change.changed);
+        if (force || changed) this.load(cx2);
+        for (const reply of replies) if (reply.change.changed) this.validators.set(reply.path, reply.change.etag);
+        completed = change;
+      } catch {
+      } finally {
+        this.polling.finish(request, completed);
+      }
+    });
   }
   host;
   metadata = new DetailMetadata();
@@ -13185,6 +13241,8 @@ var Pull = class {
     this.writeFailure = "";
     this.metadata.expanded = false;
     this.ref = ref;
+    this.validators.clear();
+    this.polling.invalidate();
     this.entry = null;
     this.files = null;
     this.discussions = null;
@@ -13222,7 +13280,11 @@ var Pull = class {
         entry.on = place.on;
         loadProjects(cx2, ref, place.on, entry, current);
       } catch (e) {
-        if (current()) entry.failure = readFailure(ref, e);
+        if (current()) {
+          entry.failure = readFailure(ref, e);
+          this.polling.invalidate();
+          this.validators.clear();
+        }
       } finally {
         if (current()) {
           entry.loading = false;
@@ -13232,6 +13294,7 @@ var Pull = class {
     });
   }
   render(cx, layout2) {
+    if (this.syncPolling()) this.check(cx, true);
     const on = detailLocation(this.host.reader)?.on;
     if (this.notices.take().some((n) => n.repo === this.ref?.repo && n.number === this.ref.number && n.threads?.on === on && n.threads))
       this.load(cx, false);
@@ -13457,7 +13520,7 @@ var Reader = class {
   }
   init(cx) {
     this.issue.init(cx);
-    this.pull.init();
+    this.pull.init(cx);
     cx.spawn(async (cx2) => {
       for (; ; ) {
         const ref = detailCommand(await nextCommand(), this.reader);

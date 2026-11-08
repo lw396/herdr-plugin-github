@@ -15,6 +15,7 @@ import { DetailTabs } from "../io/detail-tabs.ts";
 import * as gh from "../io/gh.ts";
 import { listChanges } from "../io/issues.ts";
 import * as known from "../io/known.ts";
+import { pullListChanges } from "../io/pulls.ts";
 import type { ListHost } from "./groups.ts";
 import { issueList } from "./issues.ts";
 import { pullList } from "./pulls.ts";
@@ -90,7 +91,11 @@ export class Panel implements Role {
 			const current = () => run === this.latest && this.poll.current(request);
 			let change: Change | undefined;
 			try {
-				change = await listChanges(`${r.remote.owner}/${r.remote.repo}`, request.etag, r.on);
+				change = await (this.tab === "prs" ? pullListChanges : listChanges)(
+					`${r.remote.owner}/${r.remote.repo}`,
+					request.etag,
+					r.on,
+				);
 				if (!current()) return;
 				this.checkedAt = Date.now();
 				this.checkFailed = false;
@@ -98,11 +103,10 @@ export class Panel implements Role {
 				if (current()) this.checkFailed = true;
 			} finally {
 				if (current()) {
-					if (change?.changed || refresh) this.issues.load(cx, true);
-					// PR lists have their own change check later (#34); a refresh asks the shown tab's groups now.
-					// Two of them are searches (30 a minute for the whole account, ADR 0006): kept pages under a minute
-					// old are reused, and only ↻ asks them all again.
-					if (refresh && this.tab === "prs") this.pulls.load(cx, refresh === "asked");
+					if (this.tab === "issues" && (change?.changed || refresh)) this.issues.load(cx, true);
+					// Reload only the shown tab's expanded groups.
+					// Two groups use search: only probe changes or an explicit/show refresh re-ask them.
+					if ((change?.changed || refresh) && this.tab === "prs") this.pulls.load(cx, true);
 					// Every finished check redraws: the footer shows a failed check and its recovery.
 					cx.notify();
 				}
@@ -355,6 +359,8 @@ export class Panel implements Role {
 						.on_mouse_down("left", stop)
 						.on_click((_e, cx) => {
 							this.tab = id;
+							this.poll.invalidate();
+							this.check(cx, "shown");
 							// A tab that failed to open was asked from the other list.
 							this.openFailure = null;
 							if (id === "prs") this.pulls.load(cx);
