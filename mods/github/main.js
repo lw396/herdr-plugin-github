@@ -435,6 +435,10 @@ var DetailNavigation = class {
     return previous3;
   }
 };
+function ownerName(repo) {
+  const [owner = "", name = ""] = repo.split("/");
+  return { owner, name };
+}
 var detailTabName = (ref) => `#${ref.number} \xB7 ${ref.repo.split("/").at(-1)}`;
 var detailUrl = (ref) => `https://github.com/${ref.repo}/${ref.kind === "pr" ? "pull" : "issues"}/${ref.number}`;
 var notVisible = (ref) => `${ref.repo} #${ref.number} isn't on GitHub, or this account can't see it.`;
@@ -10462,18 +10466,20 @@ function parseChecks(pages, statuses) {
 var checkHolds = (check) => /fail|pending|queued|progress|error/i.test(check.status);
 
 // src/github/core/merge.ts
+var CHECKS = "Checks have not passed";
+var BLOCKED = "Merging is blocked by branch protection rules (required checks or reviews)";
+var CHECKING = "Checking mergeability\u2026";
 var REASONS = {
   dirty: "This branch has conflicts that must be resolved",
-  blocked: "Merging is blocked by branch protection rules (required checks or reviews)",
   behind: "This branch is out-of-date with the base branch",
-  unknown: "Checking mergeability\u2026",
-  unstable: "Checks have not passed"
+  unknown: CHECKING,
+  unstable: CHECKS
 };
 function blockers(reviewers, checks) {
   return [
     reviewers.some((r) => r.state === "changes_requested") && "Changes requested",
     reviewers.some((r) => r.state === "requested") && "Review required",
-    checks.some(checkHolds) && "Checks have not passed"
+    checks.some(checkHolds) && CHECKS
   ].filter((x) => Boolean(x));
 }
 function reason(p, methods, reviewers, checks) {
@@ -10485,9 +10491,9 @@ function reason(p, methods, reviewers, checks) {
     return methods.length === 0 ? "No merge methods are enabled" : null;
   if (state === "blocked") {
     const causes = blockers(reviewers, checks);
-    return causes.length ? `${REASONS.blocked}: ${causes.join("; ")}` : REASONS.blocked ?? null;
+    return causes.length ? `${BLOCKED}: ${causes.join("; ")}` : BLOCKED;
   }
-  return REASONS[state] ?? (p.mergeable === true ? `Merging is blocked: ${state}` : "Checking mergeability\u2026");
+  return REASONS[state] ?? (p.mergeable === true ? `Merging is blocked: ${state}` : CHECKING);
 }
 function mergeInfo(p, repository, reviewers = [], checks = []) {
   const methods = ["merge", "squash", "rebase"].filter(
@@ -10679,7 +10685,7 @@ async function mergePull(repo, number, method, sha, on) {
       method: "PUT",
       rawFields: { merge_method: method, sha }
     });
-    if (!result.merged) throw new Error(result.message);
+    if (!result.merged) throw new GhError(result.message, 1, "");
   });
 }
 async function deletePullBranch(repo, number, info, on) {
@@ -10696,7 +10702,7 @@ async function readPullFiles(repo, number, on) {
   return files.map((file) => ({ ...file, viewed: viewed.has(file.path) }));
 }
 async function readPullViewed(repo, number, on) {
-  const [owner = "", name = ""] = repo.split("/");
+  const { owner, name } = ownerName(repo);
   const viewed = [];
   await eachPage(
     "the pull request's viewed-file states",
@@ -10714,11 +10720,11 @@ async function readPullViewed(repo, number, on) {
   return viewed;
 }
 async function pullId(repo, number, on) {
-  const [owner, name] = repo.split("/");
+  const { owner, name } = ownerName(repo);
   const data = await graphql(
     {
       query: "query($owner:String!,$repo:String!,$number:Int!){repository(owner:$owner,name:$repo){pullRequest(number:$number){id}}}",
-      variables: { owner: owner ?? "", repo: name ?? "", number }
+      variables: { owner, repo: name, number }
     },
     on
   );
@@ -10784,7 +10790,7 @@ async function resolvePullThread(repo, number, id, resolved, on) {
 async function readPullThreads(repo, number, on, pending = null) {
   const drafts = pending === null ? [] : await api(`repos/${repo}/pulls/${number}/reviews/${pending}/comments?per_page=100`, { on, paginate: true });
   const comments = await api(`repos/${repo}/pulls/${number}/comments?per_page=100`, { on, paginate: true });
-  const [owner = "", name = ""] = repo.split("/");
+  const { owner, name } = ownerName(repo);
   const nodes = [];
   await eachPage(
     "the pull request's discussions",
@@ -10974,58 +10980,6 @@ var Previews = class {
 // src/github/views/detail.ts
 import { h_flex as h_flex2, TextView, v_flex } from "gpui-base";
 import { div as div3, svg as svg3 } from "gpui-kit";
-
-// src/github/core/projects.ts
-var FIELD = { issue: "issue", pr: "pullRequest" };
-function projectsQuery(ref, after) {
-  const [owner = "", name = ""] = ref.repo.split("/");
-  return {
-    query: `query($owner: String!, $name: String!, $number: Int!, $after: String) {
-  repository(owner: $owner, name: $name) {
-    ${FIELD[ref.kind]}(number: $number) {
-      projectItems(first: 100, after: $after, includeArchived: true) {
-        pageInfo { hasNextPage endCursor }
-        nodes { project { title url } }
-      }
-    }
-  }
-}`,
-    variables: { owner, name, number: ref.number, after }
-  };
-}
-function projectItems(data, kind) {
-  const repository = data?.repository;
-  return repository?.[FIELD[kind]]?.projectItems;
-}
-function projectsFailure(message, on) {
-  const machine = on ?? "this computer";
-  return {
-    ok: false,
-    message: /read:project/.test(message) ? `Projects require read:project. Run gh auth refresh -h github.com -s read:project on ${machine}.` : `Projects unavailable on ${machine}. ${explain(message)}`
-  };
-}
-
-// src/github/io/projects.ts
-async function readProjects(ref, on) {
-  const projects2 = [];
-  try {
-    await eachPage(
-      `this ${ref.kind === "pr" ? "pull request" : "issue"}'s Projects`,
-      (after) => projectsQuery(ref, after),
-      (data) => projectItems(data, ref.kind),
-      (page) => {
-        projects2.push(...page.nodes.map((n) => ({ title: n.project.title, url: n.project.url })));
-        return false;
-      },
-      on
-    );
-    return { ok: true, projects: projects2 };
-  } catch (e) {
-    return projectsFailure(e instanceof Error ? e.message : String(e), on);
-  }
-}
-
-// src/github/views/detail.ts
 var NOUN = { issue: "issue", pr: "pull request" };
 var Noun = (kind) => NOUN[kind].charAt(0).toUpperCase() + NOUN[kind].slice(1);
 function openLink(cx, host, url, page) {
@@ -11035,20 +10989,6 @@ function openLink(cx, host, url, page) {
     const external = browserUrl(url, page);
     if (external) cx.open_url(external);
   }
-}
-function readFailure(ref, e) {
-  const failure = failureOf(e);
-  return failure.notFound ? notVisible(ref) : failure.message;
-}
-function loadProjects(cx, ref, on, entry, current) {
-  entry.projectsLoading = true;
-  cx.spawn(async (cx2) => {
-    const projects2 = await readProjects(ref, on);
-    if (!current()) return;
-    entry.projects = projects2;
-    entry.projectsLoading = false;
-    cx2.notify();
-  });
 }
 var detailEmpty = () => div3().flex_1();
 function detailHeader(host, ref, shown, refresh) {
@@ -11099,7 +11039,7 @@ var DetailMetadata = class {
     const { item } = metadata;
     const sections = [
       ...metadata.before ?? [],
-      ["Assignees", people(item.assignees, "None yet")],
+      ["Assignees", people(item.assignees)],
       ["Labels", labels(item.labels)],
       ["Project", projects(metadata.projects, metadata.projectsLoading)],
       ["Milestone", milestone(item.milestone)]
@@ -11151,8 +11091,8 @@ function postCard(id, post, verb, onLink, options = {}) {
   );
 }
 var quiet = (text3) => div3().text_size(12).text_color(colors().dim).child(text3);
-function people(logins, none) {
-  if (logins.length === 0) return quiet(none);
+function people(logins) {
+  if (logins.length === 0) return quiet("None yet");
   return v_flex().gap(8).children(logins.map((login2) => div3().text_size(13).font_medium().child(login2)));
 }
 function labelChip(label) {
@@ -11924,6 +11864,74 @@ import { nextCommand, props as props3 } from "herdr";
 // src/github/views/issue.ts
 import { h_flex as h_flex7, Textarea, TextareaState, v_flex as v_flex6 } from "gpui-base";
 import { div as div10 } from "gpui-kit";
+
+// src/github/core/projects.ts
+var FIELD = { issue: "issue", pr: "pullRequest" };
+function projectsQuery(ref, after) {
+  const { owner, name } = ownerName(ref.repo);
+  return {
+    query: `query($owner: String!, $name: String!, $number: Int!, $after: String) {
+  repository(owner: $owner, name: $name) {
+    ${FIELD[ref.kind]}(number: $number) {
+      projectItems(first: 100, after: $after, includeArchived: true) {
+        pageInfo { hasNextPage endCursor }
+        nodes { project { title url } }
+      }
+    }
+  }
+}`,
+    variables: { owner, name, number: ref.number, after }
+  };
+}
+function projectItems(data, kind) {
+  const repository = data?.repository;
+  return repository?.[FIELD[kind]]?.projectItems;
+}
+function projectsFailure(message, on) {
+  const machine = on ?? "this computer";
+  return {
+    ok: false,
+    message: /read:project/.test(message) ? `Projects require read:project. Run gh auth refresh -h github.com -s read:project on ${machine}.` : `Projects unavailable on ${machine}. ${explain(message)}`
+  };
+}
+
+// src/github/io/projects.ts
+async function readProjects(ref, on) {
+  const projects2 = [];
+  try {
+    await eachPage(
+      `this ${ref.kind === "pr" ? "pull request" : "issue"}'s Projects`,
+      (after) => projectsQuery(ref, after),
+      (data) => projectItems(data, ref.kind),
+      (page) => {
+        projects2.push(...page.nodes.map((n) => ({ title: n.project.title, url: n.project.url })));
+        return false;
+      },
+      on
+    );
+    return { ok: true, projects: projects2 };
+  } catch (e) {
+    return projectsFailure(e instanceof Error ? e.message : String(e), on);
+  }
+}
+
+// src/github/views/item-load.ts
+function readFailure(ref, e) {
+  const failure = failureOf(e);
+  return failure.notFound ? notVisible(ref) : failure.message;
+}
+function loadProjects(cx, ref, on, entry, current) {
+  entry.projectsLoading = true;
+  cx.spawn(async (cx2) => {
+    const projects2 = await readProjects(ref, on);
+    if (!current()) return;
+    entry.projects = projects2;
+    entry.projectsLoading = false;
+    cx2.notify();
+  });
+}
+
+// src/github/views/issue.ts
 var POLL_MS = 1e4;
 var Issue = class {
   ref = null;
@@ -11985,10 +11993,10 @@ ${detailKey(this.ref)}` : null;
     if (!ref || !place || !request) return;
     const key = detailKey(ref);
     const previous3 = this.entry?.key === key ? this.entry : null;
-    let entry = !force && previous3 && previous3.on === place.on ? previous3 : {
+    let entry = !force && previous3 ? previous3 : {
       key,
       issue: previous3?.issue,
-      on: previous3?.on === place.on ? previous3.on : void 0,
+      on: previous3?.on,
       failure: previous3?.failure,
       projects: previous3?.projects,
       loading: force,
@@ -12434,7 +12442,7 @@ var FileDiff = class {
         div12().px(16).text_size(12).text_color(t.dim).child("Inline comments are unavailable until pull request details finish loading.")
       )
     ).when(
-      listed !== null && !listed.patch && items.length > 0,
+      listed !== null && listed.status !== "unchanged" && !listed.patch && items.length > 0,
       (el) => el.child(
         div12().p(12).text_color(t.dim).child("GitHub did not provide a patch for this file. Discussions are shown below.")
       )
@@ -12720,7 +12728,7 @@ async function submitPullReview(repo, number, commit, event, body, on) {
   });
 }
 async function readPullReview(repo, number, on) {
-  const [owner = "", name = ""] = repo.split("/");
+  const { owner, name } = ownerName(repo);
   let id = "";
   let pending = null;
   await eachPage(
@@ -13163,7 +13171,6 @@ var Pull = class {
   notices = new Notices();
   missingFile = null;
   expandedActivity = /* @__PURE__ */ new Set();
-  where = null;
   init() {
     this.diff.init();
   }
@@ -13182,7 +13189,6 @@ var Pull = class {
     this.files = null;
     this.discussions = null;
     this.missingFile = null;
-    this.where = null;
     this.expandedActivity.clear();
     this.diff.jump(null);
     this.selected = null;
@@ -13195,21 +13201,15 @@ var Pull = class {
     if (path !== null) this.files?.load(cx);
     cx.notify();
   }
-  /** The machine whose gh shows this PR: fixed when it is first read, so reads and writes share an account. */
-  machine() {
-    const place = detailLocation(this.host.reader);
-    this.where ??= place && { on: place.on };
-    return this.where;
-  }
   load(cx, refreshRelated = true) {
     const ref = this.ref;
-    const place = this.machine();
+    const place = detailLocation(this.host.reader);
     if (!ref || !place || !this.host.active("pr")) return;
     this.discussions ??= new ReviewThreads(ref, place.on, this.host);
     if (refreshRelated) this.discussions.load(cx);
     this.files ??= new ChangedFiles(`reader-${this.host.reader}`, ref, place.on, (cx2, path) => this.select(cx2, path));
     if (refreshRelated && this.selected !== null) this.files.load(cx, true);
-    const entry = { pull: this.entry?.pull, loading: true, projectsLoading: false };
+    const entry = { pull: this.entry?.pull, on: this.entry?.on, loading: true, projectsLoading: false };
     this.entry = entry;
     cx.spawn(async (cx2) => {
       const current = () => this.entry === entry && this.host.active("pr");
@@ -13219,6 +13219,7 @@ var Pull = class {
         const pull = await readPull(ref.repo, ref.number, place.on);
         if (!current()) return;
         entry.pull = pull;
+        entry.on = place.on;
         loadProjects(cx2, ref, place.on, entry, current);
       } catch (e) {
         if (current()) entry.failure = readFailure(ref, e);
@@ -13231,7 +13232,7 @@ var Pull = class {
     });
   }
   render(cx, layout2) {
-    const on = this.where?.on;
+    const on = detailLocation(this.host.reader)?.on;
     if (this.notices.take().some((n) => n.repo === this.ref?.repo && n.number === this.ref.number && n.threads?.on === on && n.threads))
       this.load(cx, false);
     this.files?.sync(cx);
@@ -13345,15 +13346,15 @@ var Pull = class {
     area.child(quiet(info.reason ?? "This branch has no conflicts with the base branch"));
     if (this.writeFailure) area.child(quiet(this.writeFailure));
     const act = (cx, remove) => {
-      const ref = this.ref, place = this.where;
-      if (!ref || !place || this.writing) return;
+      const ref = this.ref, on = this.entry?.on;
+      if (!ref || on === void 0 || this.writing) return;
       this.writing = true;
       cx.spawn(async (cx2) => {
         try {
           if (remove) {
-            await deletePullBranch(ref.repo, ref.number, info, place.on);
+            await deletePullBranch(ref.repo, ref.number, info, on);
             info.deletable = false;
-          } else await mergePull(ref.repo, ref.number, this.method ?? info.methods[0], info.sha, place.on);
+          } else await mergePull(ref.repo, ref.number, this.method ?? info.methods[0], info.sha, on);
           if (this.ref === ref) {
             this.confirming = false;
             this.writeFailure = "";

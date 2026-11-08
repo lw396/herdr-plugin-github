@@ -1,5 +1,5 @@
 // Read-only GitHub Projects (v2) of an issue or PR; optional metadata, independent of the discussion.
-import type { DetailRef } from "./detail.ts";
+import { type DetailRef, ownerName } from "./detail.ts";
 import { explain, type Query } from "./gh.ts";
 
 export interface Project {
@@ -12,7 +12,7 @@ const FIELD = { issue: "issue", pr: "pullRequest" } as const;
 
 /** A page of the item's Projects (`after` null: the first). */
 export function projectsQuery(ref: DetailRef, after: string | null): Query {
-	const [owner = "", name = ""] = ref.repo.split("/");
+	const { owner, name } = ownerName(ref.repo);
 	return {
 		query: `query($owner: String!, $name: String!, $number: Int!, $after: String) {
   repository(owner: $owner, name: $name) {
@@ -28,7 +28,7 @@ export function projectsQuery(ref: DetailRef, after: string | null): Query {
 	};
 }
 
-export interface ProjectItems {
+interface ProjectItems {
 	pageInfo: { hasNextPage: boolean; endCursor: string | null };
 	nodes: { project: Project }[];
 }

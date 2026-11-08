@@ -254,7 +254,7 @@ export class FileDiff {
 						.child("Inline comments are unavailable until pull request details finish loading."),
 				),
 			)
-			.when(listed !== null && !listed.patch && items.length > 0, (el) =>
+			.when(listed !== null && listed.status !== "unchanged" && !listed.patch && items.length > 0, (el) =>
 				el.child(
 					div()
 						.p(12)

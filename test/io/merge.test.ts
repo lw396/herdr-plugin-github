@@ -20,7 +20,9 @@ test("a merge GitHub answers without merging is a failure with its message", asy
 			stdout: '{"merged":false,"message":"Head branch was modified. Review and try the merge again."}',
 		},
 	});
+	const notices = new Notices();
 	await expect(mergePull("a/b", 1, "merge", "abc", "remote")).rejects.toThrow("Head branch was modified");
+	expect(notices.take()).toEqual([]);
 });
 test("merge rejection preserves gh error and never retries writes", async () => {
 	machine("remote", {

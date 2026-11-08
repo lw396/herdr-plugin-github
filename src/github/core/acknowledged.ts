@@ -1,4 +1,4 @@
-// Writes GitHub acknowledged bridge independently lagging discussion reads, each only until observed.
+// Writes GitHub has acknowledged, shown until the discussion reads that lag behind them observe each one.
 import type { Comment } from "./discussion.ts";
 import { type PullTimelineItem, replyOnlyReview } from "./pull-timeline.ts";
 import type { ReviewThread } from "./review-threads.ts";

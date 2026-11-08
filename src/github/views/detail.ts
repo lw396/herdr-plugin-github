@@ -1,15 +1,13 @@
 // The parts issue and PR pages share inside a reader tab: header, body, posts, metadata and links.
 import { h_flex, TextView, v_flex } from "gpui-base";
 import { type Color, type Context, div, type Element, svg } from "gpui-kit";
-import { type DetailKind, type DetailRef, detailKey, detailUrl, notVisible } from "../core/detail.ts";
+import { type DetailKind, type DetailRef, detailKey, detailUrl } from "../core/detail.ts";
 import type { Comment } from "../core/discussion.ts";
 import type { Item } from "../core/item.ts";
 import type { Label } from "../core/labels.ts";
 import { browserUrl, detailLink } from "../core/markdown.ts";
 import type { Projects } from "../core/projects.ts";
 import { relativeTime } from "../core/time.ts";
-import { failureOf } from "../io/gh.ts";
-import { readProjects } from "../io/projects.ts";
 import { button, chip, colors, link, spinner, square } from "./ui.ts";
 
 /** What a page asks of the reader tab that hosts it. */
@@ -32,30 +30,6 @@ export function openLink(cx: Context, host: DetailHost, url: string, page: strin
 		const external = browserUrl(url, page);
 		if (external) cx.open_url(external);
 	}
-}
-
-/** A page's failed read in the reader's words: GitHub's 404 means this account cannot see it. */
-export function readFailure(ref: DetailRef, e: unknown): string {
-	const failure = failureOf(e);
-	return failure.notFound ? notVisible(ref) : failure.message;
-}
-
-/** Optional Projects load after the item, on its machine; `current` drops a stale answer. */
-export function loadProjects(
-	cx: Context,
-	ref: DetailRef,
-	on: string | null,
-	entry: { projects?: Projects; projectsLoading: boolean },
-	current: () => boolean,
-): void {
-	entry.projectsLoading = true;
-	cx.spawn(async (cx) => {
-		const projects = await readProjects(ref, on);
-		if (!current()) return;
-		entry.projects = projects;
-		entry.projectsLoading = false;
-		cx.notify();
-	});
 }
 
 /** Leave the reader blank during its handshake; readers without an item close automatically. */
@@ -172,7 +146,7 @@ export class DetailMetadata {
 		const { item } = metadata;
 		const sections: [string, Element][] = [
 			...(metadata.before ?? []),
-			["Assignees", people(item.assignees, "None yet")],
+			["Assignees", people(item.assignees)],
 			["Labels", labels(item.labels)],
 			["Project", projects(metadata.projects, metadata.projectsLoading)],
 			["Milestone", milestone(item.milestone)],
@@ -315,8 +289,8 @@ export function postCard(
 
 export const quiet = (text: string): Element => div().text_size(12).text_color(colors().dim).child(text);
 
-function people(logins: string[], none: string): Element {
-	if (logins.length === 0) return quiet(none);
+function people(logins: string[]): Element {
+	if (logins.length === 0) return quiet("None yet");
 	return v_flex()
 		.gap(8)
 		.children(logins.map((login) => div().text_size(13).font_medium().child(login)));

@@ -23,12 +23,11 @@ import {
 	detailEmpty,
 	detailHeader,
 	labelChip,
-	loadProjects,
 	openLink,
 	postCard,
-	readFailure,
 	stateBadge,
 } from "./detail.ts";
+import { loadProjects, readFailure } from "./item-load.ts";
 import { colors, spinner, stop } from "./ui.ts";
 
 /** How often the shown issue checks for changes. */
@@ -39,7 +38,7 @@ interface Loaded {
 	issue?: IssueDetail;
 	failure?: string;
 	loading: boolean;
-	/** The machine whose gh read the issue, once it was found signed in: writes go through the same one. */
+	/** The machine whose gh read the issue (its space's, which never changes): writes go through the same one. */
 	on?: string | null;
 	projects?: Projects;
 	projectsLoading: boolean;
@@ -120,12 +119,12 @@ export class Issue {
 		const key = detailKey(ref);
 		const previous = this.entry?.key === key ? this.entry : null;
 		let entry: Loaded =
-			!force && previous && previous.on === place.on
+			!force && previous
 				? previous
 				: {
 						key,
 						issue: previous?.issue,
-						on: previous?.on === place.on ? previous.on : undefined,
+						on: previous?.on,
 						failure: previous?.failure,
 						projects: previous?.projects,
 						loading: force,

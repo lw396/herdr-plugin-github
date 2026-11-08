@@ -20,12 +20,14 @@ export interface RestMergePull {
 	head: { sha: string; ref: string; repo: { full_name: string; default_branch: string } | null };
 }
 
+const CHECKS = "Checks have not passed";
+const BLOCKED = "Merging is blocked by branch protection rules (required checks or reviews)";
+const CHECKING = "Checking mergeability…";
 const REASONS: Record<string, string> = {
 	dirty: "This branch has conflicts that must be resolved",
-	blocked: "Merging is blocked by branch protection rules (required checks or reviews)",
 	behind: "This branch is out-of-date with the base branch",
-	unknown: "Checking mergeability…",
-	unstable: "Checks have not passed",
+	unknown: CHECKING,
+	unstable: CHECKS,
 };
 
 /** Branch protection does not say which rule blocks: name the reviews and checks that can. */
@@ -33,7 +35,7 @@ function blockers(reviewers: Reviewer[], checks: PullCheck[]): string[] {
 	return [
 		reviewers.some((r) => r.state === "changes_requested") && "Changes requested",
 		reviewers.some((r) => r.state === "requested") && "Review required",
-		checks.some(checkHolds) && "Checks have not passed",
+		checks.some(checkHolds) && CHECKS,
 	].filter((x): x is string => Boolean(x));
 }
 
@@ -46,9 +48,9 @@ function reason(p: RestMergePull, methods: MergeMethod[], reviewers: Reviewer[],
 		return methods.length === 0 ? "No merge methods are enabled" : null;
 	if (state === "blocked") {
 		const causes = blockers(reviewers, checks);
-		return causes.length ? `${REASONS.blocked}: ${causes.join("; ")}` : (REASONS.blocked ?? null);
+		return causes.length ? `${BLOCKED}: ${causes.join("; ")}` : BLOCKED;
 	}
-	return REASONS[state] ?? (p.mergeable === true ? `Merging is blocked: ${state}` : "Checking mergeability…");
+	return REASONS[state] ?? (p.mergeable === true ? `Merging is blocked: ${state}` : CHECKING);
 }
 
 /** `repository` carries which merge methods it allows (`allow_<method>_merge`). */

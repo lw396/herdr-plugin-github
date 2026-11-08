@@ -1,5 +1,5 @@
 // Pending reviews belong to the account on the PR's machine, never to shared app state.
-import { detailUrl } from "../core/detail.ts";
+import { detailUrl, ownerName } from "../core/detail.ts";
 import { type Comment, parseComment } from "../core/discussion.ts";
 import { type PullTimelineItem, pullTimeline } from "../core/pull-timeline.ts";
 import type { ReviewThread, ThreadNode } from "../core/review-threads.ts";
@@ -164,7 +164,7 @@ export async function readPullReview(
 	number: number,
 	on: string | null,
 ): Promise<{ id: string; pending: PendingReview | null }> {
-	const [owner = "", name = ""] = repo.split("/");
+	const { owner, name } = ownerName(repo);
 	let id = "";
 	let pending: PendingReview | null = null;
 	await eachPage(

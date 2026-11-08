@@ -1,5 +1,5 @@
 // Pull requests from GitHub, through gh on the folder's or reader tab's machine (ADR 0003).
-import { detailUrl } from "../core/detail.ts";
+import { detailUrl, ownerName } from "../core/detail.ts";
 import { type Comment, parseComment } from "../core/discussion.ts";
 import { type ChangedFile, parseFiles } from "../core/files.ts";
 import type { MergeInfo, MergeMethod } from "../core/merge.ts";
@@ -16,7 +16,7 @@ import {
 import type { RemoteRepo } from "../core/remote.ts";
 import { parseThreads, type ReviewThread, type ThreadNode } from "../core/review-threads.ts";
 import { written } from "./changes.ts";
-import { api, eachPage, graphql, mutate } from "./gh.ts";
+import { api, eachPage, GhError, graphql, mutate } from "./gh.ts";
 import type { LocalBranches } from "./git.ts";
 
 /** One page of a group, asked with the gh on `on`, whose account is `login` (for the searches). */
@@ -63,7 +63,8 @@ export async function mergePull(
 			method: "PUT",
 			rawFields: { merge_method: method, sha },
 		})) as { merged: boolean; message: string };
-		if (!result.merged) throw new Error(result.message);
+		// GitHub answered, and refused: nothing changed for other views to read.
+		if (!result.merged) throw new GhError(result.message, 1, "");
 	});
 }
 
@@ -94,7 +95,7 @@ type Page<N> = { nodes: N[]; pageInfo: { hasNextPage: boolean; endCursor: string
 
 /** GitHub invalidates viewed marks after a file changes (DISMISSED, not VIEWED). */
 export async function readPullViewed(repo: string, number: number, on: string | null): Promise<string[]> {
-	const [owner = "", name = ""] = repo.split("/");
+	const { owner, name } = ownerName(repo);
 	const viewed: string[] = [];
 	await eachPage(
 		"the pull request's viewed-file states",
@@ -117,12 +118,12 @@ export async function readPullViewed(repo: string, number: number, on: string | 
 
 /** The pull request's GraphQL node id, which its mutations name. */
 export async function pullId(repo: string, number: number, on: string | null): Promise<string> {
-	const [owner, name] = repo.split("/");
+	const { owner, name } = ownerName(repo);
 	const data = await graphql<PullConnection<{ id: string }>>(
 		{
 			query:
 				"query($owner:String!,$repo:String!,$number:Int!){repository(owner:$owner,name:$repo){pullRequest(number:$number){id}}}",
-			variables: { owner: owner ?? "", repo: name ?? "", number },
+			variables: { owner, repo: name, number },
 		},
 		on,
 	);
@@ -240,7 +241,7 @@ export async function readPullThreads(
 			? []
 			: await api(`repos/${repo}/pulls/${number}/reviews/${pending}/comments?per_page=100`, { on, paginate: true });
 	const comments = await api(`repos/${repo}/pulls/${number}/comments?per_page=100`, { on, paginate: true });
-	const [owner = "", name = ""] = repo.split("/");
+	const { owner, name } = ownerName(repo);
 	const nodes: ThreadNode[] = [];
 	await eachPage(
 		"the pull request's discussions",

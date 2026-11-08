@@ -43,6 +43,12 @@ export class DetailNavigation {
 	}
 }
 
+/** `owner/name` as GraphQL's repository(owner:, name:) arguments. */
+export function ownerName(repo: string): { owner: string; name: string } {
+	const [owner = "", name = ""] = repo.split("/");
+	return { owner, name };
+}
+
 /** Keep native tabs compact; the full repository remains visible in the reader's link tooltip. */
 export const detailTabName = (ref: DetailRef): string => `#${ref.number} · ${ref.repo.split("/").at(-1)}`;
 

@@ -183,6 +183,7 @@ test("kept drafts go once their pending review is gone, but published comments s
 	const published = { ...comment, id: comment.id + 2 };
 	acknowledged.keep(discussion([comment]), draft);
 	acknowledged.keep(discussion([comment]), published);
+	expect(acknowledged.threads([discussion([comment])], true)).toEqual([discussion([comment, draft, published])]);
 	expect(acknowledged.threads([discussion([comment])], false)).toEqual([discussion([comment, published])]);
 	expect(acknowledged.threads([discussion([comment])], true)).toEqual([discussion([comment, published])]);
 });

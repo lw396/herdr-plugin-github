@@ -18,21 +18,22 @@ import {
 	detailDocument,
 	detailEmpty,
 	detailHeader,
-	loadProjects,
 	openLink,
 	postCard,
 	quiet,
-	readFailure,
 	stateBadge,
 } from "./detail.ts";
 import { type DiffSubject, FileDiff } from "./diff.ts";
 import { ChangedFiles } from "./files.ts";
+import { loadProjects, readFailure } from "./item-load.ts";
 import { timelineItem } from "./pull-timeline.ts";
 import { ReviewThreads } from "./review-threads.ts";
 import { button, colors, link, PULL_STATES } from "./ui.ts";
 
 interface Loaded {
 	pull?: PullDetail;
+	/** The machine whose gh read what is shown: writes go through the same one. */
+	on?: string | null;
 	projects?: Projects;
 	loading: boolean;
 	projectsLoading: boolean;
@@ -61,7 +62,6 @@ export class Pull {
 	private notices = new Notices();
 	private missingFile: Extract<DiffSubject, { missing: true }> | null = null;
 	private expandedActivity = new Set<string>();
-	private where: { on: string | null } | null = null;
 
 	init(): void {
 		this.diff.init();
@@ -83,7 +83,6 @@ export class Pull {
 		this.files = null;
 		this.discussions = null;
 		this.missingFile = null;
-		this.where = null;
 		this.expandedActivity.clear();
 		this.diff.jump(null);
 		this.selected = null;
@@ -98,31 +97,26 @@ export class Pull {
 		cx.notify();
 	}
 
-	/** The machine whose gh shows this PR: fixed when it is first read, so reads and writes share an account. */
-	private machine(): { on: string | null } | null {
-		const place = detailLocation(this.host.reader);
-		this.where ??= place && { on: place.on };
-		return this.where;
-	}
-
 	private load(cx: Context, refreshRelated = true): void {
 		const ref = this.ref;
-		const place = this.machine();
+		const place = detailLocation(this.host.reader);
 		if (!ref || !place || !this.host.active("pr")) return;
 		this.discussions ??= new ReviewThreads(ref, place.on, this.host);
 		if (refreshRelated) this.discussions.load(cx);
 		this.files ??= new ChangedFiles(`reader-${this.host.reader}`, ref, place.on, (cx, path) => this.select(cx, path));
 		if (refreshRelated && this.selected !== null) this.files.load(cx, true);
-		const entry: Loaded = { pull: this.entry?.pull, loading: true, projectsLoading: false };
+		const entry: Loaded = { pull: this.entry?.pull, on: this.entry?.on, loading: true, projectsLoading: false };
 		this.entry = entry;
 		cx.spawn(async (cx) => {
 			const current = () => this.entry === entry && this.host.active("pr");
 			try {
+				// Each explicit load checks gh first, so a lost login reads as what to do (the issue page polls, so it checks once).
 				await gh.signedIn(place.on);
 				if (!current()) return;
 				const pull = await readPull(ref.repo, ref.number, place.on);
 				if (!current()) return;
 				entry.pull = pull;
+				entry.on = place.on;
 				loadProjects(cx, ref, place.on, entry, current);
 			} catch (e) {
 				if (current()) entry.failure = readFailure(ref, e);
@@ -136,7 +130,7 @@ export class Pull {
 	}
 
 	render(cx: Context, layout: DetailLayout): Element[] {
-		const on = this.where?.on;
+		const on = detailLocation(this.host.reader)?.on;
 		if (
 			this.notices
 				.take()
@@ -302,15 +296,15 @@ export class Pull {
 		if (this.writeFailure) area.child(quiet(this.writeFailure));
 		const act = (cx: Context, remove: boolean) => {
 			const ref = this.ref,
-				place = this.where;
-			if (!ref || !place || this.writing) return;
+				on = this.entry?.on;
+			if (!ref || on === undefined || this.writing) return;
 			this.writing = true;
 			cx.spawn(async (cx) => {
 				try {
 					if (remove) {
-						await deletePullBranch(ref.repo, ref.number, info, place.on);
+						await deletePullBranch(ref.repo, ref.number, info, on);
 						info.deletable = false;
-					} else await mergePull(ref.repo, ref.number, this.method ?? info.methods[0], info.sha, place.on);
+					} else await mergePull(ref.repo, ref.number, this.method ?? info.methods[0], info.sha, on);
 					if (this.ref === ref) {
 						this.confirming = false;
 						this.writeFailure = "";
