@@ -10,6 +10,8 @@ the repository you are working in, right beside your terminals. The interface fo
 All GitHub access goes through the GitHub CLI (`gh`) on the machine that hosts the folder, so local
 and remote folders each use their own account and credentials.
 
+![A cli/cli pull request open in a Herdr tab, with its description, activity timeline and metadata, beside the GitHub sidebar listing open pull requests](docs/images/screenshot.png)
+
 ## Features
 
 **Sidebar**
