@@ -1,6 +1,5 @@
 import { h_flex, v_flex } from "gpui-base";
 import { type AsyncContext, type Context, div, type Element, svg } from "gpui-kit";
-import { props } from "herdr";
 import type { DetailRef } from "../detail/core/detail.ts";
 import { Notices } from "../detail/io/changes.ts";
 import { DetailTabs } from "../detail/io/detail-tabs.ts";

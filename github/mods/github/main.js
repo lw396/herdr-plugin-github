@@ -6,7 +6,7 @@ var __export = (target, all2) => {
 
 // src/github/main.ts
 import { View } from "gpui-kit";
-import { props as props4 } from "herdr";
+import { props as props3 } from "herdr";
 
 // src/github/roles/pane.ts
 import { h_flex } from "gpui-base";
@@ -94,7 +94,6 @@ var Pane = class {
 // src/github/roles/panel.ts
 import { h_flex as h_flex6, v_flex as v_flex5 } from "gpui-base";
 import { div as div9, svg as svg6 } from "gpui-kit";
-import "herdr";
 
 // src/github/detail/io/changes.ts
 import { setShared, shared } from "herdr";
@@ -12081,7 +12080,7 @@ var Panel = class {
 
 // src/github/roles/reader.ts
 import { v_flex as v_flex12 } from "gpui-base";
-import { nextCommand, props as props3 } from "herdr";
+import { nextCommand, props as props2 } from "herdr";
 
 // src/github/issues/views/issue.ts
 import { h_flex as h_flex7, Textarea, TextareaState, v_flex as v_flex6 } from "gpui-base";
@@ -13786,7 +13785,7 @@ var Reader = class {
   reader;
   checkingEmpty = false;
   constructor() {
-    this.reader = typeof props3()?.reader === "string" ? props3().reader : "";
+    this.reader = typeof props2()?.reader === "string" ? props2().reader : "";
     const navigation = this.navigation;
     const host = {
       reader: this.reader,
@@ -13805,7 +13804,7 @@ var Reader = class {
   }
   /** The role the tab was opened with, until it shows something. */
   initial() {
-    return props3()?.role === "pr" ? "pr" : "issue";
+    return props2()?.role === "pr" ? "pr" : "issue";
   }
   init(cx) {
     this.issue.init(cx);
@@ -13853,12 +13852,12 @@ var ROLES = { panel: Panel, issue: Reader, pr: Reader, pane: Pane };
 var GitHub = class extends View {
   role = null;
   init(p, cx) {
-    const Role = ROLES[(props4() ?? p)?.role ?? "panel"];
+    const Role = ROLES[(props3() ?? p)?.role ?? "panel"];
     this.role = Role ? new Role() : null;
     this.role?.init(cx);
   }
   render(cx) {
-    return this.role ? this.role.render(cx) : `github: unknown role ${JSON.stringify(props4()?.role)}`;
+    return this.role ? this.role.render(cx) : `github: unknown role ${JSON.stringify(props3()?.role)}`;
   }
 };
 export {

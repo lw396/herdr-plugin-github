@@ -17,7 +17,8 @@ and its sub-issues define the plan and order; use the tracker guide below before
   with `on` from `gh.account()`. Remote folders use the remote machine's tools and credentials; never fall back locally.
   Pass gh explicit `owner/repo` from `githubRemote()`, not a cwd or `{owner}/{repo}` placeholders.
 - Use the context each callback receives; do not retain `cx`. Schedule work with `cx.timer` and `cx.spawn`, not `setTimeout`.
-- Use theme colors through `shared/views/ui.ts`. Stop mouse-down propagation on controls inside window overlays.
+- Use theme colors through `shared/views/ui.ts`. Give controls `.on_mouse_down("left", stop)` and stop propagation
+  in their `on_click`, so a press or click on a control never reaches the row, card or drag area around it.
 - Keep `init()` read-only: `herdr-app check` executes it.
 - Never open a Herdr window with a changed `HOME` or `HERDR_APP_HOME`: it can overwrite real machines' spaces.
   With a temporary app home, use subcommands only.

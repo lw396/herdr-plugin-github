@@ -15,10 +15,15 @@ export const colors = (): Record<string, Color> => theme() as Record<string, Col
 export const spinner = (size = 12): Element =>
 	svg("mods/github/assets/spinner.svg").size(size).flex_none().text_color(colors().dim).spin(900);
 
-/** Controls inside a window overlay stop the press, or it drags the window. */
+/**
+ * A control keeps its press to itself: GPUI delivers a press to every handler on the path, and Herdr starts a
+ * window drag from any press that reaches a `window_drag` block or a window overlay. No GitHub view sits in one
+ * today; stopping it at the control keeps that true if the view moves. Clicks are kept apart separately, by
+ * `stop_propagation()` in each `on_click`.
+ */
 export const stop = (_e: unknown, cx: Context): void => cx.stop_propagation();
 
-/** Opens `url` in the browser; the caller styles it. Neither its press nor its click activates a containing row/window. */
+/** Opens `url` in the browser; the caller styles it. Neither its press nor its click reaches a containing row. */
 export function link(id: string, url: string, label: string): Element {
 	return div()
 		.id(id)
@@ -69,7 +74,7 @@ export function actionButton(
 		.child(label);
 }
 
-/** A compact action. Neither its press nor its click activates a containing row/window. */
+/** A compact action. Neither its press nor its click reaches a containing row. */
 export function button(
 	id: string,
 	label: string | Element,
