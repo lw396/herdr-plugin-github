@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
-import { mergeInfo } from "../../src/github/core/merge.ts";
+import { mergeInfo, selectedMergeMethod } from "../../src/github/core/merge.ts";
+import repository from "../fixtures/repository-plugin-merge-methods.json";
 
 // REST pull request fields (mergeable, mergeable_state) and repository allow_*_merge settings.
 const p = {
@@ -8,13 +9,30 @@ const p = {
 	mergeable_state: "clean",
 	head: { sha: "abc", ref: "feature", repo: { full_name: "fork/repo", default_branch: "main" } },
 };
-test("allowed methods keep merge/squash/rebase order and first default", () => {
+test("merge defaults to the first allowed method, respects a selection and falls back when it is disabled", () => {
+	expect(selectedMergeMethod(["merge", "squash", "rebase"], null)).toBe("merge");
+	expect(selectedMergeMethod(["squash", "rebase"], null)).toBe("squash");
+	expect(selectedMergeMethod(["merge", "squash"], "merge")).toBe("merge");
+	expect(selectedMergeMethod(["merge", "rebase"], "squash")).toBe("merge");
+	expect(selectedMergeMethod(["rebase"], null)).toBe("rebase");
+	expect(selectedMergeMethod([], "squash")).toBeNull();
+});
+
+test("the real repository settings enable all three methods with Create Merge Commit as default", () => {
+	// Captured with gh api repos/lw396/herdr-plugin-github --jq '{allow_merge_commit,allow_squash_merge,allow_rebase_merge}'.
+	const info = mergeInfo(p, repository);
+	expect(info.methods).toEqual(["merge", "squash", "rebase"]);
+	expect(selectedMergeMethod(info.methods, null)).toBe("merge");
+});
+
+test("allowed methods keep merge/squash/rebase order", () => {
 	expect(mergeInfo(p, { allow_squash_merge: true, allow_rebase_merge: true }).methods).toEqual(["squash", "rebase"]);
-	expect(mergeInfo(p, { allow_merge_merge: true }).reason).toBeNull();
+	expect(mergeInfo(p, { allow_merge_commit: true }).methods).toEqual(["merge"]);
+	expect(mergeInfo(p, { allow_merge_commit: true }).reason).toBeNull();
 	expect(mergeInfo(p, {}).reason).toBe("No merge methods are enabled");
 });
 test("conflicts, checks, protection, drafts and unknown states each say why they cannot merge", () => {
-	const reason = (more: object) => mergeInfo({ ...p, ...more }, { allow_merge_merge: true }).reason;
+	const reason = (more: object) => mergeInfo({ ...p, ...more }, { allow_merge_commit: true }).reason;
 	expect(reason({ mergeable: false, mergeable_state: "dirty" })).toBe(
 		"This branch has conflicts that must be resolved",
 	);

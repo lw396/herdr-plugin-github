@@ -50,5 +50,30 @@ export function parseChecks(pages: unknown, statuses: unknown[]): PullCheck[] {
 	return checks;
 }
 
+/** Compact status-card heading; each check keeps its detail in the expandable list. */
+export function checkSummary(checks: Pick<PullCheck, "status">[]): {
+	label: string;
+	tone: "done" | "dim" | "blocked" | "working";
+	icon: string;
+} {
+	if (!checks.length) return { label: "No checks reported", tone: "dim", icon: "○" };
+	const counts = { failed: 0, pending: 0, successful: 0, other: 0 };
+	for (const { status } of checks) {
+		if (/^(failure|error|timed_out|cancelled|action_required|startup_failure|stale)$/.test(status)) counts.failed++;
+		else if (/^(pending|queued|in_progress|waiting|requested)$/.test(status)) counts.pending++;
+		else if (status === "success") counts.successful++;
+		else counts.other++;
+	}
+	const label = (Object.entries(counts) as [keyof typeof counts, number][])
+		.filter(([, count]) => count > 0)
+		.map(([kind, count]) => `${count} ${kind} check${count === 1 ? "" : "s"}`)
+		.join(", ");
+	return {
+		label,
+		tone: counts.failed ? "blocked" : counts.pending ? "working" : counts.other ? "dim" : "done",
+		icon: counts.failed ? "×" : counts.pending || counts.other ? "○" : "✓",
+	};
+}
+
 /** Unfinished or failed: what holds back a merge that requires passing checks. */
 export const checkHolds = (check: PullCheck): boolean => /fail|pending|queued|progress|error/i.test(check.status);

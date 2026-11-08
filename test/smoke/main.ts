@@ -2,11 +2,13 @@
 import { HoverCard, h_flex, TextareaState } from "gpui-base";
 import { type AsyncContext, type Context, div, View } from "gpui-kit";
 import { Acknowledged } from "../../src/github/core/acknowledged.ts";
+import { checkSummary } from "../../src/github/core/checks.ts";
 import { parsePatch } from "../../src/github/core/diff.ts";
 import { parseComment } from "../../src/github/core/discussion.ts";
 import { parseFiles } from "../../src/github/core/files.ts";
 import { parseIssueDetail } from "../../src/github/core/issue-detail.ts";
 import { browserUrl, detailLink, readerMarkdown } from "../../src/github/core/markdown.ts";
+import { mergeInfo, selectedMergeMethod } from "../../src/github/core/merge.ts";
 import { PREVIEW_CLOSE_MS, PREVIEW_OPEN_MS, parsePreview } from "../../src/github/core/preview.ts";
 import { parsePullDetail } from "../../src/github/core/pull-detail.ts";
 import { pullTimeline } from "../../src/github/core/pull-timeline.ts";
@@ -18,6 +20,7 @@ import { previewCard } from "../../src/github/views/preview.ts";
 import { timelineItem } from "../../src/github/views/pull-timeline.ts";
 import { Reader } from "../../src/github/views/reader.ts";
 import { commentEditor, ReviewThreads } from "../../src/github/views/review-threads.ts";
+import { actionButton } from "../../src/github/views/ui.ts";
 import issue from "../fixtures/issue-plugin-13.json";
 import pull from "../fixtures/pull-cli-14974.json";
 import pullComments from "../fixtures/pull-cli-14974-comments.json";
@@ -29,6 +32,7 @@ import inlinePages from "../fixtures/pull-plugin-35-inline.json";
 import threadPages from "../fixtures/pull-plugin-35-threads.json";
 import inline36 from "../fixtures/pull-plugin-36-inline.json";
 import review36 from "../fixtures/pull-plugin-36-reviews.json";
+import mergeSettings from "../fixtures/repository-plugin-merge-methods.json";
 import events from "../fixtures/timeline-plugin-13.json";
 
 function expectEqual(actual: string, expected: string, what: string): void {
@@ -134,6 +138,50 @@ export default class Smoke extends View {
 			}),
 		};
 		expectEqual(pr.pull.entry.pull?.state ?? "", "closed", "PR state");
+		// Exercise the real status card's ready/merge branches, not only a closed PR.
+		for (const state of ["open", "draft", "merged"] as const) {
+			const sample = new Reader();
+			sample.init(cx);
+			sample.layout = "wide";
+			sample.navigation.open(ref);
+			sample.pull.ref = ref;
+			const detail = pr.pull.entry.pull!;
+			sample.pull.entry = {
+				...pr.pull.entry,
+				pull: {
+					...detail,
+					state,
+					checks: [
+						{ id: "smoke-check", name: "verify", status: "success", duration: "0m 19s", url: "https://github.com" },
+					],
+					merge: {
+						...detail.merge,
+						reason:
+							state === "open"
+								? null
+								: state === "draft"
+									? "This pull request is still a draft"
+									: "Pull request successfully merged",
+						methods: ["merge", "squash", "rebase"],
+						deletable: state === "merged",
+					},
+				},
+			};
+			this.readers.push(sample);
+		}
+		expectEqual(checkSummary([{ status: "success" }]).label, "1 successful check", "status card summary in QuickJS");
+		expectEqual(
+			JSON.stringify(
+				mergeInfo({ state: "open", head: { sha: "abc", ref: "feature", repo: null } }, mergeSettings).methods,
+			),
+			'["merge","squash","rebase"]',
+			"real repository merge settings in QuickJS",
+		);
+		expectEqual(
+			selectedMergeMethod(["merge", "squash", "rebase"], null) ?? "",
+			"merge",
+			"default merge method in QuickJS",
+		);
 		expectEqual(parsePreview(pull, "pr").summary, "probe", "hover summary in QuickJS");
 		expectEqual(
 			JSON.stringify(detailLink("https://github.com/cli/cli/pull/14976", pull.html_url)),
@@ -216,7 +264,12 @@ export default class Smoke extends View {
 			.children(this.metadataSamples())
 			.child(this.files?.render(cx) ?? div())
 			.child(commentEditor(this.replyDraft!, 80))
-			.child(this.discussions!.summary("63f52f1dddd87eecbe02a9013523124921ee4345"))
+			.child(
+				this.discussions!.summary(
+					"63f52f1dddd87eecbe02a9013523124921ee4345",
+					actionButton("smoke-close-pr", "Close Pull Request", () => {}),
+				),
+			)
 			.child(
 				this.threadDiff.render(
 					this.files!.files!.find((file) => file.path === "docs/pr-fixture.md")!,

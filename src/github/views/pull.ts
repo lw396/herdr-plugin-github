@@ -1,8 +1,9 @@
 // A PR reader switches between its published discussion and a changed file's read-only unified diff.
 import { h_flex, v_flex } from "gpui-base";
 import { type Context, div, type Element } from "gpui-kit";
+import { checkSummary } from "../core/checks.ts";
 import { type DetailRef, detailUrl } from "../core/detail.ts";
-import type { MergeMethod } from "../core/merge.ts";
+import { type MergeMethod, selectedMergeMethod } from "../core/merge.ts";
 import type { Projects } from "../core/projects.ts";
 import type { PullDetail } from "../core/pull-detail.ts";
 import type { ReviewState } from "../core/reviewers.ts";
@@ -28,7 +29,7 @@ import { ChangedFiles } from "./files.ts";
 import { loadProjects, readFailure } from "./item-load.ts";
 import { timelineItem } from "./pull-timeline.ts";
 import { ReviewThreads } from "./review-threads.ts";
-import { button, colors, link, PULL_STATES } from "./ui.ts";
+import { actionButton, button, colors, link, PULL_STATES } from "./ui.ts";
 
 interface Loaded {
 	pull?: PullDetail;
@@ -50,7 +51,9 @@ const REVIEWS: Record<ReviewState, { label: string; icon: string; color: string 
 
 export class Pull {
 	private method: MergeMethod | null = null;
-	private confirming = false;
+	private methodOptions = false;
+	private checksExpanded = false;
+	private confirming: MergeMethod | null = null;
 	private writing = false;
 	private writeFailure = "";
 	private stateFailure = "";
@@ -76,7 +79,9 @@ export class Pull {
 
 	show(cx: Context, ref: DetailRef): void {
 		this.method = null;
-		this.confirming = false;
+		this.methodOptions = false;
+		this.checksExpanded = false;
+		this.confirming = null;
 		this.writeFailure = "";
 		this.stateFailure = "";
 		this.metadata.expanded = false;
@@ -256,7 +261,6 @@ export class Pull {
 			],
 			[
 				postCard("pull-body", pull, "opened this pull request", onLink),
-				this.mergeArea(pull),
 				// Discussion metadata is fetched once per PR; report its progress/failure once, not per thread.
 				...(this.discussions?.loading || this.discussions?.failure ? [this.discussions.status()] : []),
 				...(this.discussions?.acknowledged.timeline(pull.timeline) ?? pull.timeline).map((item) => {
@@ -271,19 +275,10 @@ export class Pull {
 						},
 					});
 				}),
-				v_flex()
-					.gap(10)
-					.child(div().font_semibold().child("Checks"))
-					.when(!pull.checks.length, (el) => el.child(quiet("No checks reported")))
-					.children(
-						pull.checks.map((c) =>
-							c.url
-								? link(c.id, c.url, `${c.name} · ${c.status} · ${c.duration}`).text_color(t.accent)
-								: quiet(`${c.name} · ${c.status} · ${c.duration}`),
-						),
-					),
-				this.stateActions(pull),
-				...(this.discussions ? [this.discussions.summary(pull.headSha)] : []),
+				this.statusCard(pull),
+				...(this.discussions
+					? [this.discussions.summary(pull.headSha, this.stateActions(pull))]
+					: [this.stateActions(pull)]),
 			],
 			{
 				item: pull,
@@ -295,62 +290,137 @@ export class Pull {
 		);
 	}
 
-	private stateActions(pull: PullDetail): Element {
-		const area = v_flex().gap(8);
-		if (pull.state === "merged") return area;
-		if (this.stateFailure) area.child(div().text_color(colors().blocked).child(this.stateFailure));
-		// The merge area already reports the shared write lock's progress.
-		if (this.writing) return area;
-		const act = (cx: Context, ready: boolean) => {
-			const ref = this.ref;
-			const on = this.entry?.on;
-			if (!ref || on === undefined || this.writing) return;
-			this.writing = true;
-			this.stateFailure = "";
-			cx.spawn(async (cx) => {
-				try {
-					const state = ready
-						? await readyPull(ref.repo, ref.number, on)
-						: await setPullState(ref.repo, ref.number, pull.state === "closed" ? "open" : "closed", on);
-					if (this.ref === ref) {
-						if (this.entry?.pull) this.entry.pull.state = state;
-						// A state transition invalidates any earlier merge confirmation.
-						this.confirming = false;
-						this.load(cx);
-					}
-				} catch (e) {
-					if (this.ref === ref) this.stateFailure = gh.failureOf(e).message;
-				} finally {
-					this.writing = false;
-					cx.notify();
+	private changeState(cx: Context, pull: PullDetail, ready: boolean): void {
+		const ref = this.ref;
+		const on = this.entry?.on;
+		if (!ref || on === undefined || this.writing) return;
+		this.writing = true;
+		this.stateFailure = "";
+		cx.spawn(async (cx) => {
+			try {
+				const state = ready
+					? await readyPull(ref.repo, ref.number, on)
+					: await setPullState(ref.repo, ref.number, pull.state === "closed" ? "open" : "closed", on);
+				if (this.ref === ref) {
+					if (this.entry?.pull) this.entry.pull.state = state;
+					// A state transition invalidates any earlier merge confirmation.
+					this.confirming = null;
+					this.load(cx);
 				}
-			});
-			cx.notify();
-		};
-		if (pull.state === "draft")
-			area.child(button("pull-ready", "Ready for Review", "Ready for Review", (_e, cx) => act(cx, true)));
+			} catch (e) {
+				if (this.ref === ref) this.stateFailure = gh.failureOf(e).message;
+			} finally {
+				this.writing = false;
+				cx.notify();
+			}
+		});
+		cx.notify();
+	}
+
+	private stateActions(pull: PullDetail): Element {
+		if (pull.state === "merged") return div();
 		const label = pull.state === "closed" ? "Reopen Pull Request" : "Close Pull Request";
-		return area.child(button("pull-state", label, label, (_e, cx) => act(cx, false)));
+		return actionButton("pull-state", label, (_e, cx) => this.changeState(cx, pull, false), false, this.writing);
+	}
+
+	private statusCard(pull: PullDetail): Element {
+		const t = colors();
+		const summary = checkSummary(pull.checks);
+		return v_flex()
+			.w_full()
+			.min_w(0)
+			.border_1()
+			.border_color(t.border)
+			.rounded(6)
+			.overflow_hidden()
+			.child(
+				v_flex()
+					.px(16)
+					.py(12)
+					.gap(10)
+					.child(
+						button(
+							"pull-checks-toggle",
+							h_flex()
+								.w_full()
+								.gap(10)
+								.items_center()
+								.child(div().text_color(t[summary.tone]).child(summary.icon))
+								.child(div().flex_1().child(summary.label))
+								.when(pull.checks.length > 0, (el) => el.child(div().child(this.checksExpanded ? "⌄" : "›"))),
+							"Show or hide checks",
+							(_e, cx) => {
+								this.checksExpanded = !this.checksExpanded;
+								cx.notify();
+							},
+						)
+							.w_full()
+							.p(0)
+							.text_color(t.foreground)
+							.text_size(13),
+					)
+					.when(this.checksExpanded, (el) =>
+						el.children(
+							pull.checks.map((c) =>
+								c.url
+									? link(c.id, c.url, `${c.name} · ${c.status} · ${c.duration}`).text_size(12).text_color(t.accent)
+									: quiet(`${c.name} · ${c.status} · ${c.duration}`),
+							),
+						),
+					),
+			)
+			.child(this.mergeArea(pull));
 	}
 
 	private mergeArea(pull: PullDetail): Element {
 		const info = pull.merge;
-		const area = v_flex().gap(10).child(div().font_semibold().child("Merge"));
-		area.child(quiet(info.reason ?? "This branch has no conflicts with the base branch"));
-		if (this.writeFailure) area.child(quiet(this.writeFailure));
+		const method = selectedMergeMethod(info.methods, this.method);
+		const t = colors();
+		const reason =
+			pull.state === "draft"
+				? "This pull request is still a work in progress."
+				: pull.state === "closed"
+					? "This pull request is closed."
+					: pull.state === "merged"
+						? "Pull request successfully merged."
+						: (info.reason ?? "This branch has no conflicts with the base branch.");
+		const area = v_flex()
+			.border_t(1)
+			.border_color(t.border)
+			.child(
+				h_flex()
+					.px(16)
+					.py(12)
+					.gap(10)
+					.items_center()
+					.child(
+						div()
+							.text_color(!info.reason || pull.state === "merged" ? t.done : t.dim)
+							.child(!info.reason || pull.state === "merged" ? "✓" : "○"),
+					)
+					.child(div().text_size(13).child(reason)),
+			);
+		for (const failure of [this.writeFailure, this.stateFailure])
+			if (failure) area.child(div().px(16).py(8).text_size(12).text_color(t.blocked).child(failure));
+		const actions = h_flex().px(16).py(16).gap(8).items_center().flex_wrap().border_t(1).border_color(t.border);
 		const act = (cx: Context, remove: boolean) => {
 			const ref = this.ref,
 				on = this.entry?.on;
 			if (!ref || on === undefined || this.writing) return;
 			this.writing = true;
+			this.writeFailure = "";
+			cx.notify();
 			cx.spawn(async (cx) => {
 				try {
 					if (remove) {
 						await deletePullBranch(ref.repo, ref.number, info, on);
 						info.deletable = false;
-					} else await mergePull(ref.repo, ref.number, this.method ?? info.methods[0], info.sha, on);
+					} else {
+						if (!method) return;
+						await mergePull(ref.repo, ref.number, method, info.sha, on);
+					}
 					if (this.ref === ref) {
-						this.confirming = false;
+						this.confirming = null;
 						this.writeFailure = "";
 						if (!remove) this.load(cx);
 					}
@@ -364,42 +434,80 @@ export class Pull {
 		};
 		if (this.writing) return area.child(quiet("Updating pull request…"));
 		if (info.deletable)
-			area.child(button("delete-branch", "Delete branch", "Delete remote branch", (_e, cx) => act(cx, true)));
+			return area.child(actions.child(actionButton("delete-branch", "Delete branch", (_e, cx) => act(cx, true))));
+		if (pull.state === "draft")
+			return area.child(
+				actions
+					.child(actionButton("pull-ready", "Ready for Review", (_e, cx) => this.changeState(cx, pull, true), true))
+					.child(quiet("Draft pull requests cannot be merged.")),
+			);
 		// Retained metadata can predate a state write until the refresh finishes.
-		if (!info.reason && pull.state === "open" && !this.entry?.loading) {
-			for (const method of info.methods)
-				area.child(
-					button(
-						`method-${method}`,
-						`${(this.method ?? info.methods[0]) === method ? "●" : "○"} ${method === "merge" ? "Create a merge commit" : method === "squash" ? "Squash and merge" : "Rebase and merge"}`,
-						"Merge method",
+		if (!info.reason && method && pull.state === "open" && !this.entry?.loading) {
+			const options = info.methods.map((value) => ({
+				value,
+				label: value === "merge" ? "Create Merge Commit" : value === "squash" ? "Squash and Merge" : "Rebase and Merge",
+			}));
+			const label = options.find((o) => o.value === method)!.label;
+			actions
+				.child(
+					actionButton(
+						"merge-confirm",
+						this.confirming === method ? `Confirm ${label}` : "Merge Pull Request",
 						(_e, cx) => {
-							this.method = method;
-							this.confirming = false;
-							cx.notify();
+							if (this.confirming === method) act(cx, false);
+							else {
+								this.confirming = method;
+								cx.notify();
+							}
 						},
+						true,
+					),
+				)
+				.child(div().text_size(13).text_color(t.dim).child(`using method ${label}`))
+				.when(options.length > 1, (el) =>
+					el.child(
+						button(
+							"merge-change-method",
+							this.methodOptions ? "Hide methods" : "Change method…",
+							"Change merge method",
+							(_e, cx) => {
+								this.methodOptions = !this.methodOptions;
+								cx.notify();
+							},
+						).text_color(t.accent),
 					),
 				);
-			area.child(
-				button(
-					"merge-confirm",
-					this.confirming ? "Confirm Merge" : "Merge Pull Request",
-					"Merge pull request",
-					(_e, cx) => {
-						if (this.confirming) act(cx, false);
-						else {
-							this.confirming = true;
-							cx.notify();
-						}
-					},
-				),
-			);
 			if (this.confirming)
-				area.child(
-					button("merge-cancel", "Cancel", "Cancel merge", (_e, cx) => {
-						this.confirming = false;
+				actions.child(
+					actionButton("merge-cancel", "Cancel", (_e, cx) => {
+						this.confirming = null;
 						cx.notify();
 					}),
+				);
+			area.child(actions);
+			if (this.methodOptions && options.length > 1)
+				area.child(
+					h_flex()
+						.px(16)
+						.pb(16)
+						.gap(8)
+						.flex_wrap()
+						.children(
+							options.map((option) =>
+								actionButton(
+									`merge-method-${option.value}`,
+									`${option.value === method ? "✓ " : ""}${option.label}`,
+									(_e, cx) => {
+										this.method = option.value;
+										this.confirming = null;
+										this.methodOptions = false;
+										cx.notify();
+									},
+								)
+									.border_color(option.value === method ? t.accent : t.input)
+									.text_color(option.value === method ? t.accent : t.foreground),
+							),
+						),
 				);
 		}
 		return area;

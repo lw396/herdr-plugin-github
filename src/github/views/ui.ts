@@ -1,4 +1,5 @@
 // Small UI helpers shared by the views.
+import { Button } from "gpui-base";
 import { type AsyncContext, type Color, type Context, div, type Element, svg } from "gpui-kit";
 import { theme } from "herdr";
 import type { PullState } from "../core/pulls.ts";
@@ -48,6 +49,38 @@ export const PULL_STATES: Record<
 };
 
 export const square = (el: Element): Element => el.size(36).flex_none().flex().items_center().justify_center();
+
+/** Full-sized description-page action, distinct from the compact toolbar controls. */
+export function actionButton(
+	id: string,
+	label: string,
+	act: (e: unknown, cx: Context) => void,
+	primary = false,
+	disabled = false,
+): Element {
+	const t = colors();
+	return Button.new(id)
+		.px(12)
+		.py(6)
+		.rounded(4)
+		.border_1()
+		.border_color(primary ? t.solid : t.input)
+		.bg(primary ? t.solid : t.raised)
+		.text_color(primary ? t.solid_foreground : t.foreground)
+		.text_size(13)
+		.font_medium()
+		.cursor_pointer()
+		.accessibility_label(label)
+		.disabled(disabled)
+		.opacity(disabled ? 0.5 : 1)
+		.hover((s) => s.bg(primary ? t.solid : t.hover))
+		.on_mouse_down("left", stop)
+		.on_click((e, cx) => {
+			cx.stop_propagation();
+			if (!disabled) act(e, cx);
+		})
+		.child(label);
+}
 
 /** A compact action. Neither its press nor its click activates a containing row/window. */
 export function button(

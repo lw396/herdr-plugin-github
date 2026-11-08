@@ -18,7 +18,7 @@ import {
 import { addPullComment, type PullCommentTarget, readPullThreads, resolvePullThread } from "../io/pulls.ts";
 import { type DetailHost, openLink, postCard } from "./detail.ts";
 import { diffSnippet } from "./diff-lines.ts";
-import { button, colors, link, stop } from "./ui.ts";
+import { actionButton, button, colors, link, stop } from "./ui.ts";
 
 /** An inline comment editor's height below its diff row. */
 const COMPOSER_HEIGHT = 220;
@@ -254,45 +254,54 @@ export class ReviewThreads {
 	}
 
 	/** The PR summary and inline drafts share one write lock and one GitHub pending review. */
-	summary(commit: string): Element {
+	summary(commit: string, stateAction: Element = div()): Element {
 		const box = this.summaryBox;
-		if (!box) return div().text_size(12).text_color(colors().dim).child("Loading review…");
+		if (!box)
+			return v_flex()
+				.gap(12)
+				.child(div().text_size(12).text_color(colors().dim).child("Loading review…"))
+				.child(stateAction);
 		const busy = this.writing.size > 0;
+		const options: { value: ReviewEvent; label: string }[] = [
+			{ value: "COMMENT", label: "Comment" },
+			{ value: "APPROVE", label: "Approve" },
+			{ value: "REQUEST_CHANGES", label: "Request Changes" },
+		];
 		return v_flex()
-			.gap(8)
-			.child(
-				div()
-					.font_semibold()
-					.child(this.pending ? "Pending review" : "Review"),
-			)
-			.child(commentEditor(box, 120))
-			.child(
-				div()
-					.text_size(12)
-					.text_color(colors().blocked)
-					.child(this.failures.get("summary") ?? ""),
+			.gap(12)
+			.pt(12)
+			.when(Boolean(this.pending), (el) => el.child(div().font_semibold().child("Pending review")))
+			.child(commentEditor(box, 128))
+			.when(this.failures.has("summary"), (el) =>
+				el.child(div().text_size(12).text_color(colors().blocked).child(this.failures.get("summary")!)),
 			)
 			.child(
 				h_flex()
 					.gap(8)
-					.children(
-						(
-							[
-								["COMMENT", "Comment"],
-								["APPROVE", "Approve"],
-								["REQUEST_CHANGES", "Request Changes"],
-							] as const
-						).map(([event, label]) =>
-							button(`submit-review-${event}`, busy ? "Saving…" : label, label, (_e, cx) => {
-								if (
-									busy ||
-									(event === "REQUEST_CHANGES" && !box.value().trim()) ||
-									(event === "COMMENT" && !this.pending && !box.value().trim())
-								)
-									return;
-								this.submit(cx, commit, event, box);
-							}).opacity(busy ? 0.5 : 1),
-						),
+					.items_center()
+					.flex_wrap()
+					.child(stateAction)
+					.child(div().flex_1())
+					.child(
+						h_flex()
+							.gap(8)
+							.items_center()
+							.flex_wrap()
+							.children(
+								options
+									.filter((o) => o.value === "COMMENT" || this.pending)
+									.map(({ value: event, label }) =>
+										actionButton(
+											`submit-review-${event}`,
+											busy ? "Saving…" : label,
+											(_e, cx) => this.submit(cx, commit, event, box),
+											event === "COMMENT",
+											busy ||
+												(!box.value().trim() &&
+													(event === "REQUEST_CHANGES" || (event === "COMMENT" && !this.pending))),
+										),
+									),
+							),
 					),
 			);
 	}
