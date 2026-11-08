@@ -1,4 +1,4 @@
-// Shared rendering for virtualized file diffs and in-place review snippets.
+// Shared rendering for viewport-windowed file diffs and in-place review snippets.
 import { h_flex, v_flex } from "gpui-base";
 import { div, type Element } from "gpui-kit";
 import { type DiffLine, parsePatch } from "../core/diff.ts";
@@ -6,7 +6,7 @@ import { colors } from "./ui.ts";
 
 export const ROW_HEIGHT = 22;
 
-/** A review's code context stays in its timeline discussion; the full file still uses the virtual list. */
+/** A review's code context stays in its timeline discussion; full files render only their visible rows. */
 export function diffSnippet(id: string, patch: string): Element {
 	return v_flex()
 		.id(id)
@@ -16,7 +16,7 @@ export function diffSnippet(id: string, patch: string): Element {
 		.children(parsePatch(patch).map((row) => diffRow(row)));
 }
 
-/** No event handlers here: deferred virtual-list renderers run during native layout. */
+/** Build in the ordinary render snapshot; optional gutter elements carry their own click handlers. */
 export function diffRow(row: DiffLine, gutters?: { left?: Element; right?: Element }): Element {
 	const t = colors();
 	const added = row.kind === "add",

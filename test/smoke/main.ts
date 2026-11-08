@@ -67,6 +67,9 @@ export default class Smoke extends View {
 			follow: () => {},
 			back: () => {},
 		});
+		// Exercise the native state lifecycle: create in init, then render the real summary below.
+		this.discussions.init();
+		this.discussions.init(); // Re-initializing must retain the same editor and its draft.
 		this.discussions.threads = parseThreads(
 			threadPages.data.repository.pullRequest.reviewThreads
 				.nodes as import("../../src/github/core/review-threads.ts").ThreadNode[],
@@ -202,6 +205,7 @@ export default class Smoke extends View {
 			.children(this.metadataSamples())
 			.child(this.files?.render(cx) ?? div())
 			.child(commentEditor(this.replyDraft!, 80))
+			.child(this.discussions!.summary("63f52f1dddd87eecbe02a9013523124921ee4345"))
 			.child(
 				this.threadDiff.render(
 					this.files!.files!.find((file) => file.path === "docs/pr-fixture.md")!,

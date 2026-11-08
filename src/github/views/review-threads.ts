@@ -20,7 +20,7 @@ import { type DetailHost, openLink, postCard } from "./detail.ts";
 import { diffSnippet } from "./diff-lines.ts";
 import { button, colors, link, stop } from "./ui.ts";
 
-export const THREAD_HEIGHT = 340;
+export const THREAD_ESTIMATE = 160;
 export const COMPOSER_HEIGHT = 220;
 
 /** A draft must look like an input, not another published comment. */
@@ -66,6 +66,18 @@ export class ReviewThreads {
 	private readonly on: string | null;
 	private readonly host: DetailHost;
 
+	/** Native input state must be created in init or an event/async callback, never during render. */
+	init(): void {
+		if (this.summaryBox) return;
+		const box = TextareaState.new({ placeholder: "Leave a comment" });
+		box.set_value(this.pending?.body ?? "");
+		box.on("change", (_e, cx) => {
+			this.summaryTouched = true;
+			cx.notify();
+		});
+		this.summaryBox = box;
+	}
+
 	load(cx: Context): void {
 		if (this.writing.size) {
 			this.dirty = true;
@@ -76,6 +88,8 @@ export class ReviewThreads {
 		this.failure = null;
 		cx.spawn(async (cx) => {
 			try {
+				// load() can be requested by render-time notices; spawn runs outside that render.
+				this.init();
 				const state = await readPullReview(this.ref.repo, this.ref.number, this.on);
 				const threads = await readPullThreads(
 					this.ref.repo,
@@ -122,7 +136,17 @@ export class ReviewThreads {
 			.child(this.failure ?? (this.loading ? "Loading discussions…" : ""));
 	}
 
-	/** Register gutter handlers and editors before native deferred row rendering. */
+	/** Count drafts without creating native elements; the viewport measures before describing visible rows. */
+	inlineDraftCount(path: string, row: DiffLine): number {
+		let count = 0;
+		for (const side of ["LEFT", "RIGHT"] as const) {
+			const anchor = commentTarget(row, side);
+			if (anchor && this.drafts.has(JSON.stringify([path, side, anchor.line]))) count++;
+		}
+		return count;
+	}
+
+	/** Called only for visible rows, in the ordinary render snapshot (not a native list callback). */
 	inlineComposer(
 		path: string,
 		commit: string,
@@ -233,15 +257,8 @@ export class ReviewThreads {
 
 	/** The PR summary and inline drafts share one write lock and one GitHub pending review. */
 	summary(commit: string): Element {
-		if (!this.summaryBox) {
-			this.summaryBox = TextareaState.new({ placeholder: "Leave a comment" });
-			this.summaryBox.set_value(this.pending?.body ?? "");
-			this.summaryBox.on("change", (_e, cx) => {
-				this.summaryTouched = true;
-				cx.notify();
-			});
-		}
 		const box = this.summaryBox;
+		if (!box) return div().text_size(12).text_color(colors().dim).child("Loading review…");
 		const busy = this.writing.size > 0;
 		return v_flex()
 			.gap(8)
@@ -296,9 +313,17 @@ export class ReviewThreads {
 		});
 	}
 
-	/** Built during render, NOT in the virtual list's deferred row callback. */
-	card(thread: ReviewThread, unavailable: boolean, width: number): Element {
-		return this.conversation(thread, unavailable, true).w(width);
+	/** Natural height is measured after layout, so short discussions do not reserve a large empty card. */
+	card(
+		thread: ReviewThread,
+		unavailable: boolean,
+		width: number,
+		onHeight?: (height: number, cx: Context) => void,
+	): Element {
+		return this.conversation(thread, unavailable, true)
+			.id(`diff-thread-${thread.id}`)
+			.w(width)
+			.when(Boolean(onHeight), (el) => el.on_size_change((size, cx) => onHeight?.(size.height, cx)));
 	}
 
 	/** Code and its conversation stay together in the review, without navigating away. */
@@ -356,7 +381,7 @@ export class ReviewThreads {
 		const busy = this.writing.size > 0;
 		const url = `https://github.com/${this.ref.repo}/pull/${this.ref.number}#discussion_r${thread.root}`;
 		return v_flex()
-			.when(virtual, (el) => el.h(THREAD_HEIGHT))
+			.flex_none()
 			.min_w(0)
 			.p(12)
 			.gap(8)
@@ -396,7 +421,7 @@ export class ReviewThreads {
 			.child(
 				v_flex()
 					.id(`${scope}-thread-comments-${thread.id}`)
-					.when(virtual, (el) => el.flex_1().min_h(0).overflow_y_scrollbar())
+					.when(virtual, (el) => el.flex_none().max_h(240).overflow_y_scrollbar())
 					.children(
 						thread.comments.map((c, index) =>
 							postCard(
@@ -456,6 +481,16 @@ export class ReviewThreads {
 									if (box.value() === body) box.set_value("");
 								});
 							},
+						),
+					)
+					.when(Boolean(box), (el) =>
+						el.child(
+							button(`${scope}-cancel-reply-${thread.id}`, "Cancel", "Cancel reply", (_e, cx) => {
+								if (this.writing.size) return;
+								this.boxes.delete(thread.id);
+								this.failures.delete(thread.id);
+								cx.notify();
+							}).opacity(busy ? 0.5 : 1),
 						),
 					)
 					.when(thread.resolved ? thread.canUnresolve : thread.canResolve, (el) =>

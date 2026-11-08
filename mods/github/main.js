@@ -12113,7 +12113,7 @@ import { h_flex as h_flex12, v_flex as v_flex11 } from "gpui-base";
 import { div as div15 } from "gpui-kit";
 
 // src/github/views/diff.ts
-import { h_flex as h_flex10, Scrollbar, VirtualListScrollHandle, v_flex as v_flex9, v_virtual_list } from "gpui-base";
+import { h_flex as h_flex10, v_flex as v_flex9 } from "gpui-base";
 import { div as div13 } from "gpui-kit";
 
 // src/github/core/diff.ts
@@ -12170,6 +12170,19 @@ function parsePatch(patch) {
     }
   }
   return rows;
+}
+
+// src/github/core/viewport.ts
+function itemWindow(sizes, requested, height) {
+  const total = sizes.reduce((sum, size) => sum + size, 0);
+  const offset = Math.max(0, Math.min(requested, Math.max(0, total - height)));
+  const from = Math.max(0, offset - 44);
+  const to = offset + height + 44;
+  let start = 0, top = 0;
+  while (start < sizes.length && top + sizes[start] <= from) top += sizes[start++];
+  let end = start, bottom = top;
+  while (end < sizes.length && bottom < to) bottom += sizes[end++];
+  return { start, end, top, offset, total };
 }
 
 // src/github/views/diff-lines.ts
@@ -12448,7 +12461,7 @@ async function startPullReview(repo, number, commit, on) {
 }
 
 // src/github/views/review-threads.ts
-var THREAD_HEIGHT = 340;
+var THREAD_ESTIMATE = 160;
 var COMPOSER_HEIGHT = 220;
 function commentEditor(state, height) {
   const t = colors();
@@ -12480,6 +12493,17 @@ var ReviewThreads = class {
   ref;
   on;
   host;
+  /** Native input state must be created in init or an event/async callback, never during render. */
+  init() {
+    if (this.summaryBox) return;
+    const box = TextareaState2.new({ placeholder: "Leave a comment" });
+    box.set_value(this.pending?.body ?? "");
+    box.on("change", (_e, cx) => {
+      this.summaryTouched = true;
+      cx.notify();
+    });
+    this.summaryBox = box;
+  }
   load(cx) {
     if (this.writing.size) {
       this.dirty = true;
@@ -12490,6 +12514,7 @@ var ReviewThreads = class {
     this.failure = null;
     cx.spawn(async (cx2) => {
       try {
+        this.init();
         const state = await readPullReview(this.ref.repo, this.ref.number, this.on);
         const threads = await readPullThreads(
           this.ref.repo,
@@ -12526,7 +12551,16 @@ var ReviewThreads = class {
   status() {
     return div12().text_size(12).text_color(this.failure ? colors().blocked : colors().dim).child(this.failure ?? (this.loading ? "Loading discussions\u2026" : ""));
   }
-  /** Register gutter handlers and editors before native deferred row rendering. */
+  /** Count drafts without creating native elements; the viewport measures before describing visible rows. */
+  inlineDraftCount(path, row) {
+    let count = 0;
+    for (const side of ["LEFT", "RIGHT"]) {
+      const anchor = commentTarget(row, side);
+      if (anchor && this.drafts.has(JSON.stringify([path, side, anchor.line]))) count++;
+    }
+    return count;
+  }
+  /** Called only for visible rows, in the ordinary render snapshot (not a native list callback). */
   inlineComposer(path, commit, row, width) {
     const gutters = {};
     const editors = [];
@@ -12610,15 +12644,8 @@ var ReviewThreads = class {
   }
   /** The PR summary and inline drafts share one write lock and one GitHub pending review. */
   summary(commit) {
-    if (!this.summaryBox) {
-      this.summaryBox = TextareaState2.new({ placeholder: "Leave a comment" });
-      this.summaryBox.set_value(this.pending?.body ?? "");
-      this.summaryBox.on("change", (_e, cx) => {
-        this.summaryTouched = true;
-        cx.notify();
-      });
-    }
     const box = this.summaryBox;
+    if (!box) return div12().text_size(12).text_color(colors().dim).child("Loading review\u2026");
     const busy = this.writing.size > 0;
     return v_flex8().gap(8).child(
       div12().font_semibold().child(this.pending ? "Pending review" : "Review")
@@ -12653,9 +12680,9 @@ var ReviewThreads = class {
       }
     });
   }
-  /** Built during render, NOT in the virtual list's deferred row callback. */
-  card(thread, unavailable, width) {
-    return this.conversation(thread, unavailable, true).w(width);
+  /** Natural height is measured after layout, so short discussions do not reserve a large empty card. */
+  card(thread, unavailable, width, onHeight) {
+    return this.conversation(thread, unavailable, true).id(`diff-thread-${thread.id}`).w(width).when(Boolean(onHeight), (el) => el.on_size_change((size, cx) => onHeight?.(size.height, cx)));
   }
   /** Code and its conversation stay together in the review, without navigating away. */
   timeline(thread, snippet, open) {
@@ -12689,7 +12716,7 @@ var ReviewThreads = class {
     const box = this.boxes.get(thread.id);
     const busy = this.writing.size > 0;
     const url = `https://github.com/${this.ref.repo}/pull/${this.ref.number}#discussion_r${thread.root}`;
-    return v_flex8().when(virtual, (el) => el.h(THREAD_HEIGHT)).min_w(0).p(12).gap(8).when(virtual, (el) => el.border_1().border_color(t.border).bg(t.surface)).when(
+    return v_flex8().flex_none().min_w(0).p(12).gap(8).when(virtual, (el) => el.border_1().border_color(t.border).bg(t.surface)).when(
       virtual,
       (el) => el.child(
         h_flex9().gap(10).items_center().child(
@@ -12706,7 +12733,7 @@ var ReviewThreads = class {
         )
       )
     ).child(
-      v_flex8().id(`${scope}-thread-comments-${thread.id}`).when(virtual, (el) => el.flex_1().min_h(0).overflow_y_scrollbar()).children(
+      v_flex8().id(`${scope}-thread-comments-${thread.id}`).when(virtual, (el) => el.flex_none().max_h(240).overflow_y_scrollbar()).children(
         thread.comments.map(
           (c, index2) => postCard(
             `${scope}-comment-${c.id}`,
@@ -12760,6 +12787,16 @@ var ReviewThreads = class {
           }
         )
       ).when(
+        Boolean(box),
+        (el) => el.child(
+          button(`${scope}-cancel-reply-${thread.id}`, "Cancel", "Cancel reply", (_e, cx) => {
+            if (this.writing.size) return;
+            this.boxes.delete(thread.id);
+            this.failures.delete(thread.id);
+            cx.notify();
+          }).opacity(busy ? 0.5 : 1)
+        )
+      ).when(
         thread.resolved ? thread.canUnresolve : thread.canResolve,
         (el) => el.child(
           button(
@@ -12811,15 +12848,25 @@ var FileDiff = class {
   file = null;
   rows = [];
   width = 0;
-  scroll = null;
+  offset = 0;
   target = null;
   viewportWidth = 320;
+  viewportHeight = 400;
+  totalHeight = 0;
+  threadHeights = /* @__PURE__ */ new Map();
+  drag = null;
   init() {
-    this.scroll = VirtualListScrollHandle.new();
+    this.offset = 0;
   }
   jump(comment) {
     this.target = comment;
-    this.scroll?.scroll_to_item(0);
+    this.offset = 0;
+  }
+  scrollTo(next, cx) {
+    const offset = Math.max(0, Math.min(next, this.totalHeight - this.viewportHeight));
+    if (offset === this.offset) return;
+    this.offset = offset;
+    cx.notify();
   }
   render(file, discussions, commit) {
     const t = colors();
@@ -12829,6 +12876,7 @@ var FileDiff = class {
       this.width = this.rows.reduce((width, row) => Math.max(width, row.text.length * 16 + 152), 240);
     }
     const rows = this.rows;
+    const cardWidth = Math.max(240, this.viewportWidth - 12);
     const items = [];
     const threads = (discussions?.threads ?? []).filter((thread) => thread.path === file.path);
     const anchors = /* @__PURE__ */ new Map();
@@ -12842,33 +12890,50 @@ var FileDiff = class {
       for (const thread of anchors.get(row) ?? []) {
         items.push({
           key: thread.id,
-          height: THREAD_HEIGHT,
-          element: discussions.card(thread, row === null, this.viewportWidth),
+          height: this.threadHeights.get(thread.id) ?? THREAD_ESTIMATE,
+          render: () => discussions.card(thread, row === null, cardWidth, (height, cx) => {
+            const measured = Math.ceil(height);
+            if (measured <= 0 || this.threadHeights.get(thread.id) === measured) return;
+            this.threadHeights.set(thread.id, measured);
+            cx.notify();
+          }),
           commentIds: thread.comments.map((c) => c.id)
         });
       }
     };
     rows.forEach((row, index2) => {
-      const comment = commit ? discussions?.inlineComposer(file.path, commit, row, this.viewportWidth) : void 0;
-      items.push({ key: `line-${index2}`, height: ROW_HEIGHT, line: row, gutters: comment?.gutters });
-      for (const [side, editor] of (comment?.editors ?? []).entries())
-        items.push({ key: `editor-${index2}-${side}`, height: COMPOSER_HEIGHT, element: editor });
+      const count = commit ? discussions?.inlineDraftCount(file.path, row) ?? 0 : 0;
+      const height = ROW_HEIGHT + count * COMPOSER_HEIGHT;
+      items.push({
+        key: `line-${index2}`,
+        height,
+        render: () => {
+          const comment = commit ? discussions?.inlineComposer(file.path, commit, row, cardWidth) : void 0;
+          return v_flex9().h(height).flex_none().child(diffRow(row, comment?.gutters)).children(comment?.editors ?? []);
+        }
+      });
       appendThreads(index2);
     });
-    if (!rows.length && threads.length)
-      items.push({
-        key: "discussions",
-        height: ROW_HEIGHT,
-        line: { kind: "notice", text: "Discussions", oldLine: null, newLine: null, comment: null }
-      });
     appendThreads(null);
+    const sizes = items.map((item) => item.height);
     if (this.target !== null) {
       const index2 = items.findIndex((item) => item.commentIds?.includes(this.target));
       if (index2 >= 0) {
-        this.scroll?.scroll_to_item(index2, "center");
+        const top = sizes.slice(0, index2).reduce((sum, height) => sum + height, 0);
+        this.offset = top - Math.max(0, (this.viewportHeight - sizes[index2]) / 2);
         this.target = null;
       }
     }
+    const visible = itemWindow(sizes, this.offset, this.viewportHeight);
+    this.offset = visible.offset;
+    this.totalHeight = visible.total;
+    const maxOffset = Math.max(0, visible.total - this.viewportHeight);
+    const thumbHeight = Math.min(
+      this.viewportHeight,
+      Math.max(28, this.viewportHeight ** 2 / Math.max(1, visible.total))
+    );
+    const travel = this.viewportHeight - thumbHeight;
+    const thumbTop = maxOffset > 0 ? this.offset / maxOffset * travel : 0;
     const id = `pull-diff-${file.path}`;
     const header = v_flex9().flex_none().px(16).py(8).gap(6).border_b(1).border_color(t.border).child(
       h_flex10().gap(10).items_center().flex_wrap().child(div13().min_w(0).font_medium().child(file.path)).child(div13().text_color(t.done).child(`+${file.additions}`)).child(div13().text_color(t.blocked).child(`\u2212${file.deletions}`)).child(link(`${id}-browser`, file.url, "Open File on GitHub").text_size(12).text_color(t.accent))
@@ -12876,25 +12941,55 @@ var FileDiff = class {
       file.previousPath !== null,
       (el) => el.child(div13().text_size(12).text_color(t.dim).child(`Renamed from ${file.previousPath}`))
     );
-    const body = items.length > 0 ? div13().flex_1().min_h(0).min_w(0).relative().child(
-      div13().id(`${id}-horizontal`).size_full().overflow_x_scrollbar().child(
-        v_virtual_list(
-          id,
-          items.length,
-          items.map((item) => item.height),
-          (index2) => items[index2].key,
-          (range) => items.slice(range.start, range.end).map((item) => item.element ?? diffRow(item.line, item.gutters))
-        ).with_item_to_measure_index(0).when(this.scroll !== null, (el) => el.track_scroll(this.scroll)).h_full().w_full().min_w(this.width)
-      )
-    ).child(Scrollbar.vertical(id).absolute().inset_0()) : div13().p(20).text_color(t.dim).child(
-      file.additions === 0 && file.deletions === 0 ? "No textual changes in this file. Open it on GitHub to view the full file." : "GitHub did not provide a patch for this file (it may be binary or too large). Open it on GitHub to view the changes."
-    );
-    return v_flex9().id(`${id}-viewport`).flex_1().min_h(0).min_w(0).overflow_hidden().on_size_change((size, cx) => {
-      if (size.width > 0 && size.width !== this.viewportWidth) {
+    const body = items.length > 0 ? div13().id(`${id}-body`).flex_1().min_h(0).min_w(0).relative().overflow_hidden().on_size_change((size, cx) => {
+      if (size.width > 0 && size.height > 0 && (size.width !== this.viewportWidth || size.height !== this.viewportHeight)) {
         this.viewportWidth = size.width;
+        this.viewportHeight = size.height;
         cx.notify();
       }
-    }).child(header).when(Boolean(discussions), (el) => el.child(discussions.status())).when(
+    }).on_scroll_wheel((event, cx) => {
+      if (event.delta.y && Math.abs(event.delta.y) >= Math.abs(event.delta.x)) {
+        this.scrollTo(this.offset - event.delta.y, cx);
+        cx.stop_propagation();
+      }
+    }).on_mouse_move((event, cx) => {
+      if (this.drag && travel > 0)
+        this.scrollTo(this.drag.offset + (event.position.y - this.drag.y) * maxOffset / travel, cx);
+    }).on_mouse_up("left", () => {
+      this.drag = null;
+    }).on_hover((hovered) => {
+      if (!hovered) this.drag = null;
+    }).child(
+      div13().id(`${id}-horizontal`).absolute().top_0().bottom_0().left_0().right(12).overflow_x_scrollbar().child(
+        div13().relative().h_full().w(Math.max(this.width, cardWidth)).overflow_hidden().child(
+          v_flex9().absolute().top(visible.top - visible.offset).left_0().w_full().children(
+            items.slice(visible.start, visible.end).map(
+              (item) => div13().id(`${id}-${item.key}`).h(item.height).flex_none().child(item.render())
+            )
+          )
+        )
+      )
+    ).when(
+      maxOffset > 0,
+      (el) => el.child(
+        div13().id(`${id}-scrollbar`).absolute().top_0().bottom_0().right_0().w(12).cursor_pointer().accessibility_label("Diff vertical scrollbar").on_mouse_down("left", (event, cx) => {
+          cx.stop_propagation();
+          const y = event.local_position?.y;
+          if (y === void 0 || travel <= 0) return;
+          if (y < thumbTop || y > thumbTop + thumbHeight)
+            this.scrollTo((y - thumbHeight / 2) / travel * maxOffset, cx);
+          this.drag = { y: event.position.y, offset: this.offset };
+        }).child(div13().absolute().top(thumbTop).right(2).w(8).h(thumbHeight).rounded(4).bg(t.dim))
+      )
+    ) : div13().p(20).text_color(t.dim).child(
+      file.additions === 0 && file.deletions === 0 ? "No textual changes in this file. Open it on GitHub to view the full file." : "GitHub did not provide a patch for this file (it may be binary or too large). Open it on GitHub to view the changes."
+    );
+    return v_flex9().id(`${id}-viewport`).flex_1().min_h(0).min_w(0).overflow_hidden().child(header).when(Boolean(discussions), (el) => el.child(discussions.status())).when(
+      Boolean(discussions) && !commit,
+      (el) => el.child(
+        div13().px(16).text_size(12).text_color(t.dim).child("Inline comments are unavailable until pull request details finish loading.")
+      )
+    ).when(
       !file.patch && file.status !== "unchanged" && items.length > 0,
       (el) => el.child(
         div13().p(12).text_color(t.dim).child("GitHub did not provide a patch for this file. Discussions are shown below.")
