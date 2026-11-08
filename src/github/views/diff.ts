@@ -60,7 +60,7 @@ export class FileDiff {
 		}
 		const rows = this.rows;
 		const cardWidth = Math.max(240, this.viewportWidth - 12);
-		// Keep only data and factories here. Native elements must never cross a deferred list's arena.
+		// Heights for every item, but native elements only for the visible ones, built in this render.
 		const items: DiffItem[] = [];
 		const threads = (discussions?.threads ?? []).filter((thread) => thread.path === file.path);
 		const anchors = new Map<number | null, ReviewThread[]>();

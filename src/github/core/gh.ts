@@ -12,7 +12,6 @@ export interface ApiOptions {
 
 export type GraphqlVariables = Record<string, string | number | boolean | null>;
 
-/** A GraphQL request. */
 export interface Query {
 	query: string;
 	variables: GraphqlVariables;
@@ -64,7 +63,6 @@ export function responseHeaders(stdout: string): { status: number; etag: string 
 	};
 }
 
-/** The last non-empty line of gh's stderr. */
 export function errorMessage(stderr: string): string {
 	const lines = stderr
 		.split("\n")

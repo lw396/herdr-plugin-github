@@ -1,6 +1,5 @@
 // Pixel windowing for rows that must register interactive handlers in the ordinary render snapshot.
 
-/** A vertical offset that keeps the viewport inside the content. */
 export const clampOffset = (offset: number, total: number, height: number): number =>
 	Math.max(0, Math.min(offset, Math.max(0, total - height)));
 

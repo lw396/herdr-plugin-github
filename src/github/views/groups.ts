@@ -27,7 +27,6 @@ export interface ListHost {
 export interface GroupSpec<K extends string> {
 	kind: K;
 	title: string;
-	/** What the group says with no rows. */
 	empty: string;
 }
 

@@ -5,7 +5,7 @@ import type { Comment } from "../core/discussion.ts";
 import type { IssueChange } from "../core/issues.ts";
 import { GhError } from "./gh.ts";
 
-/** One write to an issue: a new comment, or its new state. */
+/** One write to an issue or PR, and what other views should show or read again because of it. */
 export interface Notice {
 	pull?: boolean;
 	repo: string;

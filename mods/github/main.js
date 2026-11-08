@@ -402,7 +402,8 @@ function location() {
   previous = focusedFolder({ spaces: spaces(), panes: panes2(), focused: focused() }, previous);
   return previous;
 }
-var sidebarVisible = () => layoutShows(layout(), "github");
+var SIDEBAR_SLOT = "github";
+var sidebarVisible = () => layoutShows(layout(), SIDEBAR_SLOT);
 
 // src/github/io/detail-tabs.ts
 import { exec as exec2, focused as focused2, panes as panes3, run as run3, setShared as setShared2, shared as shared2, spaces as spaces2 } from "herdr";
@@ -10265,7 +10266,6 @@ var Cache = class {
   keys() {
     return [...this.entries.keys()];
   }
-  /** The value, fresh or not; marks it recently used. */
   get(key) {
     const entry = this.entries.get(key);
     if (!entry) return void 0;
@@ -10273,7 +10273,6 @@ var Cache = class {
     this.entries.set(key, entry);
     return entry.value;
   }
-  /** Whether it was set less than `maxAge` ms before `now`. */
   fresh(key, maxAge, now) {
     const entry = this.entries.get(key);
     return entry !== void 0 && now - entry.at < maxAge;
@@ -11821,7 +11820,6 @@ var Panel = class {
     this.issues.show();
     this.issues.load(cx);
   }
-  /** A click on a row opens (or selects) its reader tab. */
   open(cx, ref, file) {
     this.openFailure = null;
     cx.spawn(async (cx2) => {
@@ -12985,7 +12983,6 @@ var ReviewThreads = class {
   card(thread, unavailable, width, onHeight) {
     return this.conversation(thread, unavailable, true).id(`diff-thread-${thread.id}`).w(width).when(Boolean(onHeight), (el) => el.on_size_change((size, cx) => onHeight?.(size.height, cx)));
   }
-  /** Code and its conversation stay together in the review, without navigating away. */
   timeline(thread, snippet, open) {
     const hidden = this.hiddenSnippets.has(thread.id);
     const t = colors();

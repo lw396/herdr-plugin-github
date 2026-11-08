@@ -29,7 +29,6 @@ interface RestIssueRow {
 	html_url: string;
 }
 
-/** The REST reply to closing or reopening an issue. */
 export function parseIssueChange(data: unknown, repo: string): IssueChange {
 	const i = data as RestIssueRow;
 	return {
@@ -88,7 +87,6 @@ interface IssuesData {
 	};
 }
 
-/** The reply to issueGroupQuery. */
 export function parseIssueGroup(data: unknown): IssueGroup {
 	const { hasIssuesEnabled, issues } = (data as IssuesData).repository;
 	return {

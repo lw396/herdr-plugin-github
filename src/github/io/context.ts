@@ -12,5 +12,7 @@ export function location(): Location {
 	return previous;
 }
 
-/** The included layout and tab bar name the GitHub sidebar slot `github`. */
-export const sidebarVisible = (): boolean => layoutShows(layout(), "github");
+/** The layout block holding the sidebar (layouts/github.json; the tab bar selects it by this id). */
+export const SIDEBAR_SLOT = "github";
+
+export const sidebarVisible = (): boolean => layoutShows(layout(), SIDEBAR_SLOT);

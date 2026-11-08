@@ -1,4 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
+import { Notices } from "../../src/github/io/changes.ts";
 import { deletePullBranch, mergePull } from "../../src/github/io/pulls.ts";
 import { execCalls, machine, reset } from "../fake-herdr.ts";
 
@@ -9,7 +10,17 @@ test("merge pins the reviewed SHA and method on the reader machine", async () =>
 			stdout: '{"merged":true,"message":"Pull Request successfully merged"}',
 		},
 	});
+	const notices = new Notices();
 	await mergePull("a/b", 1, "squash", "abc", "remote");
+	expect(notices.take()).toEqual([{ repo: "a/b", number: 1, pull: true }]);
+});
+test("a merge GitHub answers without merging is a failure with its message", async () => {
+	machine("remote", {
+		"~$ gh api repos/a/b/pulls/1/merge -X PUT -f merge_method=merge -f sha=abc": {
+			stdout: '{"merged":false,"message":"Head branch was modified. Review and try the merge again."}',
+		},
+	});
+	await expect(mergePull("a/b", 1, "merge", "abc", "remote")).rejects.toThrow("Head branch was modified");
 });
 test("merge rejection preserves gh error and never retries writes", async () => {
 	machine("remote", {
@@ -29,4 +40,11 @@ test("delete targets the fork's remote ref, never a local branch", async () => {
 		{ methods: [], reason: null, sha: "abc", headRepo: "fork/b", headRef: "feature/topic", deletable: true },
 		"remote",
 	);
+	expect(execCalls()).toHaveLength(1);
+});
+test("a branch GitHub says cannot be deleted is never asked about", async () => {
+	machine("remote", {});
+	const info = { methods: [], reason: null, sha: "abc", headRepo: "fork/b", headRef: "main", deletable: false };
+	await expect(deletePullBranch("a/b", 1, info, "remote")).rejects.toThrow("cannot be deleted");
+	expect(execCalls()).toHaveLength(0);
 });

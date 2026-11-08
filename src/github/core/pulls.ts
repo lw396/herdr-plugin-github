@@ -115,7 +115,6 @@ function pullRow(n: PullNode): Pull {
 	};
 }
 
-/** The reply to pullGroupQuery: All Open's or a search's. */
 export function parsePullGroup(data: unknown): PullGroup {
 	const d = data as
 		| { repository: { pullRequests: Connection & { totalCount: number } } }
@@ -149,7 +148,6 @@ export function parseLocalPulls(data: unknown, head: RemoteRepo): Pull[] {
 	return [...rows.values()].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)).map(pullRow);
 }
 
-/** Load more over rows matched in one batch: the first `count` of them. */
 export function localPage(all: Pull[], count: number): PullGroup {
 	const more = count < all.length;
 	return { total: all.length, more, cursor: more ? String(count) : null, rows: all.slice(0, count) };

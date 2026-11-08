@@ -17,7 +17,6 @@ import { Previews } from "../io/preview.ts";
 import { labels } from "./detail.ts";
 import { colors, PULL_STATES, spinner, stop } from "./ui.ts";
 
-/** Repository, creation date, state/title, a short plain-text description and colored labels. */
 export function previewCard(ref: DetailRef, preview: Preview | undefined, failure?: string): Element {
 	const t = colors();
 	const state = preview ? PULL_STATES[preview.state] : null;

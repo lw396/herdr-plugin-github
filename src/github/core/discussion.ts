@@ -40,7 +40,6 @@ const EMOJI: [string, string][] = [
 
 export const login = (user: { login: string } | null | undefined): string => user?.login ?? "deleted user";
 
-/** Non-zero REST reaction counts. */
 export function parseReactions(reactions: Record<string, number | string> = {}): Reaction[] {
 	return EMOJI.flatMap(([key, emoji]) => {
 		const count = reactions[key];
@@ -61,7 +60,6 @@ export function parseComment(comment: unknown, url: string): Comment {
 	};
 }
 
-/** Comments in creation order. */
 export function parseComments(comments: unknown[], url: string): Comment[] {
 	return comments
 		.map((c) => parseComment(c, url))

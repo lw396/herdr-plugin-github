@@ -7,7 +7,7 @@ import * as known from "../io/known.ts";
 import { GroupList, type ListHost } from "./groups.ts";
 import { colors } from "./ui.ts";
 
-/** A row: number and title, then assignees and age. `failed`: a group's ask failed. */
+/** `failed`: a group's ask failed. */
 export function issueList(host: ListHost, failed: () => void): GroupList<GroupKind, Issue, IssueGroup> {
 	return new GroupList<GroupKind, Issue, IssueGroup>(host, {
 		kind: "issue",

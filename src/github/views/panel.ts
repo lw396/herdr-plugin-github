@@ -190,7 +190,6 @@ export class Panel implements Role {
 		this.issues.load(cx);
 	}
 
-	/** A click on a row opens (or selects) its reader tab. */
 	private open(cx: Context, ref: DetailRef, file?: string): void {
 		this.openFailure = null;
 		cx.spawn(async (cx) => {

@@ -11,9 +11,9 @@ function imports(folder: string): { file: string; from: string }[] {
 		.flatMap((f) =>
 			[
 				...readFileSync(join(SRC, folder, f), "utf8").matchAll(
-					/(?:^|\n)\s*(?:import|export)\b[^"']*?from\s*["']([^"']+)["']/g,
+					/(?:^|\n)\s*(?:import|export)\b[^"']*?from\s*["']([^"']+)["']|\bimport\(\s*["']([^"']+)["']/g,
 				),
-			].map((m) => ({ file: `${folder}/${f}`, from: m[1]! })),
+			].map((m) => ({ file: `${folder}/${f}`, from: (m[1] ?? m[2])! })),
 		);
 }
 

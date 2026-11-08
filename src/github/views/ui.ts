@@ -32,7 +32,6 @@ export function link(id: string, url: string, label: string): Element {
 		.child(label);
 }
 
-/** A rounded tag: a label, a reaction count. */
 export function chip(label: string, border: Color, background: Color): Element {
 	return div().px(8).py(3).rounded(12).border_1().border_color(border).bg(background).text_size(12).child(label);
 }
@@ -48,7 +47,6 @@ export const PULL_STATES: Record<
 	closed: { icon: "mods/github/assets/git-pull-request-closed.svg", color: (t) => t.blocked, label: "Closed" },
 };
 
-/** A 36 px square in a heading, centring a large control or its spinner. */
 export const square = (el: Element): Element => el.size(36).flex_none().flex().items_center().justify_center();
 
 /** A compact action. Neither its press nor its click activates a containing row/window. */

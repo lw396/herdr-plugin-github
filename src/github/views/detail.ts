@@ -14,9 +14,7 @@ import { button, chip, colors, link, spinner, square } from "./ui.ts";
 
 /** What a page asks of the reader tab that hosts it. */
 export interface DetailHost {
-	/** The reader tab's id in shared metadata. */
 	readonly reader: string;
-	/** Whether this kind of page is the one shown. */
 	active(kind: DetailKind): boolean;
 	previous(): DetailRef | null;
 	follow(cx: Context, ref: DetailRef): void;
@@ -63,7 +61,6 @@ export function loadProjects(
 /** Leave the reader blank during its handshake; readers without an item close automatically. */
 export const detailEmpty = (): Element => div().flex_1();
 
-/** Back, the title with its number (opens the browser) and copy, and refresh. */
 export function detailHeader(
 	host: DetailHost,
 	ref: DetailRef,
@@ -226,7 +223,6 @@ export class DetailMetadata {
 	}
 }
 
-/** The state badge and the line beside it, then the timeline beside (wide) or below (narrow) the metadata. */
 export function detailDocument(
 	layout: DetailLayout,
 	heading: Element[],

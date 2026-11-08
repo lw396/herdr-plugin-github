@@ -13,7 +13,6 @@ export class Cache<T> {
 		return [...this.entries.keys()];
 	}
 
-	/** The value, fresh or not; marks it recently used. */
 	get(key: string): T | undefined {
 		const entry = this.entries.get(key);
 		if (!entry) return undefined;
@@ -22,7 +21,6 @@ export class Cache<T> {
 		return entry.value;
 	}
 
-	/** Whether it was set less than `maxAge` ms before `now`. */
 	fresh(key: string, maxAge: number, now: number): boolean {
 		const entry = this.entries.get(key);
 		return entry !== undefined && now - entry.at < maxAge;

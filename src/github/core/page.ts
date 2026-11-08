@@ -4,11 +4,8 @@
 export const PAGE = 30;
 
 export interface Page<R> {
-	/** How many rows there are in all. */
 	total: number;
-	/** Another page follows (Load more). */
 	more: boolean;
-	/** Where the next page starts. */
 	cursor: string | null;
 	rows: R[];
 }

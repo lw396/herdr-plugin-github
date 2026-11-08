@@ -21,6 +21,11 @@ beforeEach(() => {
 	spyOn(Date, "now").mockReturnValue(1700000000000);
 });
 const reader = "detail-1700000000000-i";
+/** The last app command as the github mod receives it: Herdr routes `github.<command>` to it without the prefix. */
+const received = () =>
+	commands()
+		.at(-1)!
+		.name.replace(/^github\./, "");
 const source = { pane: "center/p1", tab: "center/tb1", terminal: "center/t19" };
 const detail = { pane: "center/p2", tab: "center/tb2", terminal: null, mod: "github" };
 const space = { id: "center/s1", machine: "center", tabs: [{ id: source.tab }, { id: detail.tab }] };
@@ -101,7 +106,7 @@ test("open a native Herdr tab, then select that tab on a repeated click without 
 	expect(commands().filter((c) => c.name.startsWith("github.detail:"))).toEqual([]);
 	readyDetail(reader);
 	tabs.deliver();
-	expect(detailCommand(commands().at(-1)!.name.slice(7), reader)).toEqual({
+	expect(detailCommand(received(), reader)).toEqual({
 		kind: "issue",
 		repo: "cli/cli",
 		number: 9789,
@@ -256,7 +261,7 @@ test("a PR opens its own native tab in the PR role, and a repeated click selects
 	atDetail();
 	readyDetail(reader);
 	tabs.deliver();
-	expect(detailCommand(commands().at(-1)!.name.slice(7), reader)).toEqual({ kind: "pr", repo: "cli/cli", number: 42 });
+	expect(detailCommand(received(), reader)).toEqual({ kind: "pr", repo: "cli/cli", number: 42 });
 
 	machine(null, {});
 	atSource(true);
@@ -275,17 +280,17 @@ test("files and Description select the same PR tab, with only the last queued fi
 	atDetail();
 	readyDetail(reader);
 	tabs.deliver();
-	expect(detailCommand(commands().at(-1)!.name.slice(7), reader)).toEqual({ ...ref, file: "src/a.ts" });
+	expect(detailCommand(received(), reader)).toEqual({ ...ref, file: "src/a.ts" });
 	machine(null, {});
 	await tabs.open(ref, "src/b.ts");
 	await tabs.open(ref, "src/c.ts");
 	readyDetail(reader);
 	tabs.deliver();
-	expect(detailCommand(commands().at(-1)!.name.slice(7), reader)).toEqual({ ...ref, file: "src/c.ts" });
+	expect(detailCommand(received(), reader)).toEqual({ ...ref, file: "src/c.ts" });
 	await tabs.open(ref);
 	readyDetail(reader);
 	tabs.deliver();
-	expect(detailCommand(commands().at(-1)!.name.slice(7), reader)).toEqual(ref);
+	expect(detailCommand(received(), reader)).toEqual(ref);
 	expect(execCalls().filter((c) => c.command === "herdr-app")).toHaveLength(1);
 	expect(detailCommand(`detail:${JSON.stringify({ reader, ...ref, file: 12 })}`, reader)).toBeNull();
 });

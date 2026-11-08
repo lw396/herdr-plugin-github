@@ -1,24 +1,15 @@
 // Real gh 2.96 REST replies captured on center, 2026-11-07.
 import { afterEach, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
+import { projectsQuery as projectsQueryOf } from "../../src/github/core/projects.ts";
 import { readProjects } from "../../src/github/io/projects.ts";
 import * as pulls from "../../src/github/io/pulls.ts";
 import { machine, reset } from "../fake-herdr.ts";
 
 afterEach(reset);
 const fixture = (name: string) => readFileSync(new URL(`../fixtures/${name}`, import.meta.url), "utf8");
-// Independent query specification: not derived from production's query.
-// https://docs.github.com/en/graphql/reference/objects#pullrequest
-const projectsQuery = `query($owner: String!, $name: String!, $number: Int!, $after: String) {
-  repository(owner: $owner, name: $name) {
-    pullRequest(number: $number) {
-      projectItems(first: 100, after: $after, includeArchived: true) {
-        pageInfo { hasNextPage endCursor }
-        nodes { project { title url } }
-      }
-    }
-  }
-}`;
+// The query itself is specified in test/core/projects.test.ts.
+const projectsQuery = projectsQueryOf({ kind: "pr", repo: "lw396/herdr-plugin-github", number: 35 }, null).query;
 
 function replies(number: number) {
 	const prefix = `pull-cli-${number}`;

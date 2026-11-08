@@ -1,5 +1,6 @@
 import { afterEach, expect, test } from "bun:test";
-import { sidebarVisible } from "../../src/github/io/context.ts";
+import { readFileSync } from "node:fs";
+import { SIDEBAR_SLOT, sidebarVisible } from "../../src/github/io/context.ts";
 import { reset, screen } from "../fake-herdr.ts";
 
 afterEach(reset);
@@ -41,4 +42,17 @@ test("the GitHub sidebar is visible only when its ancestors and stack selection 
 test("an absent sidebar does not poll", () => {
 	screen({ layout: null });
 	expect(sidebarVisible()).toBe(false);
+});
+
+test("the shipped layout's GitHub block is the slot the sidebar watches", () => {
+	const layoutFile = JSON.parse(readFileSync(new URL("../../layouts/github.json", import.meta.url), "utf8"));
+	const blocks: { id?: string; content?: { mod?: string; props?: { role?: string } } }[] = [];
+	const walk = (node: unknown): void => {
+		if (!node || typeof node !== "object") return;
+		blocks.push(node as (typeof blocks)[number]);
+		for (const value of Object.values(node)) walk(value);
+	};
+	walk(layoutFile);
+	const panel = blocks.find((b) => b.content?.mod === "github" && b.content.props?.role === "panel");
+	expect(panel?.id).toBe(SIDEBAR_SLOT);
 });

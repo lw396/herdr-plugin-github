@@ -4,7 +4,13 @@ import { expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { appendPage } from "../../src/github/core/page.ts";
-import { localPullsQuery, parseLocalPulls, parsePullGroup, pullSearch } from "../../src/github/core/pulls.ts";
+import {
+	localPullsQuery,
+	parseLocalPulls,
+	parsePullGroup,
+	pullGroupQuery,
+	pullSearch,
+} from "../../src/github/core/pulls.ts";
 
 const data = (name: string): unknown =>
 	(JSON.parse(readFileSync(join(import.meta.dir, "../fixtures", name), "utf8")) as { data: unknown }).data;
@@ -98,5 +104,36 @@ test("a search reply parses into the same rows as a repository list", () => {
 			{ number: 36, state: "draft", author: "lw396" },
 			{ number: 35, state: "open", author: "lw396" },
 		],
+	});
+});
+
+// GitHub GraphQL schema: Repository.pullRequests and Query.search (https://docs.github.com/en/graphql/reference).
+// The replies in test/fixtures (pulls-*.json) answered exactly these queries.
+test("All Open reads the repository's open PRs, newest update first; the searches page through search()", () => {
+	const r = { remote: "origin", host: "github.com", owner: "lw396", repo: "herdr-plugin-github" };
+	expect(pullGroupQuery("all", r, "lw396", null)).toEqual({
+		query: `query($owner: String!, $name: String!, $after: String) {
+  repository(owner: $owner, name: $name) {
+    pullRequests(first: 30, after: $after, states: OPEN, orderBy: {field: UPDATED_AT, direction: DESC}) {
+      totalCount
+      pageInfo { hasNextPage endCursor }
+      nodes { number title url updatedAt isDraft state author { login } }
+    }
+  }
+}`,
+		variables: { owner: "lw396", name: "herdr-plugin-github", after: null },
+	});
+	expect(pullGroupQuery("review", r, "lw396", "C")).toEqual({
+		query: `query($q: String!, $after: String) {
+  search(query: $q, type: ISSUE, first: 30, after: $after) {
+    issueCount
+    pageInfo { hasNextPage endCursor }
+    nodes { ... on PullRequest { number title url updatedAt isDraft state author { login } } }
+  }
+}`,
+		variables: {
+			q: "repo:lw396/herdr-plugin-github is:pr is:open review-requested:lw396 sort:updated-desc",
+			after: "C",
+		},
 	});
 });

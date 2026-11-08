@@ -8,13 +8,14 @@ import started from "../fixtures/pull-plugin-35-review-start.json";
 import submitted from "../fixtures/pull-plugin-35-review-submit.json";
 import added from "../fixtures/pull-plugin-35-review-thread.json";
 
+const ADD_THREAD =
+	"mutation($review:ID!,$path:String!,$side:DiffSide!,$line:Int!,$body:String!){addPullRequestReviewThread(input:{pullRequestReviewId:$review,path:$path,side:$side,line:$line,body:$body}){thread{id path diffSide line isOutdated isResolved viewerCanResolve viewerCanUnresolve comments(first:1){nodes{databaseId body createdAt author{login}}}}}}";
+
 test("adding an inline draft uses the existing pending review and returns a draft conversation", async () => {
-	const query =
-		"mutation($review:ID!,$path:String!,$side:DiffSide!,$line:Int!,$body:String!){addPullRequestReviewThread(input:{pullRequestReviewId:$review,path:$path,side:$side,line:$line,body:$body}){thread{id path diffSide line isOutdated isResolved viewerCanResolve viewerCanUnresolve comments(first:1){nodes{databaseId body createdAt author{login}}}}}}";
 	const body = added.data.addPullRequestReviewThread.thread.comments.nodes[0]!.body;
 	machine("center", {
 		[stateCommand]: { stdout: JSON.stringify(pending) },
-		[`~$ gh api graphql -F line=2 -f query=${query} -f review=PRR_kwDOVkv4288AAAABWrGssg -f path=docs/pr-fixture.md -f side=RIGHT -f body=${body}`]:
+		[`~$ gh api graphql -F line=2 -f query=${ADD_THREAD} -f review=PRR_kwDOVkv4288AAAABWrGssg -f path=docs/pr-fixture.md -f side=RIGHT -f body=${body}`]:
 			{ stdout: JSON.stringify(added) },
 	});
 	const result = await reviews.addPullReviewComment(
@@ -118,13 +119,11 @@ for (const operation of ["start", "add", "submit"] as const) {
 	for (const dropped of [true, false]) {
 		test(`${operation} ${dropped ? "dropped" : "rejected"} response is never retried or sent locally`, async () => {
 			const notices = new Notices();
-			const addQuery =
-				"mutation($review:ID!,$path:String!,$side:DiffSide!,$line:Int!,$body:String!){addPullRequestReviewThread(input:{pullRequestReviewId:$review,path:$path,side:$side,line:$line,body:$body}){thread{id path diffSide line isOutdated isResolved viewerCanResolve viewerCanUnresolve comments(first:1){nodes{databaseId body createdAt author{login}}}}}}";
 			const cmd =
 				operation === "start"
 					? startCommand
 					: operation === "add"
-						? `~$ gh api graphql -F line=2 -f query=${addQuery} -f review=PRR_kwDOVkv4288AAAABWrGssg -f path=file -f side=LEFT -f body=hello`
+						? `~$ gh api graphql -F line=2 -f query=${ADD_THREAD} -f review=PRR_kwDOVkv4288AAAABWrGssg -f path=file -f side=LEFT -f body=hello`
 						: `~$ gh api graphql -f query=${submitQuery} -f id=PRR_kwDOVkv4288AAAABWrGssg -f event=COMMENT -f body=hello`;
 			machine("center", {
 				[stateCommand]: { stdout: operation === "start" ? emptyState() : JSON.stringify(pending) },

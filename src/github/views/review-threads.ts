@@ -1,4 +1,4 @@
-// Existing published discussions, with per-thread drafts kept through refreshes.
+// A PR's discussions and review: replies, resolution, inline drafts and the pending review's submission.
 import { h_flex, Textarea, TextareaState, v_flex } from "gpui-base";
 import { type Context, div, type Element } from "gpui-kit";
 import { Acknowledged } from "../core/acknowledged.ts";
@@ -323,7 +323,6 @@ export class ReviewThreads {
 			.when(Boolean(onHeight), (el) => el.on_size_change((size, cx) => onHeight?.(size.height, cx)));
 	}
 
-	/** Code and its conversation stay together in the review, without navigating away. */
 	timeline(thread: ReviewThread, snippet: string, open: (cx: Context) => void): Element {
 		const hidden = this.hiddenSnippets.has(thread.id);
 		const t = colors();
