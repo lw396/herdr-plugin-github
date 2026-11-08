@@ -44,12 +44,12 @@ test("PR Markdown keeps images as browser links, references as issue links, and 
 	};
 	const parsed = parsePullDetail(replies(pull, { issue: { reactions: { "+1": 3 } }, comments: [comment] }));
 	expect(parsed.markdown).toContain("[#25](<https://github.com/lw396/herdr-plugin-github/issues/25>)");
-	expect(parsed.markdown).toContain("[🖼 图片](<https://example.com/a.png>)");
+	expect(parsed.markdown).toContain("[🖼 Image](<https://example.com/a.png>)");
 	expect(parsed.reactions).toEqual([{ emoji: "👍", count: 3 }]);
 	expect(parsed.timeline[0]).toMatchObject({
 		verb: "commented",
 		author: "deleted user",
-		markdown: "[🖼 图片](<a.png>)",
+		markdown: "[🖼 Image](<a.png>)",
 		reactions: [{ emoji: "❤️", count: 2 }],
 	});
 	expect(parsed).toMatchObject({ assignees: ["lw396"], milestone: "First review" });

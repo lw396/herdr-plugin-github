@@ -124,7 +124,7 @@ function links(markdown: string, url: string): string {
 							patches.push({
 								start: start + parser.startIndex,
 								end: start + parser.endIndex + 1,
-								text: "🖼 图片",
+								text: "🖼 Image",
 								url: attributes.src,
 							});
 					},
@@ -141,7 +141,7 @@ function links(markdown: string, url: string): string {
 	for (const image of images) {
 		const url = image.type === "image" ? image.url : definitions.get(image.identifier);
 		if (url !== undefined)
-			patches.push({ start: image.position!.start.offset!, end: image.position!.end.offset!, text: "🖼 图片", url });
+			patches.push({ start: image.position!.start.offset!, end: image.position!.end.offset!, text: "🖼 Image", url });
 	}
 	patches.sort((a, b) => a.start - b.start);
 	let result = "",

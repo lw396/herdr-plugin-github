@@ -42,10 +42,10 @@ test("#123 links only for a github.com issue, the same repositories detailLink o
 
 test("reader Markdown turns images and #123 into links together and marks an empty body", () => {
 	const base = "https://github.com/o/r/issues/1";
-	expect(readerMarkdown("![a](a.png) #2", base)).toBe("[🖼 图片](<a.png>) [#2](<https://github.com/o/r/issues/2>)");
+	expect(readerMarkdown("![a](a.png) #2", base)).toBe("[🖼 Image](<a.png>) [#2](<https://github.com/o/r/issues/2>)");
 	expect(readerMarkdown("", base)).toBe("_No text._");
 	expect(readerMarkdown("[![#3](b.png)](https://ci.example.com)", base)).toBe(
-		"[[🖼 图片](<b.png>)](https://ci.example.com)",
+		"[[🖼 Image](<b.png>)](https://ci.example.com)",
 	);
 });
 
@@ -95,20 +95,20 @@ test("relative links resolve dot segments and encode spaces before opening", () 
 test("HTML comments stay literal and visible HTML image entities are decoded", () => {
 	expect(
 		imageLinks('<!-- ![example](hidden.png) <img src="hidden.png"> -->\n\n<img src="https://example.com/a&#38;b.png">'),
-	).toBe('<!-- ![example](hidden.png) <img src="hidden.png"> -->\n\n[🖼 图片](<https://example.com/a&b.png>)');
+	).toBe('<!-- ![example](hidden.png) <img src="hidden.png"> -->\n\n[🖼 Image](<https://example.com/a&b.png>)');
 });
 
 test("source offsets preserve emoji, CRLF, blockquotes and repeated image-like code", () => {
 	expect(imageLinks("🙂 `![a](a.png)`\r\n\r\n> ![a](a.png)\r\n")).toBe(
-		"🙂 `![a](a.png)`\r\n\r\n> [🖼 图片](<a.png>)\r\n",
+		"🙂 `![a](a.png)`\r\n\r\n> [🖼 Image](<a.png>)\r\n",
 	);
-	expect(imageLinks('<div>\r\n  <img src="a&amp;b">\r\n</div>')).toBe("<div>\r\n  [🖼 图片](<a&b>)\r\n</div>");
+	expect(imageLinks('<div>\r\n  <img src="a&amp;b">\r\n</div>')).toBe("<div>\r\n  [🖼 Image](<a&b>)\r\n</div>");
 });
 
 // CommonMark image examples, plus GitHub's pasted screenshot HTML.
 test("an inline image becomes a browser link with the agreed label", () => {
 	expect(imageLinks("Before ![screenshot](https://example.com/screen.png) after")).toBe(
-		"Before [🖼 图片](<https://example.com/screen.png>) after",
+		"Before [🖼 Image](<https://example.com/screen.png>) after",
 	);
 });
 
@@ -129,19 +129,19 @@ test("code examples and escaped image syntax stay literal", () => {
 
 test("image destinations may have titles, spaces in angle brackets and balanced parentheses", () => {
 	expect(imageLinks('![a](https://example.com/a_(1).png "Title") ![b](<https://example.com/a b.png>)')).toBe(
-		"[🖼 图片](<https://example.com/a_(1).png>) [🖼 图片](<https://example.com/a b.png>)",
+		"[🖼 Image](<https://example.com/a_(1).png>) [🖼 Image](<https://example.com/a b.png>)",
 	);
 });
 
 test("GitHub pasted HTML images become links, not network image requests", () => {
 	expect(imageLinks('<img width="500" alt="截图" src="https://github.com/user-attachments/assets/abc" />')).toBe(
-		"[🖼 图片](<https://github.com/user-attachments/assets/abc>)",
+		"[🖼 Image](<https://github.com/user-attachments/assets/abc>)",
 	);
 });
 
 test("nested brackets in image descriptions cannot bypass image preprocessing", () => {
 	expect(imageLinks("![a [nested] description](https://example.com/s.png)")).toBe(
-		"[🖼 图片](<https://example.com/s.png>)",
+		"[🖼 Image](<https://example.com/s.png>)",
 	);
 });
 
@@ -151,6 +151,6 @@ test("reference images keep their destinations without changing ordinary links",
 			'![shot][screen] ![screen][] ![screen] [docs][screen]\n\n[screen]: https://example.com/s.png "Screenshot"',
 		),
 	).toBe(
-		'[🖼 图片](<https://example.com/s.png>) [🖼 图片](<https://example.com/s.png>) [🖼 图片](<https://example.com/s.png>) [docs][screen]\n\n[screen]: https://example.com/s.png "Screenshot"',
+		'[🖼 Image](<https://example.com/s.png>) [🖼 Image](<https://example.com/s.png>) [🖼 Image](<https://example.com/s.png>) [docs][screen]\n\n[screen]: https://example.com/s.png "Screenshot"',
 	);
 });

@@ -1,6 +1,6 @@
 import { h_flex, v_flex } from "gpui-base";
 import { type AsyncContext, type Context, div, type Element, svg } from "gpui-kit";
-import { closeOverlay, props } from "herdr";
+import { props } from "herdr";
 import type { DetailRef } from "../detail/core/detail.ts";
 import { Notices } from "../detail/io/changes.ts";
 import { DetailTabs } from "../detail/io/detail-tabs.ts";
@@ -76,7 +76,7 @@ export class Panel implements Role {
 	}
 
 	private isVisible(): boolean {
-		return Boolean(props()?.overlay) || sidebarVisible();
+		return sidebarVisible();
 	}
 
 	/** Only a changed list re-asks expanded groups; a refresh asks them even on 304. */
@@ -217,10 +217,9 @@ export class Panel implements Role {
 		else if (!this.poll.shown) this.refresh(cx, "shown");
 		else if (JSON.stringify(where) !== this.context) this.refresh(cx, "moved");
 		const t = colors();
-		const overlay: string | undefined = props()?.overlay;
 		// A gh problem is still said first; otherwise a folder without a GitHub remote is an empty state.
 		const noRemote = this.remote === null && !(this.account && !this.account.status.ok);
-		// A card like Herdr's Files and Changes panels; a window overlay gets Herdr's own frame instead.
+		// A card like Herdr's Files and Changes panels.
 		return (
 			v_flex()
 				.id("github")
@@ -230,8 +229,10 @@ export class Panel implements Role {
 				.bg(t.background)
 				.text_color(t.foreground)
 				.text_size(13)
-				.when(!overlay, (el) => el.rounded(10).border_1().border_color(t.border))
-				.child(this.header(overlay, where.cwd ?? "no folder"))
+				.rounded(10)
+				.border_1()
+				.border_color(t.border)
+				.child(this.header(where.cwd ?? "no folder"))
 				.when(noRemote, (el) => el.child(this.noRemote(where.cwd)))
 				.when(!noRemote, (el) => el.child(this.tabs()).child(this.list(cx)))
 				// A fixed sibling of the scrolling list: Herdr already shows the branch, so this says who gh is and how fresh.
@@ -239,7 +240,7 @@ export class Panel implements Role {
 		);
 	}
 
-	private header(overlay: string | undefined, context: string): Element {
+	private header(context: string): Element {
 		const t = colors();
 		const busy = this.loading || this.issues.busy || this.pulls.busy;
 		const refresh = button("gh-refresh", "↻", "Refresh", (_e, cx) => {
@@ -257,8 +258,7 @@ export class Panel implements Role {
 			.border_color(t.border)
 			.child(div().font_semibold().tooltip(context).child("GitHub"))
 			.child(div().flex_1().min_w(0).truncate().text_right().text_size(12).text_color(t.dim).child(repo))
-			.child(busy ? div().size(24).flex_none().flex().items_center().justify_center().child(spinner()) : refresh)
-			.when(overlay !== undefined, (el) => el.child(button("gh-close", "×", "Close", () => closeOverlay(overlay!))));
+			.child(busy ? div().size(24).flex_none().flex().items_center().justify_center().child(spinner()) : refresh);
 	}
 
 	private statusCard(on: string | null, cwd: string | null): Element {

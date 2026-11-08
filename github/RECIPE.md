@@ -89,7 +89,7 @@ Without a GitHub remote, the tabs and list give way to a 28px GitHub mark, **No 
   only the unfolded groups that changed; showing it again checks at once. A shown reader checks every
   10s. Hidden views never poll.
 - **Links** to the same repository's issues and PRs (and `#123`) open in the same reader tab, with
-  **←** to go back; other links open in the browser. Images appear as `🖼 图片` links.
+  **←** to go back; other links open in the browser. Images appear as `🖼 Image` links.
 - **Writes** (comment, close, reopen, ready for review, merge, reply, resolve, inline comments, pending
   reviews and their submission) update the tab at once and tell the other views; a failed write keeps
   the unsent text and shows the error.

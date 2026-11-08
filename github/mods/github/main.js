@@ -94,7 +94,7 @@ var Pane = class {
 // src/github/roles/panel.ts
 import { h_flex as h_flex6, v_flex as v_flex5 } from "gpui-base";
 import { div as div9, svg as svg6 } from "gpui-kit";
-import { closeOverlay, props as props2 } from "herdr";
+import "herdr";
 
 // src/github/detail/io/changes.ts
 import { setShared, shared } from "herdr";
@@ -9935,7 +9935,7 @@ function links(markdown, url) {
               patches.push({
                 start: start + parser.startIndex,
                 end: start + parser.endIndex + 1,
-                text: "\u{1F5BC} \u56FE\u7247",
+                text: "\u{1F5BC} Image",
                 url: attributes.src
               });
           }
@@ -9951,7 +9951,7 @@ function links(markdown, url) {
   for (const image2 of images) {
     const url2 = image2.type === "image" ? image2.url : definitions.get(image2.identifier);
     if (url2 !== void 0)
-      patches.push({ start: image2.position.start.offset, end: image2.position.end.offset, text: "\u{1F5BC} \u56FE\u7247", url: url2 });
+      patches.push({ start: image2.position.start.offset, end: image2.position.end.offset, text: "\u{1F5BC} Image", url: url2 });
   }
   patches.sort((a, b) => a.start - b.start);
   let result = "", copied = 0;
@@ -11888,7 +11888,7 @@ var Panel = class {
     return JSON.stringify([this.context, this.tab]);
   }
   isVisible() {
-    return Boolean(props2()?.overlay) || sidebarVisible();
+    return sidebarVisible();
   }
   /** Only a changed list re-asks expanded groups; a refresh asks them even on 304. */
   check(cx, refresh) {
@@ -12004,11 +12004,10 @@ var Panel = class {
     else if (!this.poll.shown) this.refresh(cx, "shown");
     else if (JSON.stringify(where) !== this.context) this.refresh(cx, "moved");
     const t = colors();
-    const overlay = props2()?.overlay;
     const noRemote = this.remote === null && !(this.account && !this.account.status.ok);
-    return v_flex5().id("github").size_full().min_h(0).overflow_hidden().bg(t.background).text_color(t.foreground).text_size(13).when(!overlay, (el) => el.rounded(10).border_1().border_color(t.border)).child(this.header(overlay, where.cwd ?? "no folder")).when(noRemote, (el) => el.child(this.noRemote(where.cwd))).when(!noRemote, (el) => el.child(this.tabs()).child(this.list(cx))).child(this.statusCard(where.on, where.cwd));
+    return v_flex5().id("github").size_full().min_h(0).overflow_hidden().bg(t.background).text_color(t.foreground).text_size(13).rounded(10).border_1().border_color(t.border).child(this.header(where.cwd ?? "no folder")).when(noRemote, (el) => el.child(this.noRemote(where.cwd))).when(!noRemote, (el) => el.child(this.tabs()).child(this.list(cx))).child(this.statusCard(where.on, where.cwd));
   }
-  header(overlay, context) {
+  header(context) {
     const t = colors();
     const busy = this.loading || this.issues.busy || this.pulls.busy;
     const refresh = button("gh-refresh", "\u21BB", "Refresh", (_e, cx) => {
@@ -12016,7 +12015,7 @@ var Panel = class {
       cx.notify();
     });
     const repo = this.remote ? `${this.remote.owner}/${this.remote.repo}` : "";
-    return h_flex6().h(42).flex_none().px(14).gap(8).items_center().border_b(1).border_color(t.border).child(div9().font_semibold().tooltip(context).child("GitHub")).child(div9().flex_1().min_w(0).truncate().text_right().text_size(12).text_color(t.dim).child(repo)).child(busy ? div9().size(24).flex_none().flex().items_center().justify_center().child(spinner()) : refresh).when(overlay !== void 0, (el) => el.child(button("gh-close", "\xD7", "Close", () => closeOverlay(overlay))));
+    return h_flex6().h(42).flex_none().px(14).gap(8).items_center().border_b(1).border_color(t.border).child(div9().font_semibold().tooltip(context).child("GitHub")).child(div9().flex_1().min_w(0).truncate().text_right().text_size(12).text_color(t.dim).child(repo)).child(busy ? div9().size(24).flex_none().flex().items_center().justify_center().child(spinner()) : refresh);
   }
   statusCard(on, cwd) {
     const t = colors();

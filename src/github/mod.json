@@ -1,5 +1,4 @@
 {
 	"place": "none",
-	"title": "GitHub",
-	"overlay": { "kind": "window", "key": "github", "width": 420, "height": 560 }
+	"title": "GitHub"
 }

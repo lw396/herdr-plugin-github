@@ -189,12 +189,12 @@ export default class Smoke extends View {
 
 		expectEqual(
 			imageLinks("![a](img.png) `![code](x.png)`"),
-			"[🖼 图片](<img.png>) `![code](x.png)`",
+			"[🖼 Image](<img.png>) `![code](x.png)`",
 			"Markdown images",
 		);
 		expectEqual(
 			imageLinks('<!-- <img src="hidden"> -->\n\n<img src="a&#38;b">'),
-			'<!-- <img src="hidden"> -->\n\n[🖼 图片](<a&b>)',
+			'<!-- <img src="hidden"> -->\n\n[🖼 Image](<a&b>)',
 			"HTML images",
 		);
 		const base = "https://github.com/o/r/issues/13";
